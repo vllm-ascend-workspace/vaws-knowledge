@@ -63,8 +63,13 @@ available, an implementation **must report `undecidable`** rather than falling
 back to a different ordering. Silently substituting the natural-segment rule for
 PEP 440 is exactly the divergence this document exists to prevent.
 
-Local version labels (everything from `+` onward) are ignored for ordering and
-retained for identity, per PEP 440.
+Local version labels participate in ordering: `2.5.1+gitc4b1234` sorts *after*
+`2.5.1`. This is PEP 440's actual rule, and it is stated here because an earlier
+revision of this document claimed the opposite — that local labels were ignored
+for ordering "per PEP 440" — which was simply a factual error about the standard.
+The first implementation of this specification caught it. The rule stands as PEP
+440 defines it rather than as something more convenient, because the reason to
+name a standard is to stop having a local opinion about it.
 
 ### Natural segment
 
@@ -125,16 +130,22 @@ so approximate membership would defeat its purpose.
 | `24.1.rc3` | `24.1.rc3` | `driver` | equal | identical |
 | `2.5.1` | `2.5.1.post1` | `torch` | A < B | PEP 440 post-release |
 | `0.11.0rc1` | `0.11.0` | `vllm` | A < B | PEP 440 pre-release |
-| `2.5.1+gitc4b1234` | `2.5.1` | `torch_npu` | equal | local label ignored for ordering |
+| `2.5.1+gitc4b1234` | `2.5.1` | `torch_npu` | A > B | PEP 440 orders local labels after the base version |
 | `0.0.0+example` | `0.1.0` | `vllm` | A < B | PEP 440 parses both |
+| `0.0.EXAMPLE` | `8.0.RC2` | `cann` | A < B | decided at the first segment, `0 < 8` |
+| `0.0.EXAMPLE` | `0.0.RC1` | `cann` | undecidable | segments equal until `example` meets `rc`+`1` |
 | `ExampleSoC-A` | anything | `soc` | contract violation | `soc` is exact-match-only |
 
-The reference fixture `examples/valid-entry.yaml` records
-`verification.verified_against.cann` as `0.0.EXAMPLE`. That is not an oversight:
-`EXAMPLE` decomposes to a single non-digit run, so comparing any real CANN
-version against it hits step 4's digit-against-non-digit case. It is the
-undecidable case, and an implementation that returns an ordering for it rather
-than `undecidable` is wrong.
+The last two rows are worth reading together, because an earlier revision of
+this document got them wrong. It claimed that the `0.0.EXAMPLE` recorded in
+`examples/valid-entry.yaml` was undecidable against "any real CANN version".
+It is not: against `8.0.RC2` the comparison is decided by `0 < 8` and never
+reaches the letter run at all.
+
+**Undecidability is a property of a pair, not of a string.** A value that cannot
+be ordered against one version can be perfectly orderable against another, and an
+implementation that short-circuits on "this string looks unorderable" will
+disagree with one that follows the steps.
 
 ## Conformance
 
