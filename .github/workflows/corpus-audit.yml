@@ -1,0 +1,108 @@
+name: Corpus audit
+
+# The whole-corpus sweep, on a schedule rather than per proposal. Three things
+# only make sense across everything at once:
+#
+#   * a redaction re-scan under the *current* ruleset, because the profile that
+#     cleared an entry at export time is a historical fact and does not become
+#     truer as the rules tighten
+#   * the staleness sweep, since an entry going stale is the passage of time
+#     rather than an event in anyone's pull request
+#   * id and hash integrity across the corpus, which no single-file check sees
+#
+# Splitting the work this way is also what keeps per-proposal cost bounded as
+# the corpus grows.
+
+on:
+  schedule:
+    # Weekly. The staleness horizon is measured in months, so a daily sweep
+    # would produce identical findings and train people to close the issue
+    # without reading it.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          if [ -f bot/requirements.txt ]; then pip install -r bot/requirements.txt; fi
+
+      - name: Sweep the corpus
+        id: sweep
+        run: |
+          set +e
+          python bot/report.py corpus examples \
+            --mode audit \
+            --json audit-results.json \
+            --markdown audit-report.md
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          test -s audit-report.md || {
+            echo "the sweep produced no report; treating as failure" >&2
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corpus-audit
+          path: |
+            audit-report.md
+            audit-results.json
+
+      - name: Open or update the findings issue
+        if: steps.sweep.outputs.exit != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title='Corpus audit findings'
+          body="$(cat audit-report.md)"
+          existing="$(gh issue list --repo "$REPO" --state open --search "$title in:title" \
+            --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          if [ -n "$existing" ]; then
+            # One issue, updated. A new issue per run buries the finding in a
+            # list of near-identical issues nobody reads to the end of.
+            gh issue edit "$existing" --repo "$REPO" --body "$body"
+            gh issue comment "$existing" --repo "$REPO" \
+              --body "Re-swept on $(date -u +%Y-%m-%d); the body above is current."
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
+          fi
+
+      - name: Close the findings issue when the corpus is clean
+        if: steps.sweep.outputs.exit == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title='Corpus audit findings'
+          existing="$(gh issue list --repo "$REPO" --state open --search "$title in:title" \
+            --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$REPO" \
+              --comment "The sweep is clean as of $(date -u +%Y-%m-%d)."
+          fi
+
+      - name: Fail the run when the sweep found something
+        if: steps.sweep.outputs.exit != '0'
+        run: exit 1

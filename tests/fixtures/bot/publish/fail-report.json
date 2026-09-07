@@ -1,0 +1,25 @@
+{
+  "as_of": "2026-09-07",
+  "bot": "vaws-knowledge-review-bot",
+  "counts": {
+    "failed": 1,
+    "gates": 1,
+    "passed": 0,
+    "warned": 0
+  },
+  "gates": [
+    {
+      "blocking": true,
+      "details": ["schema rejected the proposal"],
+      "id": "schema",
+      "status": "fail",
+      "summary": "blocking failure",
+      "title": "Schema conformance and content_hash"
+    }
+  ],
+  "mode": "pr",
+  "overall": "fail",
+  "paths": ["examples"],
+  "permits": "nothing",
+  "report_version": 1
+}

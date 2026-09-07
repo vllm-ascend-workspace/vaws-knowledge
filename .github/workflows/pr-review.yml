@@ -1,0 +1,70 @@
+name: Review gates
+
+# Runs the deterministic gates on a proposal. Passing every gate permits
+# corpus/unverified/ and nothing more. This workflow is unprivileged: it
+# checks out pull request code with contents:read, no write token, and
+# persist-credentials=false. A separate trusted workflow publishes the
+# comment; GitHub will not run a workflow_run listener that names itself.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          if [ -f bot/requirements.txt ]; then pip install -r bot/requirements.txt; fi
+
+      - name: Contract suite
+        run: python -m unittest discover -s tests
+
+      - name: Run the gates
+        id: gates
+        run: |
+          set +e
+          python bot/report.py corpus examples \
+            --mode pr \
+            --json gate-results.json \
+            --markdown gate-comment.md
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          # A gate tool that is missing or errors is a failure, never a pass, so
+          # the absence of a report is itself a failure rather than a skip.
+          test -s gate-comment.md || {
+            echo "the gates produced no report; treating as failure" >&2
+            exit 1
+          }
+          test -s gate-results.json || {
+            echo "the gates produced no results file; treating as failure" >&2
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-report
+          path: |
+            gate-comment.md
+            gate-results.json
+
+      - name: Fail the check when a gate failed
+        if: steps.gates.outputs.exit != '0'
+        run: |
+          echo "One or more gates failed. See the review comment." >&2
+          exit 1

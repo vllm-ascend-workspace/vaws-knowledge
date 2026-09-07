@@ -1,0 +1,55 @@
+# Synthetic fixture. Not knowledge. See README.md in this directory.
+#
+# Same phenomenon, fingerprints and contradictory explanation as conflict-a.yaml,
+# but bounded to a different SoC. The coordinates are disjoint on `soc`, so the
+# pair is *not* a conflict: both claims can be true on their own coordinate.
+schema_version: 2
+kind: known-failure-signatures
+layer: unverified
+updated_at: '2026-09-05'
+entries:
+- uuid: 7a1d2e3f-0003-4a11-8b22-000000000003
+  slug: fixture-nan-logits-sampler-scaling-soc-b
+  content_hash: sha256:0000000000000000000000000000000000000000000000000000000000000a03
+  status: unverified
+  confidence: medium
+  scope:
+    soc:
+      values: [ExampleSoC-B]
+    cann:
+      values: [0.0.EXAMPLE-2]
+    driver:
+      values: [0.0.example-2]
+    python_abi:
+      any: true
+      basis: Pure device-side defect; the Python ABI never touches the buffer.
+    torch:
+      range: {min: 2.5.0, max: null}
+    torch_npu:
+      any: true
+      basis: The kernel is invoked through the plugin, not through torch_npu.
+    vllm:
+      range: {min: 0.9.0, max: null}
+    vllm_ascend:
+      any: true
+      basis: Observed across several synthetic plugin revisions.
+    model:
+      any: true
+      basis: Any decoder model exercising the example attention kernel triggers it.
+    topology:
+      values: [tp8]
+    execution_mode:
+      values: [aclgraph]
+    component:
+      values: [attention-kernel]
+  provenance:
+    contributor: fixture-other-submitter
+    origin_repo: example-org/fixture-fork-two
+    submitted_at: '2026-09-05'
+    redaction_profile: r1
+  lifecycle:
+    first_seen: '2026-09-05'
+    updated_at: '2026-09-05'
+  rule:
+    summary: Decode produces NaN logits after graph capture on the example attention kernel
+    symptom: After graph capture the first decode step
