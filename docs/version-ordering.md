@@ -133,19 +133,36 @@ so approximate membership would defeat its purpose.
 | `2.5.1+gitc4b1234` | `2.5.1` | `torch_npu` | A > B | PEP 440 orders local labels after the base version |
 | `0.0.0+example` | `0.1.0` | `vllm` | A < B | PEP 440 parses both |
 | `0.0.EXAMPLE` | `8.0.RC2` | `cann` | A < B | decided at the first segment, `0 < 8` |
-| `0.0.EXAMPLE` | `0.0.RC1` | `cann` | undecidable | segments equal until `example` meets `rc`+`1` |
+| `0.0.EXAMPLE` | `0.0.RC1` | `cann` | A < B | both third segments start with a letter run, `example` < `rc` |
+| `0.0.EXAMPLE` | `0.0.1` | `cann` | undecidable | letter run against digit run (step 4) |
+| `8.0.2` | `8.0.RC2` | `cann` | undecidable | same, in the other direction |
 | `ExampleSoC-A` | anything | `soc` | contract violation | `soc` is exact-match-only |
 
-The last two rows are worth reading together, because an earlier revision of
-this document got them wrong. It claimed that the `0.0.EXAMPLE` recorded in
-`examples/valid-entry.yaml` was undecidable against "any real CANN version".
-It is not: against `8.0.RC2` the comparison is decided by `0 < 8` and never
-reaches the letter run at all.
+Those four `0.0.EXAMPLE` and `8.0.2` rows are worth reading together, because
+earlier revisions of this document got them wrong twice.
 
-**Undecidability is a property of a pair, not of a string.** A value that cannot
-be ordered against one version can be perfectly orderable against another, and an
-implementation that short-circuits on "this string looks unorderable" will
-disagree with one that follows the steps.
+The first revision claimed the `0.0.EXAMPLE` recorded in
+`examples/valid-entry.yaml` was undecidable against "any real CANN version". It
+is not: against `8.0.RC2` the comparison is decided by `0 < 8` and never reaches
+the letter run. The correction then claimed it was undecidable against
+`0.0.RC1`, reasoning that `example` would meet `rc` followed by `1`. Also wrong —
+step 4 compares runs pairwise and stops at the shorter, so `example` against `rc`
+is two letter runs and settles it lexicographically before any digit run is
+reached.
+
+What actually reaches step 4's digit-against-letter case is a pair where one side
+has a digit run exactly where the other has letters: `0.0.EXAMPLE` against
+`0.0.1`, or `8.0.2` against `8.0.RC2`.
+
+Two lessons, both paid for:
+
+- **Undecidability is a property of a pair, not of a string.** An implementation
+  that short-circuits on "this value looks unorderable" disagrees with one that
+  follows the steps.
+- **Do not reason about these steps in prose.** All three errors in this
+  document came from tracing the algorithm by hand instead of running it. The
+  ordering table is now pinned by `tests/test_bot_versions.py`, and a change to
+  either belongs in the same commit as the other.
 
 ## Conformance
 
