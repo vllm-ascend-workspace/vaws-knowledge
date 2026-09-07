@@ -1,27 +1,19 @@
-name: Review
+name: Review gates
 
-# Runs the deterministic gates on a proposal and leaves one comment saying what
-# they concluded — and, just as importantly, what they did not. Passing every
-# gate permits corpus/unverified/ and nothing more.
-#
-# Split into two jobs on purpose. `gates` runs untrusted pull request code with
-# no write access and no secrets; `comment` runs from the trusted base with the
-# minimum permission needed to post, and consumes only the artifact. A single
-# job with write access would hand a fork's branch a token that can comment as
-# the repository.
+# Runs the deterministic gates on a proposal. Passing every gate permits
+# corpus/unverified/ and nothing more. This workflow is unprivileged: it
+# checks out pull request code with contents:read, no write token, and
+# persist-credentials=false. A separate trusted workflow publishes the
+# comment; GitHub will not run a workflow_run listener that names itself.
 
 on:
   pull_request:
-  workflow_run:
-    workflows: ["Review"]
-    types: [completed]
 
 permissions:
   contents: read
 
 jobs:
   gates:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -59,9 +51,10 @@ jobs:
             echo "the gates produced no report; treating as failure" >&2
             exit 1
           }
-
-      - name: Record the pull request number for the comment job
-        run: echo "${{ github.event.number }}" > pr-number.txt
+          test -s gate-results.json || {
+            echo "the gates produced no results file; treating as failure" >&2
+            exit 1
+          }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -69,54 +62,9 @@ jobs:
           path: |
             gate-comment.md
             gate-results.json
-            pr-number.txt
 
       - name: Fail the check when a gate failed
         if: steps.gates.outputs.exit != '0'
         run: |
           echo "One or more gates failed. See the review comment." >&2
           exit 1
-
-  comment:
-    if: github.event_name == 'workflow_run'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: review-report
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Post or update the single review comment
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          pr="$(cat pr-number.txt)"
-          # The renderer already emits this marker as its first line, so the
-          # comment is matched on what the report actually contains rather than
-          # on a second marker this workflow would have to keep in sync.
-          marker='<!-- vaws-knowledge-review-bot:v1 -->'
-          body="$(cat gate-comment.md)"
-          head -n1 gate-comment.md | grep -qF "$marker" || {
-            echo "the report no longer starts with the expected marker; refusing to guess" >&2
-            exit 1
-          }
-
-          # Update in place rather than posting again. The rendering is
-          # deterministic (pinned by tests/test_bot_gates.py), so an unchanged
-          # result produces an unchanged comment instead of a fresh notification
-          # that teaches reviewers to ignore the comment.
-          existing="$(gh api "repos/$REPO/issues/$pr/comments" --paginate \
-            --jq "map(select(.body | startswith(\"$marker\"))) | .[0].id // empty")"
-
-          if [ -n "$existing" ]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body" >/dev/null
-            echo "updated comment $existing"
-          else
-            gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$body" >/dev/null
-            echo "posted a new comment"
-          fi

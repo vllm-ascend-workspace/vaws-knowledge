@@ -1,9 +1,11 @@
 """Render one deterministic Markdown review comment from the gate results.
 
-The PR workflow updates a single comment instead of posting a new one per
-push, so the output must be a pure function of the gate results: no run
-timestamps, no runner paths, stable ordering. The first line is a marker the
-workflow greps for to find the comment it owns.
+The trusted publisher updates a single comment instead of posting a new one
+per push, so the output must be a pure function of the gate results: no run
+timestamps, no runner paths, stable ordering. The first line is a marker.
+The publisher treats that marker as a locator only after it has verified bot
+authorship, the source run, and the current pull-request head; the marker
+alone is not ownership.
 
 Usage::
 

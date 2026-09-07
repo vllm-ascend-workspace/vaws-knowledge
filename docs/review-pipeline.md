@@ -62,15 +62,43 @@ than growing a tool's surface to serve a duplicate check.
 
 ## One comment, updated
 
-The pull request workflow posts a single comment and edits it in place. That
-depends on the rendering being deterministic, which is pinned by a test: if the
-same corpus rendered differently between runs, every run would produce a
-spurious edit and reviewers would learn to ignore the comment.
+The publisher posts a single comment and edits it in place. That depends on the
+rendering being deterministic, which is pinned by a test: if the same corpus
+rendered differently between runs, every run would produce a spurious edit and
+reviewers would learn to ignore the comment.
 
-The workflow is split into two jobs. The gates run untrusted pull request code
-with read-only permissions and no secrets; a separate job runs from the trusted
-base with only `pull-requests: write` and consumes the artifact. One job holding
-both would hand a fork's branch a token that can comment as the repository.
+The unprivileged gate workflow and the trusted publisher are separate workflows
+with distinct names. GitHub will not run a `workflow_run` listener that names
+itself; a local YAML parser accepting that is not GitHub validity. Incoming
+pull request code runs the gates with `contents: read`, no write token, and
+`persist-credentials: false`. It never receives the comment token.
+
+The publisher listens for completion of `Review gates`, checks out the trusted
+default-branch revision that contains it (`github.sha`), and never checks out
+the pull request head, never installs the pull request's dependencies, and
+never executes artifact files as code. Cross-run artifact download needs
+`actions: read`; posting the comment needs `pull-requests: write`. Those are
+the only extra permissions.
+
+The pull request number inside the artifact is not authority. The publisher
+derives the associated pull request from the `workflow_run` event and the
+GitHub API, then refuses to write unless that pull request's current head
+matches the source revision, in this repository. A marker in a human comment
+is not ownership: only a `github-actions[bot]` comment for this report is
+updated. An old run does not overwrite a newer head's report. Comment listing
+walks every page; the first marker match is not enough.
+
+The artifact body is data. The publisher validates `gate-results.json` and
+re-renders the comment from that data with the trusted helper, binding the
+visible text to the source run and head. A missing, malformed, or inconsistent
+report produces no comment at all — in particular it cannot produce a success
+comment. The marker, the filename, and a well-formed looking markdown file are
+not proof of authenticity.
+
+A `workflow_run` listener is taken from the default branch. Until that
+revision is on the default branch, live scheduling cannot be demonstrated by
+this repository's tests. A green local suite does not mean GitHub ran the
+publisher.
 
 ## Where a triage step plugs in, and what it may not do
 

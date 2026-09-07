@@ -14,3 +14,6 @@ from the payload. They exist to exercise the gates, not to be cited or copied.
 | `integrity-bad.yaml`, `integrity-bad-2.yaml` | promotion bypass, bot in `verified_by`, hash shape, revision divergence |
 | `malformed.yaml` | YAML that does not parse (load gate, fail closed) |
 | `asserted-pairs.json` | triage-asserted contradiction input for `bot/conflicts.py` |
+| `original-comment-step.sh` | exact privileged comment shell from 9cf5f779, retained as a red control |
+| `inert_gh.py` | local `gh` recorder; never opens a network connection |
+| `publish/` | trusted-publisher inputs: valid/fail JSON and spoofed markdown |
