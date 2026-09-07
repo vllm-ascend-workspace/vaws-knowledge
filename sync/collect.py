@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -43,11 +44,15 @@ from _common import (  # noqa: E402
     SyncError,
     default_runner,
     json_dumps,
+    load_corpus,
+    load_export,
     repo_root_from,
     run_source_gates,
 )
+from plan import compute_plan  # noqa: E402
 from propose import (  # noqa: E402
     PullRequestResult,
+    build_proposal,
     open_pull_request,
 )
 
@@ -1152,8 +1157,21 @@ def prepare_exports(
     return export_paths, observations
 
 
+_HASHED_ENTRY_FIELDS = frozenset({"uuid", "content_hash", "scope", "rule"})
+
+
+def _non_hash_metadata(entry: Mapping[str, Any] | None, kind: str) -> str:
+    """Kind plus non-hashed claim/provenance/verification/lifecycle fields."""
+    payload: dict[str, Any] = {"kind": kind}
+    if isinstance(entry, Mapping):
+        for key, value in entry.items():
+            if key not in _HASHED_ENTRY_FIELDS:
+                payload[key] = value
+    return json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"), ensure_ascii=False)
+
+
 def deduplicate_observations(observations: Sequence[Observation]) -> tuple[list[Observation], list[dict[str, Any]]]:
-    """Identical uuid+hash collapse; conflicting hashes are reported, never last-writer."""
+    """Identical uuid+hash+metadata collapse; incompatible metadata is a conflict."""
     by_uuid: dict[str, list[Observation]] = {}
     passthrough: list[Observation] = []
     for item in observations:
@@ -1166,10 +1184,10 @@ def deduplicate_observations(observations: Sequence[Observation]) -> tuple[list[
     conflicts: list[dict[str, Any]] = []
     for uuid, group in sorted(by_uuid.items()):
         hashes = {item.content_hash for item in group}
+        bindings = []
+        for item in group:
+            bindings.extend(item.bindings)
         if len(hashes) > 1:
-            bindings = []
-            for item in group:
-                bindings.extend(item.bindings)
             conflicts.append(
                 {
                     "uuid": uuid,
@@ -1180,10 +1198,20 @@ def deduplicate_observations(observations: Sequence[Observation]) -> tuple[list[
                 }
             )
             continue
+        kinds = {item.kind for item in group}
+        metas = {_non_hash_metadata(item.entry, item.kind) for item in group}
+        if len(kinds) > 1 or len(metas) > 1:
+            conflicts.append(
+                {
+                    "uuid": uuid,
+                    "content_hashes": sorted(h for h in hashes if h),
+                    "bindings": bindings,
+                    "reason": "incompatible_metadata",
+                    "action": "reported_not_chosen",
+                }
+            )
+            continue
         primary = sorted(group, key=lambda item: (item.bindings[0]["repository_id"], item.bindings[0]["path"]))[0]
-        bindings = []
-        for item in group:
-            bindings.extend(item.bindings)
         unique.append(
             Observation(
                 uuid=primary.uuid,
@@ -1211,6 +1239,8 @@ def write_deduped_exports(unique: Sequence[Observation], stash: pathlib.Path) ->
         by_kind.setdefault(item.kind or "known-failure-signatures", []).append(item)
     paths: list[pathlib.Path] = []
     out_dir = stash / "exports" / "deduped"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     for kind, group in sorted(by_kind.items()):
         entries = [dict(item.entry) for item in group if item.entry is not None]
@@ -1237,6 +1267,11 @@ def write_deduped_exports(unique: Sequence[Observation], stash: pathlib.Path) ->
     return paths
 
 
+def _plan_conflicts(plan) -> list[dict[str, Any]]:
+    items = list(plan.by_action("conflict")) + list(plan.by_action("duplicate-candidate"))
+    return [item.to_public() for item in items]
+
+
 def propose_exports(
     export_paths: Sequence[pathlib.Path],
     *,
@@ -1249,48 +1284,84 @@ def propose_exports(
     base: str = "main",
     day: Optional[str] = None,
 ) -> dict[str, Any]:
-    if mode != "propose":
-        return {
-            "status": "preview",
-            "wrote": False,
-            "detail": "preview mode never writes branches or pull requests",
-            "pr_ci": PR_CI_NOTE,
-        }
+    empty = {
+        "wrote": False,
+        "pr_ci": PR_CI_NOTE,
+        "conflicts": [],
+        "plan": None,
+    }
     if not export_paths:
         return {
+            **empty,
             "status": "nothing-to-propose",
-            "wrote": False,
             "detail": "zero eligible entries is an honest no-op",
-            "pr_ci": PR_CI_NOTE,
         }
     gates = run_source_gates(tools_dir, list(export_paths), runner=runner, skip=False)
     if not all(gate.ok for gate in gates):
         return {
+            **empty,
             "status": "failed",
-            "wrote": False,
             "detail": "mandatory gates failed; prior corpus state is unchanged",
             "gates": [{"name": g.name, "status": g.status} for g in gates],
-            "pr_ci": PR_CI_NOTE,
+        }
+    corpus_dir = pathlib.Path(repo) / "corpus"
+    plan = compute_plan([load_export(p) for p in export_paths], load_corpus(corpus_dir), day=day)
+    proposal_obj = build_proposal(plan, load_corpus(corpus_dir), allow_duplicate_candidates=False)
+    conflicts = _plan_conflicts(plan)
+    planned = {
+        "conflicts": conflicts,
+        "plan": plan.to_public(),
+        "pr_ci": PR_CI_NOTE,
+    }
+    if mode != "propose":
+        status = "preview"
+        detail = "preview mode never writes branches or pull requests"
+        if conflicts:
+            status = "preview"
+            detail = "preview; planner reported conflicts or duplicate candidates"
+        return {
+            **planned,
+            "status": status,
+            "wrote": False,
+            "detail": detail,
+        }
+    if proposal_obj.is_empty:
+        status = "conflicts" if conflicts else "nothing-to-propose"
+        detail = (
+            "planner reported conflicts or duplicate candidates; nothing written"
+            if conflicts
+            else "every entry is a no-op or unapplied"
+        )
+        return {
+            **planned,
+            "status": status,
+            "wrote": False,
+            "detail": detail,
         }
     opener = open_pr or open_pull_request
-    result = opener(
-        list(export_paths),
-        repo=repo,
-        tools_dir=tools_dir,
-        remote=remote,
-        base=base,
-        day=day,
-        allow_duplicate_candidates=False,
-        runner=runner,
-        log=lambda *_: None,
-    )
+    opener_kwargs = {
+        "repo": repo,
+        "tools_dir": tools_dir,
+        "remote": remote,
+        "base": base,
+        "day": day,
+        "allow_duplicate_candidates": False,
+        "runner": runner,
+        "log": lambda *_: None,
+        "central_collection": True,
+    }
+    try:
+        result = opener(list(export_paths), **opener_kwargs)
+    except TypeError:
+        opener_kwargs.pop("central_collection")
+        result = opener(list(export_paths), **opener_kwargs)
     return {
+        **planned,
         "status": result.status,
         "wrote": result.status == "created",
         "branch": result.branch,
         "url": result.url,
         "detail": result.detail,
-        "pr_ci": PR_CI_NOTE,
     }
 
 
@@ -1306,8 +1377,12 @@ def public_coverage(result: Mapping[str, Any]) -> dict[str, Any]:
         "counts": counts,
         "coverage": coverage,
         "conflicts": result.get("conflicts") or [],
+        "observations": result.get("observations") or [],
         "eligible_count": result.get("eligible_count", 0),
+        "export_paths": result.get("export_paths") or [],
+        "has_successful_exports": bool(result.get("export_paths")),
         "proposal": result.get("proposal"),
+        "plan": result.get("plan") or (result.get("proposal") or {}).get("plan"),
         "private_source_recipe": PRIVATE_SOURCE_RECIPE,
         "pr_ci": PR_CI_NOTE,
         "notes": [
@@ -1317,6 +1392,26 @@ def public_coverage(result: Mapping[str, Any]) -> dict[str, Any]:
             "Metadata forks_count vs accessible list length is an observation, not a coverage claim.",
         ],
     }
+
+
+def write_handoff(handoff_dir: pathlib.Path, public: Mapping[str, Any], export_paths: Sequence[pathlib.Path]) -> None:
+    """Write this run's sanitized result and only currently successful exports."""
+    handoff_dir = pathlib.Path(handoff_dir)
+    exports = handoff_dir / "exports"
+    if exports.exists():
+        shutil.rmtree(exports)
+    exports.mkdir(parents=True, exist_ok=True)
+    for path in export_paths:
+        shutil.copy2(path, exports / pathlib.Path(path).name)
+    (handoff_dir / "result.json").write_text(json_dumps(public), encoding="utf-8")
+
+
+def _discard_assembled_exports(paths: Sequence[pathlib.Path]) -> None:
+    for path in paths:
+        try:
+            pathlib.Path(path).unlink()
+        except FileNotFoundError:
+            continue
 
 
 def run_collection(
@@ -1336,6 +1431,7 @@ def run_collection(
     remote: str = "origin",
     base: str = "main",
     day: Optional[str] = None,
+    handoff_dir: Optional[pathlib.Path] = None,
 ) -> dict[str, Any]:
     if mode not in {"preview", "propose"}:
         raise CollectRefuse("mode must be preview or propose")
@@ -1375,7 +1471,6 @@ def run_collection(
             "private_source_recipe": PRIVATE_SOURCE_RECIPE,
         }
         unique: list[Observation] = []
-        conflicts: list[dict[str, Any]] = []
         proposal = propose_exports(
             export_paths,
             repo=repo,
@@ -1389,11 +1484,15 @@ def run_collection(
         )
         out = {
             **discovery,
-            "conflicts": conflicts,
+            "conflicts": list(proposal.get("conflicts") or []),
             "eligible_count": len(export_paths),
             "export_paths": [str(path) for path in export_paths],
             "proposal": proposal,
+            "plan": proposal.get("plan"),
+            "observations": [],
         }
+        if handoff_dir is not None:
+            write_handoff(handoff_dir, public_coverage(out), export_paths)
         return out
 
     if api is None:
@@ -1419,13 +1518,14 @@ def run_collection(
         _record(
             coverage_buckets["rejected"],
             uuid=item.get("uuid"),
-            reason="conflicting_revision",
+            reason=item.get("reason") or "conflicting_revision",
         )
     export_paths = write_deduped_exports(unique, stash)
     if export_paths:
         gates = run_source_gates(tools_dir, export_paths, runner=runner, skip=False)
         if not all(gate.ok for gate in gates):
             _record(coverage_buckets["rejected"], reason="mandatory_gates_failed")
+            _discard_assembled_exports(export_paths)
             export_paths = []
     eligible_count = sum(1 for item in unique if item.classification == "eligible")
     proposal = propose_exports(
@@ -1439,13 +1539,15 @@ def run_collection(
         base=base,
         day=day,
     )
-    return {
+    merged_conflicts = list(conflicts) + list(proposal.get("conflicts") or [])
+    out = {
         "parent": discovery["parent"],
         "coverage": coverage_buckets,
-        "conflicts": conflicts,
+        "conflicts": merged_conflicts,
         "eligible_count": eligible_count,
         "export_paths": [str(path) for path in export_paths],
         "proposal": proposal,
+        "plan": proposal.get("plan"),
         "truncated_listing": discovery.get("truncated_listing"),
         "private_source_recipe": PRIVATE_SOURCE_RECIPE,
         "observations": [
@@ -1461,6 +1563,9 @@ def run_collection(
             if item.classification == "eligible"
         ],
     }
+    if handoff_dir is not None:
+        write_handoff(handoff_dir, public_coverage(out), export_paths)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1472,6 +1577,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tools-dir", type=pathlib.Path, default=None)
     parser.add_argument("--json", type=pathlib.Path, default=None)
     parser.add_argument("--from-exports", type=pathlib.Path, default=None)
+    parser.add_argument("--handoff-dir", type=pathlib.Path, default=None)
     parser.add_argument("--remote", default="origin")
     parser.add_argument("--base", default="main")
     parser.add_argument("--today", default=None)
@@ -1507,6 +1613,7 @@ def main(argv: list[str] | None = None) -> int:
             remote=args.remote,
             base=args.base,
             day=args.today,
+            handoff_dir=args.handoff_dir,
         )
     except CollectRefuse as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1516,6 +1623,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
     public = public_coverage(result)
     text = json_dumps(public)
+    if args.handoff_dir is not None:
+        export_paths = [pathlib.Path(p) for p in result.get("export_paths") or []]
+        write_handoff(args.handoff_dir, public, export_paths)
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(text, encoding="utf-8")

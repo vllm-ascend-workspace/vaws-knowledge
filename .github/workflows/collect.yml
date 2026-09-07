@@ -67,31 +67,24 @@ jobs:
           set -euo pipefail
           stash="${RUNNER_TEMP}/vaws-collect"
           mkdir -p "$stash"
+          mkdir -p collect-handoff
           python3 sync/collect.py \
             --mode preview \
             --parent-id 1196723340 \
             --stash "$stash" \
-            --json collect-coverage.json \
+            --json collect-handoff/result.json \
+            --handoff-dir collect-handoff \
             --max-pages "${VAWS_COLLECT_MAX_PAGES}" \
             --max-forks "${VAWS_COLLECT_MAX_FORKS}" \
             --max-files-per-repo "${VAWS_COLLECT_MAX_FILES_PER_REPO}" \
             --max-file-bytes "${VAWS_COLLECT_MAX_FILE_BYTES}" \
             --max-total-bytes "${VAWS_COLLECT_MAX_TOTAL_BYTES}"
-          mkdir -p collect-exports
-          if [ -d "$stash/exports/deduped" ]; then
-            cp -R "$stash/exports/deduped/." collect-exports/
-          fi
-          test -s collect-coverage.json
+          test -s collect-handoff/result.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: collect-coverage
-          path: collect-coverage.json
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: collect-exports
-          path: collect-exports
+          name: collect-handoff
+          path: collect-handoff
 
   propose:
     needs: collect
@@ -116,8 +109,8 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: collect-exports
-          path: collect-exports
+          name: collect-handoff
+          path: collect-handoff
 
       - name: Propose gated candidate PR
         env:
@@ -126,10 +119,10 @@ jobs:
         run: |
           set -euo pipefail
           stash="${RUNNER_TEMP}/vaws-collect-propose"
-          mkdir -p "$stash"
+          mkdir -p "$stash" collect-handoff/exports
           python3 sync/collect.py \
             --mode propose \
-            --from-exports collect-exports \
+            --from-exports collect-handoff/exports \
             --stash "$stash" \
             --json propose-result.json
           test -s propose-result.json
@@ -166,16 +159,17 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: collect-exports
-          path: collect-exports
+          name: collect-handoff
+          path: collect-handoff
 
       - name: Advisory triage of gated exports
         run: |
           set -euo pipefail
+          mkdir -p collect-handoff/exports
           files=()
           while IFS= read -r f; do
             files+=("$f")
-          done < <(find collect-exports -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+          done < <(find collect-handoff/exports -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
           if [ ${#files[@]} -eq 0 ]; then
             printf '%s\n' '{"advisory":true,"status":"unavailable","reason":"no eligible input","provider":{"called":false},"notes":["Unavailable is not a successful semantic review."]}' > collect-advisory.json
           else

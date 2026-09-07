@@ -252,6 +252,68 @@ class AdvisoryWiring(unittest.TestCase):
         with self.assertRaises(Refuse):
             load_advisory_artifact(work)
 
+    def test_binding_mismatch_writes_nothing(self):
+        artifact = {
+            "advisory": True,
+            "status": "unavailable",
+            "reason": "fixture unavailable",
+            "provider": {"called": False},
+            "binding": {"run": RUN_ID + 1, "head": "f" * 40, "repo": "wrong/other", "pr": 999},
+            "permits": "nothing",
+        }
+        with self.assertRaises(Refuse):
+            publish_advisory_comment(make_event(), artifact, OWNER_REPO, self.api)
+        self.assertEqual([], self.api.writes())
+
+    def test_missing_binding_writes_nothing(self):
+        artifact = {
+            "advisory": True,
+            "status": "unavailable",
+            "provider": {"called": False},
+            "permits": "nothing",
+        }
+        with self.assertRaises(Refuse):
+            publish_advisory_comment(make_event(), artifact, OWNER_REPO, self.api)
+        self.assertEqual([], self.api.writes())
+
+    def test_matching_binding_updates_owned_advisory_comment(self):
+        self.api.comments = [
+            bot_comment(7, ADVISORY_MARKER + "\nold advisory\n"),
+        ]
+        artifact = {
+            "advisory": True,
+            "status": "unavailable",
+            "reason": "XAI_API_KEY is not configured",
+            "provider": {"called": False},
+            "binding": {"run": RUN_ID, "head": SOURCE_SHA, "repo": OWNER_REPO, "pr": 5},
+            "permits": "nothing; advisory unavailable is not a successful semantic review",
+        }
+        outcome = publish_advisory_comment(make_event(), artifact, OWNER_REPO, self.api)
+        self.assertEqual("update", outcome["action"])
+        writes = self.api.writes()
+        self.assertEqual(1, len(writes))
+        self.assertEqual("PATCH", writes[0][0])
+
+    def test_failed_selected_blob_is_unavailable_with_zero_provider_calls(self):
+        tree = self.api.trees[(OWNER_REPO, SOURCE_SHA)]
+        tree["tree"].append(
+            {
+                "path": "corpus/unverified/unfetched.yaml",
+                "mode": "100644",
+                "type": "blob",
+                "sha": "a1" * 20,
+                "size": 1,
+            }
+        )
+        transport = FakeTransport(response=_load_response("empty-candidates.json"))
+        artifact = self._run(transport=transport, environ=FAKE_ENV)
+        self.assertEqual([], transport.calls)
+        self.assertFalse(artifact["provider"]["called"])
+        self.assertNotEqual("success", artifact["status"])
+        dumped = json.dumps(artifact)
+        self.assertIn("unfetched", dumped)
+        self.assertGreater(artifact["coverage"]["omitted_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

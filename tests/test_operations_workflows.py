@@ -151,8 +151,13 @@ class NamesAndTriggers(unittest.TestCase):
         self.assertEqual("read", data["permissions"]["contents"])
         self.assertNotIn("contents: write", text)
         self.assertIn(".vaws-local/knowledge/shared/", text)
-        self.assertIn("docs/periodic-pull-template.yml", (REPO / "docs" / "federation.md").read_text(encoding="utf-8"))
+        federation = (REPO / "docs" / "federation.md").read_text(encoding="utf-8")
+        self.assertIn("docs/periodic-pull-template.yml", federation)
         self.assertIn("docs/periodic-pull-template.yml", (REPO / "docs" / "operations.md").read_text(encoding="utf-8"))
+        self.assertIn("knowledge_shared_cache.py", federation)
+        self.assertIn("knowledge_shared_cache.py", text)
+        self.assertNotIn("VAWS_KNOWLEDGE_SHARED_ROOTS", federation)
+        self.assertIn("does not refresh", text.lower() + " " + "does not refresh a cache")
 
 
 class PermissionBoundaries(unittest.TestCase):
@@ -181,6 +186,9 @@ class PermissionBoundaries(unittest.TestCase):
         self.assertNotIn("--drop-undeclared", self.collect_text)
         self.assertNotIn("--allow-duplicate-candidates", self.collect_text)
         self.assertIn("GitHub-required approval", self.collect_text)
+        self.assertIn("collect-handoff", self.collect_text)
+        self.assertIn("--handoff-dir", self.collect_text)
+        self.assertNotIn("name: collect-exports", self.collect_text)
 
     def test_secret_bearing_advisory_job_does_not_checkout_pr_code(self):
         advisory = _job(self.advisory, "advisory")

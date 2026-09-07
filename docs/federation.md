@@ -221,17 +221,25 @@ project-zone documents cannot; source repo/ref must be recorded; a failed
 refresh must preserve the last valid shared cache; query/get use the same
 trust checks.
 
-Point the existing client at that exact snapshot directory, for example:
+Import with the accepted Phase B client against an exact verified snapshot
+directory or a checkout of `corpus/verified/` pinned to the snapshot's
+`corpus_revision` (a 40-character commit). Do not point the shared cache at
+`corpus/unverified/` or a project layer.
 
 ```
-VAWS_KNOWLEDGE_SHARED_ROOTS=/path/to/verified-snapshot/verified
+python3 .agents/scripts/knowledge_shared_cache.py [--shared-dir …] import \
+  --from /path/to/verified-snapshot/verified \
+  --source-repo vllm-ascend-workspace/vaws-knowledge \
+  --source-ref <exact-40-character-commit>
 ```
 
-or at `corpus/verified/` of a checkout pinned to the snapshot's
-`corpus_revision`. A central workflow can publish a snapshot and inspect
-forks; it cannot populate another developer's untracked
-`.vaws-local/knowledge/shared/` by itself. An optional copy-yourself template
-lives at `docs/periodic-pull-template.yml`. Do not install it into other
+Optional expected repo/ref checks and `status` / `query` verification use the
+same importer-owned policy, source binding, and last-valid-cache preservation.
+A central workflow can publish a snapshot and inspect forks; it cannot
+populate another developer's untracked `.vaws-local/knowledge/shared/` by
+itself. An optional copy-yourself template lives at
+`docs/periodic-pull-template.yml`. That template only prints import
+instructions; it does not refresh a cache. Do not install it into other
 repositories from here. GitHub schedules in new public forks are disabled by
 default; central collection does not depend on those schedules being enabled.
 

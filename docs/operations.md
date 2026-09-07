@@ -14,7 +14,7 @@ Checked on 2026-09-07 against public knowledge main
 | A. Central collection | `sync/collect.py`, `.github/workflows/collect.yml` (`Central collection`) |
 | B. Advisory review | `bot/advisory_review.py`, `.github/workflows/advisory-review.yml` (`Advisory review`) |
 | C. Verified snapshot | `sync/snapshot.py`, `.github/workflows/publish-snapshot.yml` (`Verified snapshot`) |
-| Consumption | `docs/periodic-pull-template.yml` (opt-in copy; not installed elsewhere) |
+| Consumption | `docs/periodic-pull-template.yml` (prints Phase B import CLI; does not refresh) |
 | Reuse | existing `tools/export.py`, gates, `sync/plan.py`, `sync/propose.py --open-pr`, `bot/triage_grok.py`, `sync/publish.py`, `bot/publish_comment.py` association |
 
 Workflows request an explicit finite cadence, per-repo concurrency, job
@@ -44,6 +44,12 @@ fakes and **zero** live network:
 - model advisory cannot approve or promote
 - verified-only publish with manifest verification
 - workflow names, triggers, permissions and checkout boundaries
+- successful-export-only handoff; always-present sanitized result
+- incompatible same-uuid/hash metadata reported, not coalesced
+- public retrieval bindings and planner conflict outcomes
+- advisory selected-blob failure is unavailable with zero provider calls
+- advisory comment requires matching artifact binding
+- Phase B `knowledge_shared_cache.py import` recipe
 
 That is offline acceptance, not a live GitHub or xAI run.
 

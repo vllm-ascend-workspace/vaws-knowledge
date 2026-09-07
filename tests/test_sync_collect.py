@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -413,6 +414,12 @@ class CollectControls(synctest.SyncTestCase):
         self.assertEqual(1, result["eligible_count"], result.get("observations"))
         obs = result["observations"][0]
         self.assertEqual(2, len(obs["bindings"]))
+        public = collect_mod.public_coverage(result)
+        self.assertEqual(1, len(public["observations"]))
+        self.assertEqual(2, len(public["observations"][0]["bindings"]))
+        self.assertIn(obs["bindings"][0]["blob_sha"], json.dumps(public))
+        self.assertIn(obs["bindings"][0]["commit_sha"], json.dumps(public))
+        self.assertIn(obs["bindings"][0]["path"], json.dumps(public))
 
     def test_conflict_and_verified_revision_are_not_written(self):
         a = self.new_entry("conflict-a")
@@ -487,6 +494,50 @@ class CollectControls(synctest.SyncTestCase):
         self.assertIn("FORBIDDEN_FLAGS", text)
         self.assertIn("skip=False", text)
         self.assertNotIn('skip=True', text)
+
+    def test_same_hash_contributor_mismatch_is_conflict(self):
+        doc = yaml.safe_load(self._eligible_doc("meta-conflict"))
+        other = yaml.safe_load(self._eligible_doc("meta-conflict"))
+        other["entries"][0]["provenance"]["contributor"] = "different-review-contributor"
+        data_a = _dump(doc)
+        data_b = _dump(other)
+        self._register_blob(data_a)
+        self._register_blob(data_b)
+        self._add_fork(810, "fork-alpha/scaffold", FORK_SHA, FORK_TREE, [_tree_entry(".agents/knowledge/ok.yaml", data_a)])
+        self._add_fork(811, "fork-beta/scaffold", FORK2_SHA, FORK2_TREE, [_tree_entry(".agents/knowledge/ok.yaml", data_b)])
+        result = self._run(mode="propose")
+        self.assertTrue(result["conflicts"], result)
+        self.assertTrue(any(item.get("reason") == "incompatible_metadata" for item in result["conflicts"]))
+        self.assertEqual([], self.pr_calls)
+        self.assertEqual(0, result["eligible_count"])
+
+    def test_final_gate_crash_discards_assembled_exports(self):
+        data = self._eligible_doc("final-gate")
+        self._register_blob(data)
+        self._add_fork(
+            899,
+            "fork-final-gate/scaffold",
+            FORK_SHA,
+            FORK_TREE,
+            [_tree_entry(".agents/knowledge/known-failure-signatures.yaml", data)],
+        )
+        fault = self.stash / "fault-dependency"
+        fault.mkdir()
+        (fault / "jsonschema.py").write_text('raise RuntimeError("assembled-document validator crash")\n')
+
+        def runner(cmd, **kw):
+            if any("/exports/deduped/" in str(x) for x in cmd) and any(str(x).endswith("/validate.py") for x in cmd):
+                env = dict(os.environ)
+                env["PYTHONPATH"] = str(fault)
+                return subprocess.run(cmd, **kw, env=env, text=True, capture_output=True)
+            return synctest._common.default_runner(cmd, **kw)
+
+        result = self._run(mode="preview", runner=runner)
+        retained = [p for p in (self.stash / "exports" / "deduped").rglob("*") if p.is_file()]
+        self.assertEqual([], retained, retained)
+        self.assertEqual([], result["export_paths"])
+        self.assertTrue(any(item.get("reason") == "mandatory_gates_failed" for item in result["coverage"]["rejected"]))
+        self.assertEqual([], self.pr_calls)
 
 
 class CollectProposeIdempotency(synctest.SyncTestCase):
@@ -573,8 +624,9 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
             runner=self.runner,
             open_pr=lambda *a, **k: propose_mod.open_pull_request(*a, **{**k, "runner": self.runner}),
         )
-        self.assertEqual("nothing-to-propose", result["status"], result)
+        self.assertIn(result["status"], {"nothing-to-propose", "conflicts"}, result)
         self.assertFalse(result["wrote"])
+        self.assertTrue(result.get("conflicts"), result)
         self.assertEqual([], self.gh_calls)
         show = subprocess.run(
             ["git", "-C", str(self.remote), "show", "main:corpus/verified/known-failure-signatures.yaml"],
@@ -583,6 +635,28 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
             check=True,
         )
         self.assertNotIn("Changed verified claim.", show.stdout)
+
+    def test_central_collection_pr_body_does_not_claim_source_side_scan(self):
+        export = self.make_export([self.new_entry("central-body")])
+        bodies = []
+
+        def runner(cmd, **kwargs):
+            if cmd[:3] == ["gh", "pr", "create"]:
+                bodies.append(pathlib.Path(cmd[cmd.index("--body-file") + 1]).read_text(encoding="utf-8"))
+            return self.runner(cmd, **kwargs)
+
+        result = collect_mod.propose_exports(
+            [export],
+            repo=self.repo,
+            tools_dir=synctest.REPO / "tools",
+            mode="propose",
+            runner=runner,
+        )
+        self.assertEqual("created", result["status"], result)
+        self.assertTrue(bodies)
+        self.assertNotIn("redaction-checked in the fork before", bodies[0])
+        self.assertIn("trusted", bodies[0].lower())
+        self.assertIn("central", bodies[0].lower())
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -63,6 +64,15 @@ class AdvisoryRefuse(Refuse):
     """Fail closed: no model call enlargement and no comment write."""
 
 
+@dataclass
+class CorpusFetch:
+    files: list[Path] = field(default_factory=list)
+    selected: list[dict[str, Any]] = field(default_factory=list)
+    omitted: list[dict[str, Any]] = field(default_factory=list)
+    failed: list[dict[str, Any]] = field(default_factory=list)
+    truncated: bool = False
+
+
 def _trusted_run(event: Mapping[str, Any], repository: str) -> dict[str, Any]:
     workflow_run = event.get("workflow_run")
     if not isinstance(workflow_run, Mapping):
@@ -101,20 +111,21 @@ def fetch_selected_corpus(
     stash: Path,
     *,
     bounds: Optional[collect_mod.Bounds] = None,
-) -> list[Path]:
+) -> CorpusFetch:
     """Fetch corpus/ and examples/ YAML blobs at an immutable head into stash."""
     bounds = bounds or collect_mod.Bounds()
     stash = stash.resolve()
     stash.mkdir(parents=True, exist_ok=True)
     collect_mod.ensure_stash_not_on_path(stash)
+    result = CorpusFetch()
     try:
         entries, truncated = collect_mod.list_tree_entries(api, repository, head_sha)
     except GitHubError as exc:
         raise AdvisoryRefuse(f"tree fetch failed ({exc.status})") from exc
     except collect_mod.CollectRefuse as exc:
         raise AdvisoryRefuse(str(exc)) from exc
-    written: list[Path] = []
-    total = 0
+    result.truncated = bool(truncated)
+    selected_entries: list[Mapping[str, Any]] = []
     for entry in entries:
         path = entry.get("path")
         if not isinstance(path, str):
@@ -126,22 +137,36 @@ def fetch_selected_corpus(
             continue
         blob_sha = _sha(entry.get("sha"))
         if blob_sha is None:
+            result.failed.append({"path": path, "reason": "missing_blob_sha"})
             continue
+        selected_entries.append(entry)
+    if truncated:
+        result.omitted.append({"reason": "truncated_tree", "path": None})
+    total = 0
+    for entry in selected_entries:
+        path = str(entry.get("path"))
+        blob_sha = _sha(entry.get("sha"))
+        pointer = {"path": path, "blob_sha": blob_sha, "commit_sha": head_sha}
         size = entry.get("size")
         if isinstance(size, int) and not isinstance(size, bool) and size > bounds.max_file_bytes:
+            result.omitted.append({**pointer, "reason": "oversize"})
             continue
-        if total >= bounds.max_total_bytes or len(written) >= bounds.max_files_per_repo:
-            break
+        if len(result.files) >= bounds.max_files_per_repo or total >= bounds.max_total_bytes:
+            result.omitted.append({**pointer, "reason": "fetch_bound"})
+            continue
         try:
             data = collect_mod.fetch_blob(api, repository, blob_sha, max_bytes=bounds.max_file_bytes)
-        except (GitHubError, collect_mod.CollectRefuse):
+        except (GitHubError, collect_mod.CollectRefuse) as exc:
+            reason = "blob_fetch_failed"
+            if isinstance(exc, collect_mod.CollectRefuse):
+                reason = str(exc) or reason
+            result.failed.append({**pointer, "reason": reason})
             continue
         dest = collect_mod._stash_file(stash, 0, head_sha, path, data)
-        written.append(dest)
+        result.files.append(dest)
+        result.selected.append({**pointer, "status": "fetched"})
         total += len(data)
-    if truncated and not written:
-        raise AdvisoryRefuse("truncated tree with no selected corpus files")
-    return written
+    return result
 
 
 def run_trusted_advisory(
@@ -165,24 +190,39 @@ def run_trusted_advisory(
 
     paths: list[str] = []
     fetch_error: Optional[str] = None
+    fetched = CorpusFetch()
     if fetch_corpus:
         try:
-            files = fetch_selected_corpus(api, repository, run["head_sha"], stash)
-            paths = [str(path) for path in files]
+            fetched = fetch_selected_corpus(api, repository, run["head_sha"], stash)
+            paths = [str(path) for path in fetched.files]
         except AdvisoryRefuse as exc:
             fetch_error = str(exc)
 
+    fetch_omitted = list(fetched.omitted) + [
+        {**item, "reason": item.get("reason") or "blob_fetch_failed"} for item in fetched.failed
+    ]
     artifact: dict[str, Any]
-    if not paths:
+    fail_closed_fetch = bool(fetched.failed) or bool(fetch_error)
+    if fail_closed_fetch or not paths:
+        reason = fetch_error
+        if fetched.failed:
+            reason = "selected corpus blob fetch failed"
+        elif not paths:
+            reason = fetch_error or "no eligible input"
         artifact = {
             "advisory": True,
             "kind": KIND,
             "status": "unavailable",
-            "reason": fetch_error or "no eligible input",
+            "reason": reason,
             "provider": {"called": False},
             "notes": list(_advisory_notes()),
             "input_gates": [],
-            "coverage": {"selected": [], "selected_count": 0, "omitted": [], "omitted_count": 0},
+            "coverage": {
+                "selected": [],
+                "selected_count": 0,
+                "omitted": fetch_omitted,
+                "omitted_count": len(fetch_omitted),
+            },
             "source": {
                 "repo": repository,
                 "ref": run["head_sha"],
@@ -199,6 +239,16 @@ def run_trusted_advisory(
             transport=transport,
             python=python,
         )
+        coverage = artifact.setdefault("coverage", {})
+        omitted = list(coverage.get("omitted") or []) + fetch_omitted
+        coverage["omitted"] = omitted
+        coverage["omitted_count"] = len(omitted)
+    artifact["fetch"] = {
+        "selected": fetched.selected,
+        "failed": fetched.failed,
+        "omitted": fetched.omitted,
+        "truncated": fetched.truncated,
+    }
     artifact["binding"] = {
         "run": run["id"],
         "head": run["head_sha"],
@@ -310,6 +360,22 @@ def publish_advisory_comment(
     current = _current_head(api, repository, pr)
     if current != expected_head:
         raise Refuse("stale head")
+    binding = artifact.get("binding")
+    if not isinstance(binding, Mapping):
+        raise Refuse("missing advisory binding")
+    bound_run = binding.get("run")
+    bound_head = _sha(binding.get("head"))
+    bound_repo = binding.get("repo")
+    bound_pr = binding.get("pr")
+    if (
+        bound_run != run["id"]
+        or bound_head != run["head_sha"]
+        or bound_repo != repository
+        or bound_pr != pr
+        or bound_head != expected_head
+        or bound_head != current
+    ):
+        raise Refuse("mismatched advisory binding")
     markdown = render_advisory_markdown(artifact)
     if not markdown.startswith(ADVISORY_MARKER):
         raise Refuse("advisory marker missing")
