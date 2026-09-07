@@ -107,6 +107,10 @@ class ProposeMechanics(synctest.SyncTestCase):
         self.assertIn(dup["uuid"], body)
         self.assertIn(synctest.UUID_VERIFIED, body, "both sides are reported")
         self.assertIn("needs a human", body)
+        self.assertIn("in the fork before", body)
+        central = propose_mod.render_pr_body(proposal, central_collection=True)
+        self.assertNotIn("in the fork before", central)
+        self.assertIn("central collection scan", central)
 
     def test_duplicate_candidates_land_only_when_explicitly_allowed(self):
         dup = self.entry(synctest.UUID_VERIFIED)

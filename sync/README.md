@@ -12,6 +12,8 @@ when they are missing.
 | `plan.py` | fork → main, dry run | nothing |
 | `propose.py` | fork → main | `corpus/unverified/<kind>.yaml` (with `--apply` / `--open-pr`) |
 | `publish.py` | main → forks | a snapshot directory under `--out` |
+| `snapshot.py` | main → artifact | same snapshot, after schema/integrity **and** redaction gates |
+| `collect.py` | public parent/forks → this repo | candidate PRs only in vaws-knowledge (`--mode propose`) |
 | `rescan.py` | main-repo maintenance | a proposal JSON under `--out` |
 
 Nothing in this package can remove an entry from the corpus. The single write
@@ -60,6 +62,30 @@ python3 sync/propose.py --export fork-export.yaml --open-pr  # PR against origin
 - The written documents are gated again (`validate.py`, `redact.py --check`)
   before commit. `git push` is never forced.
 - `--strict` exits non-zero without writing when any entry needs a human.
+
+## collect.py — central public collection
+
+```bash
+python3 sync/collect.py --mode preview --stash /tmp/vaws-collect --json coverage.json
+python3 sync/collect.py --mode propose --from-exports /tmp/vaws-collect/exports/deduped
+```
+
+Resolves scaffold parent id `1196723340`, lists accessible public forks with
+bounded pagination, freezes each default-branch commit, fetches ordinary
+`.agents/knowledge/*.yaml` blobs into `--stash` (outside the checkout, never
+on `sys.path`), classifies v1/incomplete as unsupported, runs this
+repository's `tools/export.py` plus validate/redact, deduplicates identical
+uuid/hash observations, and reuses `propose.py` for preview or `--open-pr`.
+Preview never writes. Conflicts are reported, not last-writer-merged.
+
+## snapshot.py — gated verified publish
+
+```bash
+python3 sync/snapshot.py --out build/snapshot
+```
+
+Runs `tools/validate.py` and `tools/redact.py --check` on `corpus/verified/`
+then `publish.py`. Refuses to emit `corpus/unverified/`.
 
 ## publish.py — the downward path
 

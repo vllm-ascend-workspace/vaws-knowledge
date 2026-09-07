@@ -97,7 +97,12 @@ See [docs/lifecycle.md](docs/lifecycle.md).
 Sync is one-directional per layer: forks propose candidates upward as PRs,
 this repo publishes `verified` downward. Entries sync individually, keyed by
 `uuid` with `content_hash` as the revision, so re-syncing the same entry is
-idempotent and a busy YAML file does not turn into a merge conflict.
+idempotent and a busy YAML file does not turn into a merge conflict. A
+trusted central collector can also read already-public `.agents/knowledge/`
+YAML from the scaffold parent and its accessible public forks and open
+candidate PRs here; it never writes to a fork. See
+[docs/federation.md](docs/federation.md) and
+[docs/operations.md](docs/operations.md).
 
 See [docs/federation.md](docs/federation.md).
 

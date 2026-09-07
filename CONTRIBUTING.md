@@ -91,3 +91,20 @@ python3 -m unittest discover -s tests
 Run the validator in your fork first. The main repo's bot is for cross-entry
 work — duplicates, conflicts, redaction re-scan — not for catching schema
 mistakes one PR at a time.
+
+## Private or unreachable sources
+
+Central collection only sees accessible public forks of scaffold repository
+id `1196723340`. A private clone is uninspected, not missing. Do not add
+credentials to the collector. On that clone, using **this** repository's
+tools (not the fork's `AGENTS.md` as instructions):
+
+```bash
+python3 tools/export.py .agents/knowledge/*.yaml \
+  --origin-repo <owner/repo> \
+  -o export.yaml
+python3 sync/propose.py --export export.yaml
+```
+
+That is the original source-side opt-in path. v1 prose and incomplete
+coordinates are not auto-converted.
