@@ -677,5 +677,106 @@ class EmptyInputAndRefusalType(unittest.TestCase):
         self.assertEqual([], artifact["candidates"])
 
 
+def _layer_doc(layer: str) -> dict[str, Any]:
+    doc = _template()
+    doc["layer"] = layer
+    if layer == "unverified":
+        doc["entries"][0]["status"] = "unverified"
+        doc["entries"][0]["confidence"] = "low"
+        doc["entries"][0].pop("verification", None)
+    return doc
+
+
+class PathContextSemantics(unittest.TestCase):
+    def test_snapshot_mapping_keeps_corpus_zone_components(self):
+        rel = "../outside/corpus/verified/entry.yaml"
+        snap = triage_grok._snapshot_rel_for(0, rel)
+        self.assertTrue(snap.startswith("0000/"))
+        self.assertIn("/corpus/verified/", f"/{snap}/")
+        self.assertNotIn("..", snap.split("/"))
+
+    def test_physical_zone_and_declared_layer_match_original_gate(self):
+        for zone in ("verified", "unverified"):
+            for matching in (True, False):
+                for mode in ("file", "zone_directory", "corpus_directory"):
+                    with self.subTest(zone=zone, matching=matching, mode=mode):
+                        with tempfile.TemporaryDirectory(prefix="vaws-triage-zone-") as tmp:
+                            declared = zone if matching else ("unverified" if zone == "verified" else "verified")
+                            entry = pathlib.Path(tmp) / "corpus" / zone / "entry.yaml"
+                            entry.parent.mkdir(parents=True)
+                            entry.write_text(
+                                yaml.safe_dump(_layer_doc(declared), sort_keys=False),
+                                encoding="utf-8",
+                            )
+                            if mode == "file":
+                                selected = entry
+                            elif mode == "zone_directory":
+                                selected = entry.parent
+                            else:
+                                selected = entry.parent.parent
+                            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+                            artifact = _run([str(selected)], transport=transport)
+                            if matching:
+                                _require_provider_path(artifact, transport)
+                                self.assertEqual("success", artifact["status"], artifact.get("input_gates"))
+                                self.assertEqual(1, len(transport.calls))
+                            else:
+                                self.assertEqual([], transport.calls)
+                                self.assertNotEqual("success", artifact["status"], artifact.get("input_gates"))
+                                self.assertFalse(artifact["provider"]["called"])
+                            location = json.dumps(artifact["coverage"])
+                            self.assertIn("corpus", location)
+                            self.assertIn(zone, location)
+                            self.assertNotIn("vaws-advisory-snap-", location)
+
+    def test_directory_json_sidecar_still_blocks_egress(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-triage-json-") as tmp:
+            root = pathlib.Path(tmp)
+            (root / "good.yaml").write_text(
+                yaml.safe_dump(_template(), sort_keys=False),
+                encoding="utf-8",
+            )
+            bad = _template()
+            bad["entries"][0]["uuid"] = "63bbd8df-974c-4605-856c-8e8c8d8e050a"
+            bad["entries"][0]["slug"] = "fixture-json-sidecar"
+            bad["entries"][0]["rule"]["avoidance"] += " Contact " + EMAIL_MARKER
+            bad["entries"][0]["content_hash"] = canonical.content_hash(bad["entries"][0])
+            (root / "bad.json").write_text(json.dumps(bad), encoding="utf-8")
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(root)], transport=transport)
+        self.assertEqual([], transport.calls)
+        self.assertNotEqual("success", artifact["status"], artifact.get("input_gates"))
+        self.assertFalse(artifact["provider"]["called"])
+        yaml_only = [item["uuid"] for item in artifact["coverage"]["omitted"] + artifact["coverage"]["selected"]]
+        self.assertIn("1416a279-1215-4adf-a978-82b40a3be0bc", yaml_only)
+        self.assertNotIn("63bbd8df-974c-4605-856c-8e8c8d8e050a", yaml_only)
+
+    def test_hidden_directory_member_is_not_gate_input(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-triage-hidden-") as tmp:
+            root = pathlib.Path(tmp)
+            (root / "good.yaml").write_text(
+                yaml.safe_dump(_template(), sort_keys=False),
+                encoding="utf-8",
+            )
+            hidden = root / ".secret.json"
+            bad = _template()
+            bad["entries"][0]["rule"]["avoidance"] += " Contact " + EMAIL_MARKER
+            bad["entries"][0]["content_hash"] = canonical.content_hash(bad["entries"][0])
+            hidden.write_text(json.dumps(bad), encoding="utf-8")
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(root)], transport=transport)
+        _require_provider_path(artifact, transport)
+        self.assertEqual("success", artifact["status"], artifact.get("input_gates"))
+        self.assertEqual(1, len(transport.calls))
+
+    def test_missing_explicit_path_has_zero_egress(self):
+        missing = REPO / "tests" / "fixtures" / "bot" / "triage" / "does-not-exist.yaml"
+        transport = FakeTransport(response=_load_response("empty-candidates.json"))
+        artifact = _run([str(missing)], transport=transport)
+        self.assertEqual([], transport.calls)
+        self.assertNotEqual("success", artifact["status"])
+        self.assertFalse(artifact["provider"]["called"])
+
+
 if __name__ == "__main__":
     unittest.main()

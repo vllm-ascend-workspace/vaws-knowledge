@@ -39,7 +39,6 @@ if __package__ in (None, ""):
 from bot.corpus import (
     RULE_BODY_FIELDS,
     SCOPE_DIMENSIONS,
-    YAML_SUFFIXES,
     DependencyError,
     EntryRef,
     LoadError,
@@ -74,6 +73,9 @@ DEFAULT_MAX_EXPLANATION_CHARS = 400
 HARD_MAX_EXPLANATION_CHARS = 500
 
 RULE_WHITELIST_FIELDS: tuple[str, ...] = RULE_BODY_FIELDS + ("avoidance", "fingerprints")
+# Directory coverage for the actual schema/redaction CLIs, matching
+# tools/_common.CORPUS_EXTENSIONS. Bot provider discovery remains YAML-only.
+GATE_CORPUS_SUFFIXES: tuple[str, ...] = (".yaml", ".yml", ".json")
 
 ADVISORY_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -339,10 +341,10 @@ def _write_frozen(dest: Path, data: bytes) -> None:
     dest.write_bytes(data)
 
 
-def _dir_yaml_files(src: Path) -> list[Path]:
+def _dir_gate_files(src: Path) -> list[Path]:
     found: list[Path] = []
     for child in src.rglob("*"):
-        if not child.is_file() or child.suffix not in YAML_SUFFIXES:
+        if not child.is_file() or child.suffix not in GATE_CORPUS_SUFFIXES:
             continue
         if any(part.startswith(".") for part in child.relative_to(src).parts):
             continue
@@ -351,24 +353,44 @@ def _dir_yaml_files(src: Path) -> list[Path]:
     return found
 
 
+def _safe_rel_parts(original_rel: str) -> tuple[str, ...]:
+    parts: list[str] = []
+    for part in Path(original_rel).parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            parts.append("_up_")
+            continue
+        parts.append(part)
+    return tuple(parts) if parts else ("_input_",)
+
+
+def _snapshot_rel_for(index: int, original_rel: str) -> str:
+    return "/".join((f"{index:04d}",) + _safe_rel_parts(original_rel))
+
+
 def _freeze_inputs(
     rel_paths: Sequence[str], root: Path, snapshot_root: Path
 ) -> tuple[tuple[_Frozen, ...], str]:
     """Copy selected input bytes once. Later load/gates/payload read only this snapshot."""
     frozen: list[_Frozen] = []
     records: list[dict[str, str]] = []
+    snapshot_root = snapshot_root.resolve()
     for index, original_rel in enumerate(rel_paths):
         src = (root / original_rel).resolve()
-        token = f"{index:04d}"
+        snap_rel = _snapshot_rel_for(index, original_rel)
+        dest = snapshot_root.joinpath(*snap_rel.split("/"))
+        try:
+            dest.resolve().relative_to(snapshot_root)
+        except ValueError as exc:
+            raise OSError(f"snapshot path escaped the private snapshot: {original_rel}") from exc
         if src.is_dir():
-            snap_rel = f"{token}.dir"
-            dest_dir = snapshot_root / snap_rel
-            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest.mkdir(parents=True, exist_ok=True)
             children: list[tuple[str, str]] = []
-            for child in _dir_yaml_files(src):
+            for child in _dir_gate_files(src):
                 inner = child.relative_to(src).as_posix()
                 data = child.read_bytes()
-                _write_frozen(dest_dir / inner, data)
+                _write_frozen(dest.joinpath(*inner.split("/")), data)
                 digest = hashlib.sha256(data).hexdigest()
                 children.append((inner, digest))
                 records.append(
@@ -377,14 +399,12 @@ def _freeze_inputs(
             records.append({"kind": "directory", "path": original_rel})
             frozen.append(_Frozen(original_rel, snap_rel, "dir", None, tuple(children)))
         elif src.is_file():
-            snap_rel = token + (src.suffix if src.suffix else "")
             data = src.read_bytes()
-            _write_frozen(snapshot_root / snap_rel, data)
+            _write_frozen(dest, data)
             digest = hashlib.sha256(data).hexdigest()
             records.append({"path": original_rel, "sha256": digest})
             frozen.append(_Frozen(original_rel, snap_rel, "file", digest))
         else:
-            snap_rel = token + ".missing"
             records.append({"kind": "missing", "path": original_rel})
             frozen.append(_Frozen(original_rel, snap_rel, "missing"))
     records.sort(key=lambda item: item["path"])

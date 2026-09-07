@@ -131,8 +131,12 @@ deterministic gate verdict and is not invoked by the pull-request workflow.
 
 It freezes the selected input bytes first, then runs the existing `load`,
 `schema`, and `redaction` gates against that snapshot, and only then may call
-a configured xAI Chat Completions endpoint. The advisory artifact binds the
-snapshot bytes as well as the selected UUID/`content_hash` set. `XAI_API_KEY`
+a configured xAI Chat Completions endpoint. The snapshot mapping keeps the
+physical `corpus/verified` and `corpus/unverified` path context the schema
+gate already uses, and directory freeze includes the YAML/YML/JSON files those
+CLIs discover; provider entry discovery remains the bot's YAML set. The
+advisory artifact binds the snapshot bytes as well as the selected
+UUID/`content_hash` set. `XAI_API_KEY`
 and `XAI_MODEL` must be explicitly present in the environment; this repository
 does not ship them. Missing configuration, a failed mandatory gate, no eligible
 input, or a provider/parse failure is `unavailable` / `error`, never a
