@@ -134,7 +134,9 @@ It freezes the selected input bytes first, then runs the existing `load`,
 a configured xAI Chat Completions endpoint. The snapshot mapping keeps the
 physical `corpus/verified` and `corpus/unverified` path context the schema
 gate already uses, and directory freeze includes the YAML/YML/JSON files those
-CLIs discover; provider entry discovery remains the bot's YAML set. The
+CLIs discover; provider entry discovery remains the bot's YAML set. Selected
+symbolic links and visible linked members are refused before that mapping;
+ordinary files reached only through a platform parent alias are not. The
 advisory artifact binds the snapshot bytes as well as the selected
 UUID/`content_hash` set. `XAI_API_KEY`
 and `XAI_MODEL` must be explicitly present in the environment; this repository

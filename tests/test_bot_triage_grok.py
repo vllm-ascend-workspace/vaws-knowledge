@@ -778,5 +778,101 @@ class PathContextSemantics(unittest.TestCase):
         self.assertFalse(artifact["provider"]["called"])
 
 
+def _write_valid_yaml(path: pathlib.Path, doc: Optional[dict[str, Any]] = None) -> pathlib.Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(doc or _template(), sort_keys=False), encoding="utf-8")
+    return path
+
+
+class UnsupportedSymlinks(unittest.TestCase):
+    def _assert_symlink_refused(self, artifact: dict[str, Any], transport: FakeTransport) -> None:
+        self.assertEqual([], transport.calls)
+        self.assertEqual("error", artifact["status"], artifact.get("reason"))
+        self.assertFalse(artifact["provider"]["called"])
+        self.assertNotIn("candidates", artifact)
+        self.assertIn("symbolic link", artifact["reason"])
+
+    def test_selected_file_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-triage-slink-") as tmp:
+            root = pathlib.Path(tmp)
+            real = _write_valid_yaml(root / "real.yaml")
+            link = root / "link.yaml"
+            link.symlink_to(real)
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(link)], transport=transport)
+        self._assert_symlink_refused(artifact, transport)
+
+    def test_selected_directory_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-triage-slink-") as tmp:
+            root = pathlib.Path(tmp)
+            real_dir = root / "realdir"
+            _write_valid_yaml(real_dir / "entry.yaml")
+            link = root / "linkdir"
+            link.symlink_to(real_dir)
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(link)], transport=transport)
+        self._assert_symlink_refused(artifact, transport)
+
+    def test_visible_file_symlink_member_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-triage-slink-") as tmp:
+            root = pathlib.Path(tmp)
+            verified = _write_valid_yaml(
+                root / "corpus" / "verified" / "entry.yaml",
+                _layer_doc("unverified"),
+            )
+            selected = root / "corpus" / "unverified"
+            selected.mkdir(parents=True)
+            (selected / "entry.yaml").symlink_to(verified)
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(selected)], transport=transport)
+        self._assert_symlink_refused(artifact, transport)
+
+    def test_visible_directory_symlink_member_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-triage-slink-") as tmp:
+            root = pathlib.Path(tmp)
+            selected = root / "selected"
+            other = root / "other"
+            _write_valid_yaml(selected / "ok.yaml")
+            _write_valid_yaml(other / "entry.yaml")
+            (selected / "nested").symlink_to(other)
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(selected)], transport=transport)
+        self._assert_symlink_refused(artifact, transport)
+
+    def test_hidden_symlink_member_is_ignored(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-triage-slink-") as tmp:
+            root = pathlib.Path(tmp)
+            selected = root / "selected"
+            _write_valid_yaml(selected / "good.yaml")
+            target = _write_valid_yaml(root / "outside" / "target.yaml")
+            (selected / ".hidden.yaml").symlink_to(target)
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(selected)], transport=transport)
+        _require_provider_path(artifact, transport)
+        self.assertEqual("success", artifact["status"], artifact.get("input_gates"))
+        self.assertEqual(1, len(transport.calls))
+
+    def test_ordinary_file_through_tmp_parent_alias_is_allowed(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-advisory-alias-", dir="/tmp") as tmp:
+            path = _write_valid_yaml(pathlib.Path(tmp) / "entry.yaml")
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(path)], transport=transport)
+        _require_provider_path(artifact, transport)
+        self.assertEqual("success", artifact["status"], artifact.get("input_gates"))
+        self.assertEqual(1, len(transport.calls))
+        self.assertFalse(path.is_symlink())
+
+    def test_ordinary_directory_through_tmp_parent_alias_is_allowed(self):
+        with tempfile.TemporaryDirectory(prefix="vaws-advisory-alias-", dir="/tmp") as tmp:
+            root = pathlib.Path(tmp)
+            _write_valid_yaml(root / "entry.yaml")
+            transport = FakeTransport(response=_load_response("empty-candidates.json"))
+            artifact = _run([str(root)], transport=transport)
+        _require_provider_path(artifact, transport)
+        self.assertEqual("success", artifact["status"], artifact.get("input_gates"))
+        self.assertEqual(1, len(transport.calls))
+        self.assertFalse(root.is_symlink())
+
+
 if __name__ == "__main__":
     unittest.main()

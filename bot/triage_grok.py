@@ -145,6 +145,14 @@ class TransportFailure(Exception):
     """Provider HTTP failed without a usable status/body pair."""
 
 
+class UnsupportedSymlink(Exception):
+    """A selected path or visible directory member is a symbolic link."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        super().__init__(f"unsupported symbolic link: {path}")
+
+
 @dataclass(frozen=True)
 class HttpRequest:
     method: str
@@ -341,14 +349,55 @@ def _write_frozen(dest: Path, data: bytes) -> None:
     dest.write_bytes(data)
 
 
+def _is_hidden_member(src: Path, path: Path) -> bool:
+    return any(part.startswith(".") for part in path.relative_to(src).parts)
+
+
+def _visible_symlink_members(src: Path) -> list[str]:
+    """Visible symlink members of a selected directory. Hidden descendants are skipped."""
+    found: list[str] = []
+    pending = [src]
+    while pending:
+        current = pending.pop()
+        try:
+            listing = os.scandir(current)
+        except OSError:
+            continue
+        with listing:
+            for entry in listing:
+                child = Path(entry.path)
+                if _is_hidden_member(src, child):
+                    continue
+                if entry.is_symlink():
+                    found.append(child.relative_to(src).as_posix())
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(child)
+    found.sort()
+    return found
+
+
 def _dir_gate_files(src: Path) -> list[Path]:
     found: list[Path] = []
-    for child in src.rglob("*"):
-        if not child.is_file() or child.suffix not in GATE_CORPUS_SUFFIXES:
+    pending = [src]
+    while pending:
+        current = pending.pop()
+        try:
+            listing = os.scandir(current)
+        except OSError:
             continue
-        if any(part.startswith(".") for part in child.relative_to(src).parts):
-            continue
-        found.append(child)
+        with listing:
+            for entry in listing:
+                child = Path(entry.path)
+                if _is_hidden_member(src, child):
+                    continue
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(child)
+                    continue
+                if entry.is_file(follow_symlinks=False) and child.suffix in GATE_CORPUS_SUFFIXES:
+                    found.append(child)
     found.sort(key=lambda path: path.as_posix())
     return found
 
@@ -377,7 +426,9 @@ def _freeze_inputs(
     records: list[dict[str, str]] = []
     snapshot_root = snapshot_root.resolve()
     for index, original_rel in enumerate(rel_paths):
-        src = (root / original_rel).resolve()
+        src = root / original_rel
+        if src.is_symlink():
+            raise UnsupportedSymlink(original_rel)
         snap_rel = _snapshot_rel_for(index, original_rel)
         dest = snapshot_root.joinpath(*snap_rel.split("/"))
         try:
@@ -385,6 +436,9 @@ def _freeze_inputs(
         except ValueError as exc:
             raise OSError(f"snapshot path escaped the private snapshot: {original_rel}") from exc
         if src.is_dir():
+            linked = _visible_symlink_members(src)
+            if linked:
+                raise UnsupportedSymlink(original_rel.rstrip("/") + "/" + linked[0])
             dest.mkdir(parents=True, exist_ok=True)
             children: list[tuple[str, str]] = []
             for child in _dir_gate_files(src):
@@ -729,13 +783,46 @@ def run_advisory(
         "timeout_seconds": timeout_s,
     }
     root = root or repo_root()
-    rel_paths = [relpath(root / p if not Path(p).is_absolute() else Path(p), root) for p in paths]
     env = environ if environ is not None else os.environ
     secrets = [value for value in (_env_value(env, ENV_API_KEY),) if value]
+    selected_leaves: list[Path] = []
+    for raw in paths:
+        path = Path(raw)
+        leaf = path if path.is_absolute() else (root / path)
+        if leaf.is_symlink():
+            shown = os.path.relpath(os.path.abspath(str(leaf)), os.path.abspath(str(root))).replace(
+                os.sep, "/"
+            )
+            return _artifact(
+                status="error",
+                paths=[shown],
+                repo=repo,
+                ref=ref,
+                gates=[],
+                selected=(),
+                omitted=(),
+                reason=f"unsupported symbolic link: {shown}",
+                bounds=bounds,
+            )
+        selected_leaves.append(leaf)
+    rel_paths = [relpath(leaf, root) for leaf in selected_leaves]
 
     with tempfile.TemporaryDirectory(prefix="vaws-advisory-snap-") as tmp:
         snapshot_root = Path(tmp)
-        frozen, snapshot_hash = _freeze_inputs(rel_paths, root, snapshot_root)
+        try:
+            frozen, snapshot_hash = _freeze_inputs(rel_paths, root, snapshot_root)
+        except UnsupportedSymlink as exc:
+            return _artifact(
+                status="error",
+                paths=rel_paths,
+                repo=repo,
+                ref=ref,
+                gates=[],
+                selected=(),
+                omitted=(),
+                reason=str(exc),
+                bounds=bounds,
+            )
         snapshot_rels = [item.snapshot_rel for item in frozen]
         snapshot_abs = [str(snapshot_root / item.snapshot_rel) for item in frozen]
         loaded = _remap_loaded(load_paths(snapshot_rels, snapshot_root), frozen)
