@@ -1,0 +1,493 @@
+# Test fixture for server/ tests. NOT knowledge.
+#
+# Every SoC, version, driver, handle and evidence reference below is synthetic
+# and must never be cited. The file exists so the retrieval tests have stable
+# coordinates to match against. It stands in for this repo's corpus/verified/,
+# i.e. the `shared` layer.
+schema_version: 2
+kind: known-failure-signatures
+layer: verified
+updated_at: '2026-09-07'
+entries:
+
+# Applies to the reader coordinate used in the tests: bounded on soc/topology,
+# independence claimed (with a basis) on most other dimensions.
+- uuid: aa11bb22-1111-4aaa-8bbb-cc33dd44ee55
+  slug: example-shared-hostname-resolution-soc-a
+  content_hash: sha256:fd5de783be88905fe364425c1903222305cc6914df87555f29005bbcd7c035a4
+  status: verified
+  confidence: high
+  scope:
+    soc:
+      values:
+      - ExampleSoC-A
+    cann:
+      any: true
+      basis: Failure occurs before CANN initialises, so no CANN code path is involved.
+    driver:
+      any: true
+      basis: No driver interaction on this path; the process fails before device open.
+    python_abi:
+      any: true
+      basis: The defect is in container filesystem content, not in a compiled extension.
+    torch:
+      range:
+        min: 2.5.0
+        max: null
+    torch_npu:
+      any: true
+      basis: The failing call is not overridden by torch_npu on this path.
+    vllm:
+      range:
+        min: 0.9.0
+        max: null
+    vllm_ascend:
+      any: true
+      basis: Triggered by the container image rather than by plugin code.
+    model:
+      any: true
+      basis: Occurs during distributed init, before any weights are read.
+    topology:
+      values:
+      - tp4
+      - tp8
+    execution_mode:
+      any: true
+      basis: Failure precedes graph capture and eager execution alike.
+    component:
+      values:
+      - service-bootstrap
+  provenance:
+    contributor: example-contributor
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-08-01'
+    redaction_profile: r1
+  verification:
+    evidence:
+    - type: run_manifest
+      ref: example-run-0001
+    verified_by:
+    - example-reviewer
+    verified_against:
+      soc: ExampleSoC-A
+      cann: 0.0.EXAMPLE
+      driver: 0.0.example
+      python_abi: cpython-311-example
+      torch: 2.5.1
+      torch_npu: 2.5.1.example
+      vllm: 0.9.1
+      vllm_ascend: 0.0.0+example
+      model: example-model
+      topology: tp8
+      execution_mode: eager
+    last_verified_at: '2026-09-01'
+  lifecycle:
+    first_seen: '2026-08-01'
+    updated_at: '2026-08-01'
+    supersedes:
+    - ff6677aa-6666-4fff-9fff-112233445566
+    superseded_by: null
+    resolved_by: null
+  rule:
+    summary: Example hostname resolution failure during distributed init on SoC A
+    symptom: Service exits during distributed init with an example hostname resolution error.
+    root_cause: The example container image does not map its own hostname, so the store
+      lookup at init has nothing to resolve.
+    resolution: Map the container hostname in the image bootstrap before starting the service.
+    avoidance: Check hostname resolution before tuning transport environment variables.
+    fingerprints:
+    - example hostname resolution failed
+    - example makedeviceforhostname
+
+# Same symptom family, different SoC. A reader on SoC A must not get this back
+# looking as though it applied: this is the exact confusion the coordinate
+# exists to prevent.
+- uuid: bb22cc33-2222-4bbb-9ccc-dd44ee55ff66
+  slug: example-shared-hostname-resolution-soc-b
+  content_hash: sha256:283b465ddf4feaf8285d91d5f32d8c2c8ff9a8f2045abaa4a6226fba86fd5a7e
+  status: verified
+  confidence: medium
+  scope:
+    soc:
+      values:
+      - ExampleSoC-B
+    cann:
+      values:
+      - 0.0.EXAMPLE-B
+    driver:
+      any: true
+      basis: Observed with two example driver revisions on the same SoC generation.
+    python_abi:
+      any: true
+      basis: No compiled extension participates in the failing path.
+    torch:
+      range:
+        min: 2.5.0
+        max: null
+    torch_npu:
+      any: true
+      basis: The failing call is not overridden by torch_npu on this path.
+    vllm:
+      range:
+        min: 0.9.0
+        max: null
+    vllm_ascend:
+      any: true
+      basis: Triggered by the container image rather than by plugin code.
+    model:
+      any: true
+      basis: Occurs during distributed init, before any weights are read.
+    topology:
+      values:
+      - tp8
+    execution_mode:
+      any: true
+      basis: Failure precedes graph capture and eager execution alike.
+    component:
+      values:
+      - service-bootstrap
+  provenance:
+    contributor: example-contributor-b
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-08-02'
+    redaction_profile: r1
+  verification:
+    evidence:
+    - type: pull_request
+      ref: example-org/example-repo#1
+    verified_by:
+    - example-reviewer-b
+    verified_against:
+      soc: ExampleSoC-B
+      cann: 0.0.EXAMPLE-B
+      driver: 0.0.example-b
+      torch: 2.5.1
+      torch_npu: 2.5.1.example
+      vllm: 0.9.1
+      vllm_ascend: 0.0.0+example
+      topology: tp8
+      execution_mode: eager
+    last_verified_at: '2026-09-02'
+  lifecycle:
+    first_seen: '2026-08-02'
+    updated_at: '2026-08-02'
+    superseded_by: null
+    resolved_by: null
+  rule:
+    summary: Example hostname resolution failure during distributed init on SoC B
+    symptom: Service exits during distributed init with an example hostname resolution error.
+    root_cause: The example SoC B image ships a different bootstrap that also omits the
+      hostname mapping.
+    resolution: Map the container hostname in the SoC B image bootstrap.
+    fingerprints:
+    - example hostname resolution failed
+    - example hostname resolution failed on soc b
+
+# Verified once, not re-verified inside the support window. Returned by
+# default, labelled.
+- uuid: cc33dd44-3333-4ccc-accc-ee55ff667788
+  slug: example-shared-aclgraph-capture-timeout
+  content_hash: sha256:b903c1b611342c0dfc2e61cbf5884d14ef239d35ef40a4c3ae8280a77a1c6020
+  status: stale
+  confidence: medium
+  scope:
+    soc:
+      values:
+      - ExampleSoC-A
+    cann:
+      any: true
+      basis: Reproduced under two example CANN builds with identical behaviour.
+    driver:
+      any: true
+      basis: No driver-specific behaviour was observed across example revisions.
+    python_abi:
+      any: true
+      basis: The failing path is pure Python orchestration.
+    torch:
+      range:
+        min: 2.5.0
+        max: null
+    torch_npu:
+      any: true
+      basis: Timing behaviour did not change across example torch_npu builds.
+    vllm:
+      range:
+        min: 0.9.0
+        max: null
+    vllm_ascend:
+      values:
+      - 0.0.0+example
+    model:
+      any: true
+      basis: Capture timing is dominated by graph size, not by weights.
+    topology:
+      values:
+      - tp8
+    execution_mode:
+      values:
+      - aclgraph
+    component:
+      values:
+      - graph-capture
+  provenance:
+    contributor: example-contributor
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-01-05'
+    redaction_profile: r1
+  verification:
+    evidence:
+    - type: run_manifest
+      ref: example-run-0003
+    verified_by:
+    - example-reviewer
+    verified_against:
+      soc: ExampleSoC-A
+      cann: 0.0.EXAMPLE
+      driver: 0.0.example
+      torch: 2.5.1
+      torch_npu: 2.5.1.example
+      vllm: 0.9.0
+      vllm_ascend: 0.0.0+example
+      topology: tp8
+      execution_mode: aclgraph
+    last_verified_at: '2026-01-05'
+  lifecycle:
+    first_seen: '2026-01-05'
+    updated_at: '2026-01-05'
+    superseded_by: null
+    resolved_by: null
+  rule:
+    summary: Example graph capture exceeds the startup timeout on a large example model
+    symptom: Startup aborts while capturing example graphs; the log ends inside capture.
+    root_cause: Capture cost grows with the number of captured shapes and exceeds the
+      example startup timeout.
+    resolution: Reduce the captured shape set or raise the example startup timeout.
+    fingerprints:
+    - example aclgraph capture timeout
+
+# Fixed upstream. docs/lifecycle.md keeps it, with the fix reference.
+- uuid: dd44ee55-4444-4ddd-bddd-ff6677889900
+  slug: example-shared-collective-connect-timeout
+  content_hash: sha256:1484d2889227e2a92e91baffcbbf64b4fc9abe9d8cf3c451031425421bb9dfe3
+  status: resolved
+  confidence: high
+  scope:
+    soc:
+      any: true
+      basis: The defect was in host-side rendezvous bookkeeping, not in device code.
+    cann:
+      any: true
+      basis: Rendezvous happens before collective libraries are loaded.
+    driver:
+      any: true
+      basis: No driver interaction on the failing path.
+    python_abi:
+      any: true
+      basis: The failing path contains no compiled extension.
+    torch:
+      range:
+        min: 2.5.0
+        max: null
+    torch_npu:
+      any: true
+      basis: The bug was in plugin-side bookkeeping, not in torch_npu.
+    vllm:
+      range:
+        min: 0.9.0
+        max: null
+    vllm_ascend:
+      range:
+        min: 0.0.0
+        max: 0.0.1
+    model:
+      any: true
+      basis: Occurs during startup rendezvous, before weights load.
+    topology:
+      values:
+      - tp8
+      - tp16
+    execution_mode:
+      any: true
+      basis: Rendezvous precedes both eager execution and graph capture.
+    component:
+      values:
+      - collective-bootstrap
+  provenance:
+    contributor: example-contributor
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-05-10'
+    redaction_profile: r1
+  verification:
+    evidence:
+    - type: issue
+      ref: example-org/example-repo#42
+    verified_by:
+    - example-reviewer
+    - example-reviewer-b
+    verified_against:
+      soc: ExampleSoC-A
+      cann: 0.0.EXAMPLE
+      driver: 0.0.example
+      torch: 2.5.1
+      torch_npu: 2.5.1.example
+      vllm: 0.9.0
+      vllm_ascend: 0.0.0+example
+      topology: tp8
+      execution_mode: eager
+    last_verified_at: '2026-05-10'
+  lifecycle:
+    first_seen: '2026-05-10'
+    updated_at: '2026-06-01'
+    superseded_by: null
+    resolved_by:
+      type: pull_request
+      ref: example-org/example-repo#77
+  rule:
+    summary: Example rendezvous times out when one rank registers late
+    symptom: Startup hangs and then aborts with an example collective connect timeout.
+    root_cause: The example rendezvous bookkeeping dropped a late registration instead
+      of retrying it.
+    resolution: Upgrade past the fix reference recorded in lifecycle.resolved_by.
+    fingerprints:
+    - example collective connect timeout
+
+# Wrong diagnosis, kept for the uuid. Never returned by default.
+- uuid: ee55ff66-5555-4eee-8eee-001122334455
+  slug: example-shared-deprecated-restart-advice
+  content_hash: sha256:246ddb4897a1e973600f88e4b2b55684987b7993ccd8bcc902183f62498efd5b
+  status: deprecated
+  confidence: low
+  scope:
+    soc:
+      values:
+      - ExampleSoC-A
+    cann:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    driver:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    python_abi:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    torch:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    torch_npu:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    vllm:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    vllm_ascend:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    model:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    topology:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    execution_mode:
+      any: true
+      basis: The original claim never examined this dimension at all.
+    component:
+      values:
+      - service-bootstrap
+  provenance:
+    contributor: example-contributor
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-02-01'
+    redaction_profile: r1
+  lifecycle:
+    first_seen: '2026-02-01'
+    updated_at: '2026-03-01'
+    superseded_by: aa11bb22-1111-4aaa-8bbb-cc33dd44ee55
+    resolved_by: null
+  rule:
+    summary: Example claim that restarting the service clears the failure
+    symptom: Service exits during distributed init with an example hostname resolution error.
+    root_cause: Not established; the entry recorded a workaround rather than a mechanism.
+    resolution: Superseded. Use the entry named in lifecycle.superseded_by.
+    fingerprints:
+    - example restart clears the failure
+
+# Superseded by the first entry. Stays resolvable, drops out of default results.
+- uuid: ff6677aa-6666-4fff-9fff-112233445566
+  slug: example-shared-hostname-resolution-first-draft
+  content_hash: sha256:fc1978716d4f919527685b25489a5a0ca3c18c2971dd922c2f4325b48b60aad1
+  status: verified
+  confidence: medium
+  scope:
+    soc:
+      values:
+      - ExampleSoC-A
+    cann:
+      any: true
+      basis: Failure occurs before CANN initialises, so no CANN code path is involved.
+    driver:
+      any: true
+      basis: No driver interaction on this path; the process fails before device open.
+    python_abi:
+      any: true
+      basis: The defect is in container filesystem content, not in a compiled extension.
+    torch:
+      range:
+        min: 2.5.0
+        max: null
+    torch_npu:
+      any: true
+      basis: The failing call is not overridden by torch_npu on this path.
+    vllm:
+      range:
+        min: 0.9.0
+        max: null
+    vllm_ascend:
+      any: true
+      basis: Triggered by the container image rather than by plugin code.
+    model:
+      any: true
+      basis: Occurs during distributed init, before any weights are read.
+    topology:
+      values:
+      - tp8
+    execution_mode:
+      any: true
+      basis: Failure precedes graph capture and eager execution alike.
+    component:
+      values:
+      - service-bootstrap
+  provenance:
+    contributor: example-contributor
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-07-01'
+    redaction_profile: r1
+  verification:
+    evidence:
+    - type: commit
+      ref: '00000000000000000000000000000000000000ex'
+    verified_by:
+    - example-reviewer
+    verified_against:
+      soc: ExampleSoC-A
+      cann: 0.0.EXAMPLE
+      driver: 0.0.example
+      torch: 2.5.1
+      torch_npu: 2.5.1.example
+      vllm: 0.9.0
+      vllm_ascend: 0.0.0+example
+      topology: tp8
+      execution_mode: eager
+    last_verified_at: '2026-07-01'
+  lifecycle:
+    first_seen: '2026-07-01'
+    updated_at: '2026-07-01'
+    superseded_by: aa11bb22-1111-4aaa-8bbb-cc33dd44ee55
+    resolved_by: null
+  rule:
+    summary: Example first draft of the hostname resolution failure
+    symptom: Service exits during distributed init with an example hostname resolution error.
+    root_cause: Partially established; the successor entry states the mechanism.
+    resolution: Use the successor entry named in lifecycle.superseded_by.
+    fingerprints:
+    - example hostname resolution failed
