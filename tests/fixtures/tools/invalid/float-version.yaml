@@ -1,0 +1,46 @@
+# Test fixture for tools/ — synthetic, not knowledge. See tests/fixtures/tools/README.md.
+#
+# The only defect: `min: 2.5` is unquoted, so YAML parses it as a float.
+# This file is hand-written (not generated) because the defect is in the YAML
+# text, not in the parsed tree.
+schema_version: 2
+kind: known-failure-signatures
+layer: unverified
+updated_at: '2026-09-07'
+entries:
+- uuid: e738daa0-59f6-4277-aadb-c6e7f8091a8b
+  slug: fixture-float-version
+  content_hash: sha256:0119745a5b7c6c7829abffc494de15884ec1f1be3f9ce01af5ad336cff61acb0
+  status: unverified
+  confidence: low
+  scope:
+    soc: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    cann: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    driver: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    python_abi: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    torch:
+      range:
+        min: 2.5
+        max: null
+    torch_npu: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    vllm: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    vllm_ascend: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    model: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    topology:
+      values: [tp2]
+    execution_mode: {any: true, basis: Synthetic fixture; independence is asserted for the test only.}
+    component:
+      values: [service-bootstrap]
+  provenance:
+    contributor: anonymous
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-09-07'
+    redaction_profile: r1
+  lifecycle:
+    first_seen: '2026-09-07'
+    updated_at: '2026-09-07'
+  rule:
+    summary: Fixture entry whose torch lower bound was written as an unquoted number
+    symptom: Synthetic symptom text.
+    root_cause: Synthetic root cause text.
+    resolution: Synthetic resolution text.

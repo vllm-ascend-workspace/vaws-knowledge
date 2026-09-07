@@ -1,0 +1,4 @@
+# Run-time redaction allowlist used by tests/test_tools_redact.py.
+# Exact values are case-insensitive; 're:' entries are full-match regexes.
+- fixture-allowed-token
+- 're:7[.]0[.]0[.]\d{1,3}'
