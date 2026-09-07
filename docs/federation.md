@@ -60,15 +60,50 @@ canonicalization is specified exactly rather than left to an implementation:
 1. Take only the entry's `scope` and `rule` sub-objects. Nothing else — not
    `status`, not dates, not provenance. Re-verifying or re-reviewing an entry
    must not change its revision.
-2. In `rule.fingerprints`, lowercase every item, strip leading/trailing
-   whitespace, collapse internal whitespace runs to a single space, drop
-   duplicates and empties, then sort.
+2. In `rule.fingerprints`: lowercase **ASCII letters only** (`A`–`Z` → `a`–`z`,
+   nothing else), strip leading and trailing ASCII whitespace, collapse internal
+   runs of ASCII whitespace to one `U+0020`, drop duplicates and empties, then
+   sort **byte-wise ascending over the UTF-8 encoding**.
 3. In every other string **value**, recursively at any depth — including the
-   strings nested inside `scope` constraints — strip leading/trailing whitespace
-   and normalize line endings to `LF`. Do not otherwise reflow prose. Mapping
-   **keys** are not normalized: they are fixed by the schema, which sets
-   `additionalProperties: false` everywhere, so there is nothing to normalize
-   and an implementation must not touch them.
+   strings nested inside `scope` constraints — normalize line endings to `LF`,
+   strip trailing ASCII whitespace from every line, then strip leading and
+   trailing ASCII whitespace from the whole value. Do not otherwise reflow
+   prose. Mapping **keys** are not normalized: they are fixed by the schema,
+   which sets `additionalProperties: false` everywhere, so there is nothing to
+   normalize and an implementation must not touch them.
+
+Three definitions that steps 2 and 3 depend on, spelled out because they are
+where implementations in different languages silently disagree:
+
+- **ASCII whitespace** means exactly `U+0009`, `U+000A`, `U+000B`, `U+000C`,
+  `U+000D`, `U+0020`. Nothing else is whitespace for canonicalization purposes.
+  A non-breaking space or an ideographic space inside a value is *content* and
+  is preserved. Python implementations must therefore not use a bare
+  `str.strip()` or `str.split()`, both of which also consume `U+00A0` and
+  `U+3000`; an ASCII-only implementation in another language would not, and the
+  two would hash differently.
+- **Lowercasing is ASCII-only.** Full Unicode lowercasing needs a Unicode
+  database, and implementations pinned to different Unicode versions produce
+  different results. Worse, it is not even length-preserving: Python renders
+  `İ` (`U+0130`) as `i` followed by a combining dot above, so a Python
+  implementation and an ASCII-only one disagree on the byte length of the same
+  fingerprint. Fingerprints are observable log signatures and are essentially
+  always ASCII, so restricting the rule costs nothing real.
+- **No Unicode normalization is applied.** Not NFC, not NFD, none. Requiring a
+  normalization form would require every implementation to agree on a Unicode
+  version; applying none cannot drift, because there is nothing to get wrong.
+  The consequence is accepted deliberately: two visually identical strings in
+  different normalization forms are different byte sequences and hash
+  differently. That is the correct behaviour for a revision identifier, which is
+  a statement about bytes; semantic duplicates are the job of the reviewed
+  duplicate-detection step, not of the hash. The conformance kit found this the
+  hard way, when one of its own vectors used a Cyrillic character that
+  decomposed under NFD.
+
+Byte-wise sorting in step 2 is specified in place of locale collation for the
+same reason: a locale-dependent sort is divergent by definition. For well-formed
+UTF-8 it coincides with code-point order, so either phrasing is implementable,
+but byte-wise leaves nothing to interpret.
 4. Serialize `{"rule": …, "scope": …}` as JSON with `sort_keys=True`,
    `ensure_ascii=False`, and separators `(",", ":")`.
 5. `content_hash` = `"sha256:" + sha256(utf8(that string)).hexdigest()`.

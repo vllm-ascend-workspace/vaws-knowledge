@@ -221,6 +221,61 @@ for explicitly, and gives up reproducibility for that run.
 `*.yaml` under a zone directory so a large `kind` can be split across files. The
 `layer` field inside each document must still agree with its directory.
 
+### 20. Canonicalization left five micro-rules unpinned
+
+Reported by the conformance kit, which deliberately wrote no vectors for them
+rather than letting the suite become the specification. All five are places where
+implementations in different languages diverge on characters nobody looks at.
+
+**Resolutions, all now in `docs/federation.md`:**
+
+- **Whitespace is exactly the six ASCII characters.** A non-breaking space or an
+  ideographic space inside a value is content and is preserved. This one is a
+  live trap rather than a hypothetical: Python's bare `str.strip()` and
+  `str.split()` also consume `U+00A0` and `U+3000`, so a Python implementation
+  and an ASCII-only implementation in another language hash the same input
+  differently.
+- **Lowercasing is ASCII-only.** Full Unicode lowercasing needs a Unicode
+  database, so implementations on different Unicode versions differ — and it is
+  not length-preserving: Python renders `İ` as `i` plus a combining dot above,
+  so two implementations disagree on the byte length of the same fingerprint.
+- **No Unicode normalization at all.** Requiring a form would require agreement
+  on a Unicode version; requiring none cannot drift. Two visually identical
+  strings in different forms therefore hash differently, which is correct for a
+  revision identifier — it is a statement about bytes. Semantic duplicates are
+  the reviewed duplicate-detection step's job.
+- **Fingerprints sort byte-wise over UTF-8**, not by locale collation, which is
+  divergent by definition.
+- **Trailing ASCII whitespace is stripped from every line** of a multi-line
+  value, in addition to the whole-value strip. Trailing whitespace is invisible
+  and editors add it, so it must not change a revision. Leading whitespace on a
+  line is meaningful — indentation inside a resolution snippet — and is kept.
+
+Pinning these leaves the anchor hash in `examples/valid-entry.yaml` unchanged,
+which was checked rather than assumed: the fixture's payload contains no
+non-ASCII character at all, so there was nothing for the loose and strict
+readings to disagree about. Had the anchor moved, every implementation would have
+had to re-derive it.
+
+### 21. Do reserved documentation IP ranges count as "IP addresses"?
+
+`CONTRIBUTING.md` banned IP addresses unconditionally. The screening tool
+deliberately exempts the RFC 5737 documentation ranges, on the sound reasoning
+that a non-routable address identifies nobody — and fixtures that prove the
+screening works need a rejectable value to feed it.
+
+**Resolution:** the exemption is right, so the prose was wrong. `CONTRIBUTING.md`
+now states it explicitly, limited to the documentation ranges,
+`2001:db8::/32`, `example.invalid` / `example.com`, and loopback. Other reserved
+ranges are **not** exempt — `198.18.0.0/15` benchmarking space does turn up in
+real internal networks.
+
+The general point matters more than the specific ranges: a rule that disagrees
+with its own enforcement is worse than either alternative, because readers follow
+the prose and tools follow the code, and the gap between them is where a real
+address eventually slips through. This should not have been settled by whichever
+gate shipped first.
+
 ---
 
 ## Deferred to one batched change

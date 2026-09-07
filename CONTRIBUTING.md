@@ -13,6 +13,20 @@ leaves your fork it must pass the source-side redaction gate
 - unreleased hardware identifiers, driver builds, or model names
 - customer, project, or internal codenames
 
+**One exemption, and only one.** Addresses from the reserved documentation
+ranges are permitted: `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`,
+`2001:db8::/32`, and the `example.invalid` / `example.com` domains. They are not
+routable and identify nobody, so they leak nothing — and fixtures that exist to
+prove the screening *works* need a rejectable value to feed it. Loopback is
+likewise fine.
+
+This exemption is stated here because the screening tool already implements it,
+and a rule that disagrees with its own enforcement is worse than either
+alternative: readers follow the prose, tools follow the code, and the gap is
+where a real address eventually slips through. Reserved ranges other than those
+listed — `198.18.0.0/15` benchmarking space, for instance — are **not** exempt,
+because they do appear in real internal networks.
+
 If a fact cannot be stated without one of these, it belongs in your repo's
 `project` layer, not here. That is a supported outcome, not a failure.
 
