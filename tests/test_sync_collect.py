@@ -665,7 +665,11 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
         verified["rule"] = dict(e["rule"], resolution=e["rule"]["resolution"] + " already on origin main")
         verified["content_hash"] = _common.content_hash(verified)
         remote_repo = self.tmp / "advance-main"
-        subprocess.run(["git", "clone", "--quiet", str(self.remote), str(remote_repo)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "clone", "--quiet", "--branch", "main", str(self.remote), str(remote_repo)],
+            check=True,
+            capture_output=True,
+        )
         dest = remote_repo / "corpus" / "verified" / "known-failure-signatures.yaml"
         doc = _common.load_yaml(dest)
         doc["entries"].append(verified)
