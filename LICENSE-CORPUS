@@ -1,0 +1,29 @@
+Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+Copyright (c) 2026 the vaws-knowledge contributors
+
+The knowledge corpus in this repository — `corpus/` and `examples/` — is
+licensed under the Creative Commons Attribution 4.0 International License.
+
+You are free to share and adapt this material for any purpose, including
+commercially, provided you give appropriate credit, link to the license, and
+indicate whether changes were made.
+
+Full legal code: https://creativecommons.org/licenses/by/4.0/legalcode
+Summary: https://creativecommons.org/licenses/by/4.0/
+
+Contributor terms
+-----------------
+
+By submitting an entry you confirm that:
+
+- you are free to publish the technical facts it contains, and
+- it contains no confidential, personal, or otherwise restricted information,
+  and
+- you license it to the public under CC BY 4.0.
+
+Each entry records its contributor in `provenance.contributor`, which is the
+attribution channel for this corpus. `anonymous` is accepted and waives
+attribution for that entry.
+
+Code in this repository is licensed separately under MIT. See LICENSE.
