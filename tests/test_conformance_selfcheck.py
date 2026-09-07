@@ -179,16 +179,26 @@ class SelfCheckCatchesTamperedVectors(unittest.TestCase):
         example.write_text(yaml.safe_dump(original, allow_unicode=True))
         self._assert_caught("no longer match examples/valid-entry.yaml", self._run(example))
 
-    def test_catches_a_vector_that_depends_on_unicode_normalization_form(self):
-        path = self._vector("non-ascii-content.yaml")
-        # A character whose NFD form differs (Cyrillic short i decomposes),
-        # which would make the expected hash depend on a normalization form
-        # docs/federation.md never names.
-        text = path.read_text(encoding="utf-8")
-        path.write_text(
-            text.replace("显存不足 示例指纹", "ускоренный режим"), encoding="utf-8"
+    def test_catches_an_nfc_composed_expected_payload_for_nfd_input(self):
+        import unicodedata
+
+        path = self._vector("no-unicode-normalization.yaml")
+        vector = yaml.safe_load(path.read_text(encoding="utf-8"))
+        nfc_payload = unicodedata.normalize("NFC", vector["expected_payload"])
+        self.assertNotEqual(
+            nfc_payload,
+            vector["expected_payload"],
+            "the no-unicode-normalization vector has no NFD sequence to pin",
         )
-        self._assert_caught("differs between NFC and NFD", self._run())
+        digest = hashlib.sha256(nfc_payload.encode("utf-8")).hexdigest()
+        text = path.read_text(encoding="utf-8")
+        head = text[: text.index("expected_payload:")]
+        path.write_text(
+            f"{head}expected_payload: |-\n  {nfc_payload}\n"
+            f"expected_content_hash: sha256:{digest}\n",
+            encoding="utf-8",
+        )
+        self._assert_caught("does not canonicalize to expected_payload", self._run())
 
     # -- gate vectors ------------------------------------------------------
 
@@ -298,6 +308,15 @@ class GateVectorsAgainstTheRealSchema(unittest.TestCase):
             problems = selfcheck.Problems(quiet=True)
             vectors = selfcheck.check_gate_vectors(problems)
             selfcheck.check_gate_vectors_against_schema(problems, vectors)
+        self.assertEqual([], problems.items)
+        self.assertEqual([], problems.notes, "the schema check did not actually run")
+
+    def test_every_hash_vector_entry_is_schema_valid(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            problems = selfcheck.Problems(quiet=True)
+            vectors = selfcheck.check_hash_vectors(problems)
+            selfcheck.check_hash_vectors_against_schema(problems, vectors)
         self.assertEqual([], problems.items)
         self.assertEqual([], problems.notes, "the schema check did not actually run")
 

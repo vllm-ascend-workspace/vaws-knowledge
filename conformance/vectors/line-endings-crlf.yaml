@@ -9,9 +9,10 @@
 # autocrlf, editors and review tooling rewrite, which would quietly turn this
 # vector into a copy of a plain LF vector.
 #
-# Every line here has non-whitespace at both ends, so this vector does not
-# depend on whether an implementation also strips per-line trailing whitespace -
-# the spec does not say, and the kit does not pin it.
+# Every line here has non-whitespace at both ends, so this vector pins CRLF
+# to LF without also being the per-line trailing-whitespace case. That case
+# is `line-trailing-ascii-whitespace` and
+# `nested-scope-line-trailing-whitespace`.
 #
 # Synthetic fixture content. Not knowledge. Do not cite.
 id: line-endings-crlf

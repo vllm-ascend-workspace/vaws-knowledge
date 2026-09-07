@@ -16,10 +16,13 @@ What it proves:
   * every invariance group agrees on one hash;
   * the anchor vector still matches examples/valid-entry.yaml and the hash
     recorded there, when that file is present;
-  * no vector depends on a question docs/federation.md leaves open: no
-    non-ASCII whitespace, no string whose NFC and NFD forms differ, no
-    fingerprint where lower() and casefold() disagree;
+  * the kit still refuses a vector whose recorded payload is not what
+    the reference produces, so an NFC-composed expected payload cannot
+    silently replace an NFD input;
   * a vector survives the runner's own wire format unchanged;
+  * every hash-vector entry is schema-valid against
+    schemas/knowledge-v2.schema.json, so a public-boundary fixture cannot
+    carry an invalid UUID or other structural defect;
   * every gate vector declares what is wrong with it, the declared bad value is
     really present, and it is drawn from a reserved documentation range rather
     than from anything real;
@@ -36,7 +39,6 @@ import json
 import pathlib
 import re
 import sys
-import unicodedata
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -126,20 +128,6 @@ def _load_yaml_module():
         )
         raise SystemExit(2) from None
     return yaml
-
-
-def _payload_strings(node, path="", in_fingerprints=False):
-    """Yield (path, string, in_fingerprints) for every string in a payload."""
-    if isinstance(node, dict):
-        for key, value in node.items():
-            yield from _payload_strings(
-                value, f"{path}.{key}", in_fingerprints=(key == "fingerprints")
-            )
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            yield from _payload_strings(value, f"{path}[{index}]", in_fingerprints)
-    elif isinstance(node, str):
-        yield path, node, in_fingerprints
 
 
 # --- canonicalization vectors ---------------------------------------------
@@ -254,32 +242,6 @@ def check_hash_vectors(problems: Problems) -> list:
             f"all-zero placeholder, got {stored!r}",
         )
 
-        # No vector may depend on a question the spec leaves open.
-        for spath, text, in_fingerprints in _payload_strings(vector["entry"]):
-            for char in text:
-                if char.isspace() and char not in reference.ASCII_WHITESPACE:
-                    problems.check(
-                        False,
-                        where,
-                        f"{spath} contains non-ASCII whitespace U+{ord(char):04X}; "
-                        "the spec does not define the whitespace class",
-                    )
-                    break
-            problems.check(
-                unicodedata.normalize("NFC", text) == text
-                and unicodedata.normalize("NFD", text) == text,
-                where,
-                f"{spath} differs between NFC and NFD; the spec does not "
-                "specify a normalization form, so no vector may depend on one",
-            )
-            if in_fingerprints:
-                problems.check(
-                    text.lower() == text.casefold(),
-                    where,
-                    f"{spath} is a fingerprint where lower() and casefold() "
-                    "disagree; the spec says only 'lowercase'",
-                )
-
         # A vector must survive the runner's wire format unchanged.
         for fmt, dumped in (
             ("entry-yaml", yaml.safe_load(yaml.safe_dump(vector["entry"], allow_unicode=True))),
@@ -317,6 +279,42 @@ def check_hash_vectors(problems: Problems) -> list:
         )
 
     return vectors
+
+
+def check_hash_vectors_against_schema(problems: Problems, vectors: list):
+    """Hash-vector entries must be schema-valid as public-boundary fixtures."""
+    try:
+        from jsonschema import Draft202012Validator
+    except ImportError:
+        problems.note(
+            "jsonschema is not installed, so hash vectors were not validated "
+            "against schemas/knowledge-v2.schema.json. Install it with: "
+            "python3 -m pip install jsonschema"
+        )
+        return
+    if not SCHEMA.is_file():
+        problems.note(
+            "schemas/knowledge-v2.schema.json is not present in this checkout, "
+            "so hash vectors were not validated against it"
+        )
+        return
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    validator = Draft202012Validator(
+        {
+            "$schema": schema.get("$schema"),
+            "$defs": schema.get("$defs", {}),
+            "$ref": "#/$defs/entry",
+        }
+    )
+    for vector in vectors:
+        where = f"vectors/{vector['id']}.yaml"
+        errors = list(validator.iter_errors(vector["entry"]))
+        detail = "; ".join(f"{list(e.path)}: {e.message}" for e in errors[:3])
+        problems.check(
+            not errors,
+            where,
+            f"the hash-vector entry must be schema-valid: {detail}",
+        )
 
 
 def check_anchor(problems: Problems, vectors: list):
@@ -547,6 +545,7 @@ def check_kit_independence(problems: Problems):
 def run(quiet: bool = False) -> Problems:
     problems = Problems(quiet=quiet)
     vectors = check_hash_vectors(problems)
+    check_hash_vectors_against_schema(problems, vectors)
     check_anchor(problems, vectors)
     gate_vectors = check_gate_vectors(problems)
     check_gate_vectors_against_schema(problems, gate_vectors)

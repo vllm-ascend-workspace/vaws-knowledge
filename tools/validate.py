@@ -303,6 +303,107 @@ def schema_problems(doc: Any, file: str, skip_paths: Iterable[tuple[Any, ...]] =
     return problems
 
 
+def _entry_validator(schema_path: Path | None = None):
+    """Validator for one entry, still resolving $defs from the real schema."""
+    jsonschema = require_jsonschema()
+    key = "entry:" + str(schema_path or SCHEMA_PATH)
+    if key not in _validator_cache:
+        schema = load_schema(schema_path)
+        cls = jsonschema.validators.validator_for(schema)
+        entry_schema = {
+            "$schema": schema.get("$schema"),
+            "$defs": schema.get("$defs", {}),
+            "$ref": "#/$defs/entry",
+        }
+        _validator_cache[key] = cls(entry_schema)
+    return _validator_cache[key]
+
+
+def _numeric_skips(numeric: list[tuple[tuple[Any, ...], Any]]) -> list[tuple[Any, ...]]:
+    skip: list[tuple[Any, ...]] = []
+    for path, _ in numeric:
+        skip.append(path)
+        if len(path) >= 4 and path[2] == "scope":
+            skip.append(path[:4])
+    return skip
+
+
+def _entry_schema_problems(
+    entry: Any,
+    file: str,
+    index: int,
+    skip_paths: Iterable[tuple[Any, ...]] = (),
+    schema_path: Path | None = None,
+) -> list[Problem]:
+    if not isinstance(entry, Mapping):
+        return [Problem(file, f"entries[{index}]", f"entry must be a mapping, got {type(entry).__name__}")]
+    skip = {tuple(p) for p in skip_paths}
+    problems: list[Problem] = []
+    validator = _entry_validator(schema_path)
+    errors = sorted(
+        validator.iter_errors(entry),
+        key=lambda e: (list(map(str, e.absolute_path)), e.validator),
+    )
+    for err in errors:
+        rel = tuple(err.absolute_path)
+        path = ("entries", index, *rel)
+        if path in skip or rel in skip:
+            continue
+        problems.append(Problem(file, json_pointer(path), _format_schema_error(err)))
+    return problems
+
+
+def structural_type_problems(doc: Any, file: str, schema_path: Path | None = None) -> list[Problem]:
+    """Schema structural/type problems, including YAML numbers parsed as floats.
+
+    This is step 0 for tools/canonical.py: reject invalid types before a hash
+    is printed. It does **not** compare declared ``content_hash`` to a
+    recomputation, so a stale derived hash on an otherwise schema-valid entry
+    can still be regenerated.
+    """
+    problems: list[Problem] = []
+    if isinstance(doc, Mapping) and isinstance(doc.get("entries"), list):
+        numeric = find_numeric_version_fields(doc)
+        for path, value in numeric:
+            problems.append(Problem(
+                file, json_pointer(path),
+                f"YAML parsed this value as a number ({_yaml_literal(value)}); version and "
+                f"environment fields must be strings. Quote it, e.g. {path[-1] if isinstance(path[-1], str) else 'value'}: '{value}'",
+            ))
+        problems.extend(
+            schema_problems(doc, file, skip_paths=_numeric_skips(numeric), schema_path=schema_path)
+        )
+        return problems
+
+    if isinstance(doc, list):
+        entries = doc
+        wrapped = {"entries": entries}
+        index_base = None
+    elif isinstance(doc, Mapping):
+        entries = [doc]
+        wrapped = {"entries": entries}
+        index_base = 0
+    else:
+        return [Problem(
+            file, "<document>",
+            f"document must be a mapping or a list of entries, got {type(doc).__name__}",
+        )]
+
+    numeric = find_numeric_version_fields(wrapped)
+    for path, value in numeric:
+        problems.append(Problem(
+            file, json_pointer(path),
+            f"YAML parsed this value as a number ({_yaml_literal(value)}); version and "
+            f"environment fields must be strings. Quote it, e.g. {path[-1] if isinstance(path[-1], str) else 'value'}: '{value}'",
+        ))
+    skip = _numeric_skips(numeric)
+    for i, entry in enumerate(entries):
+        problems.extend(
+            _entry_schema_problems(entry, file, i if index_base is None else index_base, skip, schema_path)
+        )
+    return problems
+
+
 # --------------------------------------------------------------------------- #
 # Cross checks
 # --------------------------------------------------------------------------- #

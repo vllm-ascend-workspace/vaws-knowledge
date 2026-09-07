@@ -141,6 +141,26 @@ class StampAndHashTests(unittest.TestCase):
         self.assertIn("does not validate", proc.stderr)
         self.assertIn("missing scope dimension 'driver'", proc.stderr)
 
+    def test_numeric_range_bound_is_refused_before_a_hash_is_published(self):
+        cand = load_yaml(CANDIDATE)
+        cand[0]["scope"]["torch"]["range"]["min"] = 2.5
+        with TempDir() as tmp:
+            path = write_yaml(tmp / "cand.yaml", cand)
+            proc = run_tool("export", str(path), "--kind", "known-failure-signatures", "--origin-repo", ORIGIN)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("2.5", proc.stderr)
+
+    def test_non_string_fingerprint_is_refused_not_stringified(self):
+        cand = load_yaml(CANDIDATE)
+        cand[0]["rule"]["fingerprints"] = [123]
+        with TempDir() as tmp:
+            path = write_yaml(tmp / "cand.yaml", cand)
+            proc = run_tool("export", str(path), "--kind", "known-failure-signatures", "--origin-repo", ORIGIN)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("123", proc.stderr)
+
 
 class IdempotencyTests(unittest.TestCase):
     ARGS = ("--kind", "known-failure-signatures", "--origin-repo", ORIGIN, "--submitted-at", "2026-09-07")

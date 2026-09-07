@@ -6,14 +6,9 @@
 # mistake changes the hash of every entry, so this vector fails loudly for the
 # most common shortcut.
 #
-# The characters are chosen so that this vector tests serialization only, and
-# not anything the spec left open:
-#
-#   * all of them are identical in NFC and NFD, so the vector does not depend
-#     on a Unicode normalization form the spec never mentions;
-#   * the CJK and Cyrillic text has no case, so lower() and casefold() agree;
-#   * exactly one non-ASCII fingerprint is present, so the sort order is the
-#     same under a code-point sort and under a collation-aware sort.
+# The characters are chosen so that this vector tests serialization only.
+# NFC versus NFD, ASCII-only lowercase, non-ASCII whitespace and byte-wise
+# fingerprint sort each have their own vector.
 #
 # Synthetic fixture content. Not knowledge. Do not cite.
 id: non-ascii-content

@@ -1,0 +1,55 @@
+# Conformance vector: fingerprints sort byte-wise over UTF-8.
+#
+# docs/federation.md step 2 sorts byte-wise ascending over the UTF-8
+# encoding, not by locale collation. For well-formed UTF-8 that
+# coincides with code-point order; it does not coincide with a
+# collation that would place é next to e. Input order is scrambled.
+#
+# Synthetic fixture content. Not knowledge. Do not cite.
+id: fingerprint-byte-order
+title: Fingerprints sort byte-wise over UTF-8, not by locale collation
+spec: docs/federation.md - canonicalization step 2 (byte-wise UTF-8 sort)
+tests:
+- fingerprint sort order is UTF-8 byte-wise
+- a locale collation that would insert é between a and z must not win
+- input order is ignored
+entry:
+  uuid: a05e2162-8fb3-4e35-b072-5d6e2f304155
+  slug: vector-fingerprint-byte-order
+  content_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  status: unverified
+  confidence: low
+  scope:
+    soc: {values: ['ExampleSoC-A']}
+    cann: {values: ['0.0.EXAMPLE']}
+    driver: {values: ['0.0.example']}
+    python_abi: {values: ['cpython-311-example']}
+    torch: {values: ['2.5.1']}
+    torch_npu: {values: ['2.5.1.example']}
+    vllm: {values: ['0.0.0+example']}
+    vllm_ascend: {values: ['0.0.0+example']}
+    model: {any: true, basis: 'Fixture vector; independence asserted for shape only.'}
+    topology: {values: ['tp8']}
+    execution_mode: {values: ['eager']}
+    component: {values: ['service-bootstrap']}
+  provenance:
+    contributor: anonymous
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-09-07'
+    redaction_profile: r1
+  lifecycle:
+    first_seen: '2026-09-07'
+    updated_at: '2026-09-07'
+  rule:
+    summary: Fixture entry whose fingerprints must sort byte-wise over UTF-8
+    symptom: Fixture symptom for a canonicalization vector.
+    root_cause: Fixture root cause for a canonicalization vector.
+    resolution: Fixture resolution for a canonicalization vector.
+    fingerprints:
+    - я
+    - é
+    - z
+    - a
+expected_payload: |-
+  {"rule":{"fingerprints":["a","z","é","я"],"resolution":"Fixture resolution for a canonicalization vector.","root_cause":"Fixture root cause for a canonicalization vector.","summary":"Fixture entry whose fingerprints must sort byte-wise over UTF-8","symptom":"Fixture symptom for a canonicalization vector."},"scope":{"cann":{"values":["0.0.EXAMPLE"]},"component":{"values":["service-bootstrap"]},"driver":{"values":["0.0.example"]},"execution_mode":{"values":["eager"]},"model":{"any":true,"basis":"Fixture vector; independence asserted for shape only."},"python_abi":{"values":["cpython-311-example"]},"soc":{"values":["ExampleSoC-A"]},"topology":{"values":["tp8"]},"torch":{"values":["2.5.1"]},"torch_npu":{"values":["2.5.1.example"]},"vllm":{"values":["0.0.0+example"]},"vllm_ascend":{"values":["0.0.0+example"]}}}
+expected_content_hash: sha256:80c5a36ed63bad5cfd07ef1d317718e6dcafa2b304bf71f29d64f1eaecbf7ba0

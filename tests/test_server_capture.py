@@ -324,6 +324,18 @@ class RejectsEntriesTheCorpusWouldReject(unittest.TestCase):
         entry = draft(slug="Not A Slug")
         self.assertTrue(any("slug" in p for p in self._reject(entry)))
 
+    def test_numeric_range_bound_is_rejected_before_a_hash_is_published(self):
+        entry = draft()
+        entry["scope"]["torch"]["range"]["min"] = 2.5
+        problems = self._reject(entry)
+        self.assertTrue(any("2.5" in p and "stringify" in p for p in problems), problems)
+
+    def test_non_string_fingerprint_is_rejected_not_stringified(self):
+        entry = draft()
+        entry["rule"]["fingerprints"] = [123]
+        problems = self._reject(entry)
+        self.assertTrue(any("fingerprint" in p and "stringify" in p for p in problems), problems)
+
 
 class Canonicalization(unittest.TestCase):
     """docs/federation.md, checked against the agreed reference fixture."""
@@ -342,8 +354,11 @@ class Canonicalization(unittest.TestCase):
         mutated["status"] = "stale"
         mutated["confidence"] = "low"
         mutated["provenance"]["contributor"] = "someone-else"
+        mutated["provenance"]["redaction_profile"] = "r19"
+        mutated["redaction_cleared_under"] = "r99"
         mutated["lifecycle"]["updated_at"] = "2026-12-31"
         mutated["verification"]["last_verified_at"] = "2026-12-31"
+        mutated["verification"]["verified_by"] = ["example-revalidator"]
         self.assertEqual(builtin_content_hash(self.reference), builtin_content_hash(mutated))
 
     def test_fingerprints_are_normalized_deduplicated_and_sorted(self):
@@ -378,6 +393,29 @@ class Canonicalization(unittest.TestCase):
         self.assertIn('"scope":{', payload)
         self.assertNotIn('": ', payload)  # separators are (",", ":"), no spaces
         self.assertEqual({"rule", "scope"}, set(json.loads(payload)))
+
+    def test_nbsp_is_content_and_ascii_lower_is_ascii_only(self):
+        mutated = copy.deepcopy(self.reference)
+        mutated["rule"]["summary"] = "\u00a0" + mutated["rule"]["summary"] + "\u3000"
+        mutated["rule"]["fingerprints"] = ["ABC İ É Σ"]
+        payload = json.loads(canonical_payload(mutated))
+        self.assertTrue(payload["rule"]["summary"].startswith("\u00a0"))
+        self.assertEqual(["abc İ É Σ"], payload["rule"]["fingerprints"])
+
+    def test_per_line_trailing_ascii_whitespace_is_stripped(self):
+        mutated = copy.deepcopy(self.reference)
+        mutated["rule"]["summary"] = "First line  \nSecond line"
+        mutated["scope"]["soc"]["basis"] = "Synthetic first line\t \nsecond line"
+        payload = json.loads(canonical_payload(mutated))
+        self.assertEqual("First line\nSecond line", payload["rule"]["summary"])
+        self.assertEqual("Synthetic first line\nsecond line", payload["scope"]["soc"]["basis"])
+
+    def test_numeric_bound_is_rejected_not_stringified(self):
+        mutated = copy.deepcopy(self.reference)
+        mutated["scope"]["torch"]["range"]["min"] = 2.5
+        with self.assertRaises(ValueError) as ctx:
+            builtin_content_hash(mutated)
+        self.assertIn("2.5", str(ctx.exception))
 
 
 if __name__ == "__main__":

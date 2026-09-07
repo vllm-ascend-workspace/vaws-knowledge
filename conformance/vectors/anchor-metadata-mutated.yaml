@@ -1,12 +1,15 @@
 # Conformance vector: only scope and rule participate.
 #
 # Same claim as anchor-valid-entry, with every non-participating field changed:
-# status, confidence, slug, the entry's own content_hash field, all provenance,
-# all lifecycle dates, the whole verification record (removed), and an added
-# conflicts record. The expected hash is therefore identical to the anchor's.
+# status, confidence, slug, the entry's own content_hash field, all provenance
+# (including redaction_profile), all lifecycle dates, a revalidation record
+# (verification.last_verified_at, verified_by, evidence), redaction_cleared_under,
+# and an added conflicts record. The expected hash is therefore identical to
+# the anchor's.
 #
 # This is federation.md step 1, which is the step implementations get wrong most
-# often: re-reviewing or re-verifying an entry must not create a revision.
+# often: re-reviewing, re-verifying or re-clearing redaction must not create a
+# revision.
 #
 # Synthetic fixture content. Not knowledge. Do not cite.
 id: anchor-metadata-mutated
@@ -15,8 +18,9 @@ spec: docs/federation.md - canonicalization step 1
 invariance_group: anchor-scope-rule
 tests:
 - status, confidence and slug are excluded from the payload
-- provenance and lifecycle dates are excluded from the payload
-- an absent verification record does not change the payload
+- provenance, including redaction_profile, is excluded from the payload
+- revalidation fields (verification.last_verified_at, verified_by, evidence) are excluded
+- redaction_cleared_under is excluded from the payload
 - the entry's own content_hash field is not an input to its own hash
 notes: >-
   The entry's content_hash field is deliberately all zeroes: an implementation
@@ -36,6 +40,27 @@ entry:
     origin_repo: example-org/vllm-ascend-workspace
     submitted_at: '2026-09-06'
     redaction_profile: r2
+  redaction_cleared_under: r99
+  verification:
+    evidence:
+    - type: run_manifest
+      ref: example-run-revalidation
+      note: Synthetic revalidation record; hashing must ignore it.
+    verified_by:
+    - example-revalidator
+    verified_against:
+      soc: ExampleSoC-B
+      cann: 9.9.EXAMPLE
+      driver: 9.9.example
+      python_abi: cpython-312-example
+      torch: 9.9.9
+      torch_npu: 9.9.9.example
+      vllm: 9.9.9+example
+      vllm_ascend: 9.9.9+example
+      model: other-example-model
+      topology: tp32
+      execution_mode: graph
+    last_verified_at: '2031-12-31'
   rule:
     avoidance: Do not start by tuning gloo or HCCL interface environment variables. Check hostname resolution
       first; in this container family it is the root cause and the environment variables are a distraction.

@@ -1,0 +1,53 @@
+# Conformance vector: fingerprint lowercasing is ASCII-only.
+#
+# docs/federation.md step 2 lowercases A-Z only. Full Unicode
+# lowercasing is not length-preserving: Python renders İ (U+0130) as
+# i plus a combining dot, and would also fold É and Σ. Those letters
+# must survive as themselves, while ABC still becomes abc.
+#
+# Synthetic fixture content. Not knowledge. Do not cite.
+id: ascii-lowercase-preserves-nonascii
+title: Fingerprint lowercasing is ASCII-only; İ É Σ are preserved
+spec: docs/federation.md - canonicalization step 2 (ASCII-only lowercase)
+tests:
+- ASCII letters in a fingerprint are lowercased
+- U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE is not lowercased
+- U+00C9 LATIN CAPITAL LETTER E WITH ACUTE is not lowercased
+- U+03A3 GREEK CAPITAL LETTER SIGMA is not lowercased
+entry:
+  uuid: 7d2b9e3f-5c80-4b02-8d4f-2a3b9c0d1e22
+  slug: vector-ascii-lowercase-preserves-nonascii
+  content_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  status: unverified
+  confidence: low
+  scope:
+    soc: {values: ['ExampleSoC-A']}
+    cann: {values: ['0.0.EXAMPLE']}
+    driver: {values: ['0.0.example']}
+    python_abi: {values: ['cpython-311-example']}
+    torch: {values: ['2.5.1']}
+    torch_npu: {values: ['2.5.1.example']}
+    vllm: {values: ['0.0.0+example']}
+    vllm_ascend: {values: ['0.0.0+example']}
+    model: {any: true, basis: 'Fixture vector; independence asserted for shape only.'}
+    topology: {values: ['tp8']}
+    execution_mode: {values: ['eager']}
+    component: {values: ['service-bootstrap']}
+  provenance:
+    contributor: anonymous
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-09-07'
+    redaction_profile: r1
+  lifecycle:
+    first_seen: '2026-09-07'
+    updated_at: '2026-09-07'
+  rule:
+    summary: Fixture entry whose fingerprints mix ASCII and non-ASCII letters
+    symptom: Fixture symptom for a canonicalization vector.
+    root_cause: Fixture root cause for a canonicalization vector.
+    resolution: Fixture resolution for a canonicalization vector.
+    fingerprints:
+    - "ABC İ É Σ"
+expected_payload: |-
+  {"rule":{"fingerprints":["abc İ É Σ"],"resolution":"Fixture resolution for a canonicalization vector.","root_cause":"Fixture root cause for a canonicalization vector.","summary":"Fixture entry whose fingerprints mix ASCII and non-ASCII letters","symptom":"Fixture symptom for a canonicalization vector."},"scope":{"cann":{"values":["0.0.EXAMPLE"]},"component":{"values":["service-bootstrap"]},"driver":{"values":["0.0.example"]},"execution_mode":{"values":["eager"]},"model":{"any":true,"basis":"Fixture vector; independence asserted for shape only."},"python_abi":{"values":["cpython-311-example"]},"soc":{"values":["ExampleSoC-A"]},"topology":{"values":["tp8"]},"torch":{"values":["2.5.1"]},"torch_npu":{"values":["2.5.1.example"]},"vllm":{"values":["0.0.0+example"]},"vllm_ascend":{"values":["0.0.0+example"]}}}
+expected_content_hash: sha256:1ebb585f3799ff1f957141dd8fec1f56b02fbef25c16c2725ae06e285a7ee9ec
