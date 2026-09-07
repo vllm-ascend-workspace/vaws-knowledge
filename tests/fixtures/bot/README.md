@@ -17,3 +17,4 @@ from the payload. They exist to exercise the gates, not to be cited or copied.
 | `original-comment-step.sh` | exact privileged comment shell from 9cf5f779, retained as a red control |
 | `inert_gh.py` | local `gh` recorder; never opens a network connection |
 | `publish/` | trusted-publisher inputs: valid/fail JSON and spoofed markdown |
+| `triage/responses/` | injected HTTP envelopes for `bot/triage_grok.py`; never a live provider call |

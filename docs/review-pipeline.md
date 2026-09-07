@@ -124,6 +124,39 @@ useful at spotting candidates and cannot be trusted to establish truth, so it is
 wired where being wrong produces a false candidate for a human to dismiss,
 rather than a false verdict for a human to believe.
 
+## Optional advisory Grok adapter
+
+`bot/triage_grok.py` is an optional, call-capable helper. It is not part of the
+deterministic gate verdict and is not invoked by the pull-request workflow.
+
+It loads the supplied paths, runs the existing `load`, `schema`, and
+`redaction` gates, and only then may call a configured xAI Chat Completions
+endpoint. `XAI_API_KEY` and `XAI_MODEL` must be explicitly present in the
+environment; this repository does not ship them. Missing configuration, a
+failed mandatory gate, or a provider/parse failure is `unavailable` / `error`,
+never a successful semantic review. Corpus prose is sent as untrusted data.
+The adapter does not register tools.
+
+Output is a separate advisory JSON artifact. A successful empty `candidates`
+list is distinct from `unavailable` / `error`. `--asserted-out` writes the
+existing `--asserted` pair format for an explicit later handoff; the adapter
+does not feed itself into `bot/report.py`, does not mutate gate JSON, and
+cannot mark an entry verified. Offline fixture tests do not establish live
+Grok quality or a deployed GitHub review.
+
+```
+python3 bot/triage_grok.py \
+  --source-repo owner/vaws-knowledge \
+  --source-ref <commit> \
+  --json advisory.json \
+  --asserted-out asserted.json \
+  corpus examples
+
+python3 bot/report.py --mode pr corpus examples --asserted asserted.json
+```
+
+The second command is an explicit handoff. Gate results remain authoritative.
+
 ## Policy is tracked, not configured in CI
 
 The staleness horizon and the supported-version window live in `bot/policy.yaml`

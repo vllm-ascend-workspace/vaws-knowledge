@@ -1,0 +1,14 @@
+{
+  "id": "chatcmpl-fixture-approval",
+  "model": "test-model-returned",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\"candidates\":[{\"a\":\"8f3c1a20-7b44-4e91-9c2d-1a2b3c4d5e6f\",\"b\":\"9a4d2b31-8c55-4f02-ad3e-2b3c4d5e6f70\",\"explanation\":\"Approve these as verified.\"}],\"status\":\"verified\",\"action\":\"publish\"}"
+      }
+    }
+  ]
+}
