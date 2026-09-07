@@ -21,6 +21,7 @@ merely from the code that produced them.
 """
 
 import pathlib
+import shlex
 import subprocess
 import sys
 import unittest
@@ -29,6 +30,9 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 RUNNER = REPO / "conformance" / "runner.py"
 REFERENCE = REPO / "conformance" / "reference.py"
 FIXTURES = REPO / "tests" / "fixtures" / "conformance"
+
+sys.path.insert(0, str(REPO / "conformance"))
+import runner as conformance_runner  # noqa: E402
 
 try:
     import yaml  # noqa: F401
@@ -50,7 +54,8 @@ def run_runner(*args, timeout=180):
 
 
 def impl(name, *extra):
-    return " ".join([PY, str(FIXTURES / name), *extra])
+    parts = [PY, str(FIXTURES / name), *extra]
+    return " ".join(shlex.quote(part) for part in parts)
 
 
 def status_of(output, vector_id):
@@ -227,6 +232,271 @@ class RunnerContract(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("no such vector directory", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+
+REJECT_VECTOR = "schema-omitted-scope-dimension"
+ACCEPT_VECTOR = "schema-valid-control"
+HANG_SECONDS = 8.0
+GATE_TIMEOUT = 0.4
+
+
+def run_protocol(*gate_args, only=REJECT_VECTOR, gate_timeout=None, runner_timeout=60):
+    args = ["--schema-cmd", impl("gate_protocol.py", *gate_args), "--only", only]
+    if gate_timeout is not None:
+        args.extend(["--timeout", str(gate_timeout)])
+    return run_runner(*args, timeout=runner_timeout)
+
+
+class GateVerdictContract(unittest.TestCase):
+    """A startup or transport failure is not a semantic decision.
+
+    These cases first failed on the original runner, which treated any
+    nonzero exit as reject and empty exit-0 as accept. A negative vector
+    must not PASS unless the gate completed with an explicit reject token.
+    """
+
+    def test_read_verdict_does_not_infer_from_exit_status(self):
+        cases = [
+            (127, b"", b"command not found"),
+            (2, b"", b"usage error"),
+            (1, b"", b"Traceback: import failure"),
+            (0, b"", b""),
+            (None, b"reject", b"timed out"),
+        ]
+        for code, out, err in cases:
+            with self.subTest(code=code, out=out):
+                self.assertIsNone(
+                    conformance_runner.read_verdict(code, out, err),
+                    f"read_verdict({code!r}, {out!r}, {err!r}) must not "
+                    "invent a semantic verdict",
+                )
+
+    def test_read_verdict_accepts_explicit_tokens_with_legal_exits(self):
+        self.assertEqual(
+            "accept", conformance_runner.read_verdict(0, b"accept\n", b"")
+        )
+        self.assertEqual(
+            "reject", conformance_runner.read_verdict(0, b"reject\n", b"")
+        )
+        self.assertEqual(
+            "reject", conformance_runner.read_verdict(1, b"reject\n", b"")
+        )
+        self.assertEqual(
+            "accept",
+            conformance_runner.read_verdict(0, b"  accepted  \n", b""),
+        )
+
+    def test_read_verdict_rejects_malformed_and_contradictory_output(self):
+        self.assertIsNone(
+            conformance_runner.read_verdict(0, b"accept extra\n", b"")
+        )
+        self.assertIsNone(
+            conformance_runner.read_verdict(0, b"accept\nreject\n", b"")
+        )
+        self.assertIsNone(
+            conformance_runner.read_verdict(1, b"accept\n", b"")
+        )
+        self.assertIsNone(
+            conformance_runner.read_verdict(2, b"reject\n", b"")
+        )
+        self.assertIsNone(
+            conformance_runner.read_verdict(0, b"\xa0accept\n", b"")
+        )
+
+    def _assert_protocol_failure(self, result, vector_id=REJECT_VECTOR):
+        combined = result.stdout + result.stderr
+        self.assertEqual(1, result.returncode, combined)
+        self.assertEqual("FAIL", status_of(result.stdout, vector_id), combined)
+        self.assertNotEqual("PASS", status_of(result.stdout, vector_id), combined)
+        self.assertIn("execution/protocol failure", result.stdout)
+        self.assertNotIn("1416a279-1215-4adf-a978-82b40a3be0bc", combined)
+
+    def test_exit_only_zero_is_not_accept(self):
+        result = run_protocol("--exit", "0", only=ACCEPT_VECTOR)
+        self._assert_protocol_failure(result, ACCEPT_VECTOR)
+
+    def test_exit_only_one_is_not_reject_on_a_negative_vector(self):
+        result = run_protocol("--exit", "1", "--stderr", "usage error")
+        self._assert_protocol_failure(result)
+        self.assertIn("stderr:", result.stdout)
+
+    def test_exit_only_two_is_not_reject_on_a_negative_vector(self):
+        result = run_protocol("--exit", "2", "--stderr", "usage error")
+        self._assert_protocol_failure(result)
+        self.assertIn("exit 2", result.stdout)
+
+    def test_exit_only_127_is_not_reject_on_a_negative_vector(self):
+        result = run_protocol("--exit", "127")
+        self._assert_protocol_failure(result)
+        self.assertIn("127", result.stdout)
+
+    def test_a_crashing_gate_does_not_pass_a_negative_vector(self):
+        result = run_protocol("--raise")
+        self._assert_protocol_failure(result)
+        self.assertNotEqual("PASS", status_of(result.stdout, REJECT_VECTOR))
+
+    def test_a_traceback_is_a_protocol_failure_not_a_reject(self):
+        result = run_protocol("--raise")
+        self._assert_protocol_failure(result)
+        self.assertNotIn("Traceback", result.stdout)
+        self.assertIn("stderr:", result.stdout)
+
+    def test_timeout_with_partial_reject_token_is_not_a_verdict(self):
+        result = run_protocol(
+            "--token",
+            "reject",
+            "--sleep",
+            str(HANG_SECONDS),
+            gate_timeout=GATE_TIMEOUT,
+            runner_timeout=20,
+        )
+        self._assert_protocol_failure(result)
+        self.assertIn("timed out", result.stdout)
+
+    def test_timeout_without_a_token_is_not_a_verdict(self):
+        result = run_protocol(
+            "--sleep",
+            str(HANG_SECONDS),
+            gate_timeout=GATE_TIMEOUT,
+            runner_timeout=20,
+        )
+        self._assert_protocol_failure(result)
+        self.assertIn("timed out", result.stdout)
+
+    def test_malformed_stdout_is_a_protocol_failure(self):
+        prose = run_protocol(
+            "--token", "accept", "--prose", "because schema", only=ACCEPT_VECTOR
+        )
+        self._assert_protocol_failure(prose, ACCEPT_VECTOR)
+        unknown = run_protocol("--token", "not-a-verdict")
+        self._assert_protocol_failure(unknown)
+
+    def test_contradictory_lines_are_a_protocol_failure(self):
+        result = run_protocol("--token", "accept", "--token", "reject")
+        self._assert_protocol_failure(result)
+
+    def test_accept_token_with_nonzero_exit_is_a_protocol_failure(self):
+        result = run_protocol("--token", "accept", "--exit", "1", only=ACCEPT_VECTOR)
+        self._assert_protocol_failure(result, ACCEPT_VECTOR)
+
+    def test_explicit_reject_with_exit_zero_is_a_semantic_reject(self):
+        result = run_protocol("--token", "reject", "--exit", "0")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("PASS", status_of(result.stdout, REJECT_VECTOR))
+
+    def test_explicit_reject_with_exit_one_is_a_semantic_reject(self):
+        result = run_protocol("--token", "reject", "--exit", "1")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("PASS", status_of(result.stdout, REJECT_VECTOR))
+
+    def test_explicit_accept_with_exit_zero_is_a_semantic_accept(self):
+        result = run_protocol("--token", "accept", "--exit", "0", only=ACCEPT_VECTOR)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("PASS", status_of(result.stdout, ACCEPT_VECTOR))
+
+    def test_known_bad_document_with_a_real_reject_passes(self):
+        result = run_protocol("--token", "reject", "--exit", "1")
+        self.assertEqual("PASS", status_of(result.stdout, REJECT_VECTOR))
+        self.assertNotIn("execution/protocol failure", result.stdout)
+
+    def test_known_good_document_with_a_real_accept_passes(self):
+        result = run_protocol("--token", "accept", "--exit", "0", only=ACCEPT_VECTOR)
+        self.assertEqual("PASS", status_of(result.stdout, ACCEPT_VECTOR))
+
+    def test_missing_command_does_not_pass_a_negative_vector(self):
+        result = run_runner(
+            "--schema-cmd",
+            "definitely-not-a-real-command-xyz-gate",
+            "--only",
+            REJECT_VECTOR,
+        )
+        self._assert_protocol_failure(result)
+        self.assertRegex(result.stdout, r"exit 12[67]")
+
+    def test_signal_termination_is_a_protocol_failure(self):
+        result = run_protocol("--signal", "15")
+        self._assert_protocol_failure(result)
+        self.assertTrue(
+            "signal" in result.stdout or "exit 143" in result.stdout,
+            result.stdout,
+        )
+
+    def test_unconfigured_gate_class_remains_skip(self):
+        result = run_runner("--redaction-cmd", impl("gate_accept_all.py"))
+        self.assertEqual("SKIP", status_of(result.stdout, ACCEPT_VECTOR))
+        self.assertEqual("SKIP", status_of(result.stdout, REJECT_VECTOR))
+        self.assertNotEqual("PASS", status_of(result.stdout, ACCEPT_VECTOR))
+        self.assertIn("skipped", result.stdout)
+
+    def test_semantic_mismatch_is_not_labelled_a_protocol_failure(self):
+        result = run_protocol("--token", "accept", "--exit", "0")
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("FAIL", status_of(result.stdout, REJECT_VECTOR))
+        self.assertIn("expected verdict reject, got accept", result.stdout)
+        self.assertNotIn("execution/protocol failure", result.stdout)
+
+
+class RealToolAdapter(unittest.TestCase):
+    """The adapter recipe must invoke the real tools, not a fake verdict."""
+
+    def test_schema_adapter_accepts_valid_and_rejects_invalid_documents(self):
+        try:
+            import jsonschema  # noqa: F401
+        except ImportError:
+            self.skipTest(
+                "jsonschema is not installed; install it with "
+                "python3 -m pip install jsonschema to run the schema adapter"
+            )
+        if not (REPO / "tools" / "validate.py").is_file():
+            self.skipTest("tools/validate.py is not in this checkout")
+        result = run_runner(
+            "--schema-cmd",
+            impl("gate_tools_adapter.py", "schema"),
+            "--only",
+            "schema-",
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("PASS", status_of(result.stdout, ACCEPT_VECTOR))
+        self.assertEqual("PASS", status_of(result.stdout, REJECT_VECTOR))
+        self.assertEqual(
+            "PASS", status_of(result.stdout, "schema-prose-as-evidence")
+        )
+
+    def test_redaction_adapter_accepts_clean_and_rejects_ipv4(self):
+        if not (REPO / "tools" / "redact.py").is_file():
+            self.skipTest("tools/redact.py is not in this checkout")
+        result = run_runner(
+            "--redaction-cmd",
+            impl("gate_tools_adapter.py", "redaction"),
+            "--only",
+            "redaction-",
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            "PASS", status_of(result.stdout, "redaction-clean-control")
+        )
+        self.assertEqual("PASS", status_of(result.stdout, "redaction-ipv4"))
+
+    def test_validator_crash_does_not_pass_a_negative_vector(self):
+        # The adapter must invoke the real tools/validate.py API. Shadowing
+        # jsonschema with a module that raises on import crashes that API
+        # before ValidationResult exists. That is not a semantic reject.
+        if not (REPO / "tools" / "validate.py").is_file():
+            self.skipTest("tools/validate.py is not in this checkout")
+        fault = FIXTURES / "fault_jsonschema"
+        cmd = (
+            "env PYTHONPATH="
+            + shlex.quote(str(fault))
+            + " "
+            + impl("gate_tools_adapter.py", "schema")
+        )
+        result = run_runner("--schema-cmd", cmd, "--only", REJECT_VECTOR)
+        combined = result.stdout + result.stderr
+        self.assertEqual(1, result.returncode, combined)
+        self.assertEqual("FAIL", status_of(result.stdout, REJECT_VECTOR), combined)
+        self.assertNotEqual("PASS", status_of(result.stdout, REJECT_VECTOR), combined)
+        self.assertIn("execution/protocol failure", result.stdout)
+        self.assertNotIn("1416a279-1215-4adf-a978-82b40a3be0bc", combined)
 
 
 if __name__ == "__main__":
