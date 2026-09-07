@@ -83,10 +83,15 @@ the only extra permissions.
 The pull request number inside the artifact is not authority. The publisher
 derives the associated pull request from the `workflow_run` event and the
 GitHub API, then refuses to write unless that pull request's current head
-matches the source revision, in this repository. A marker in a human comment
-is not ownership: only a `github-actions[bot]` comment for this report is
-updated. An old run does not overwrite a newer head's report. Comment listing
-walks every page; the first marker match is not enough.
+matches the source revision, in this repository. The commit-associated PR
+endpoint may name the pull request that contains the run's commit; its
+`.head.sha` is the live current head and is not run-head evidence. A fallback
+write is allowed only when that current head still equals an immutable SHA
+from the triggering run or event. Live-head equality with itself, ancestry,
+branch name, or artifact fields cannot stand in for that linkage. A marker in
+a human comment is not ownership: only a `github-actions[bot]` comment for
+this report is updated. An old run does not overwrite a newer head's report.
+Comment listing walks every page; the first marker match is not enough.
 
 The artifact body is data. The publisher validates `gate-results.json` and
 re-renders the comment from that data with the trusted helper, binding the

@@ -329,13 +329,34 @@ def _candidate_numbers(workflow_run: Mapping[str, Any], repository: str, source_
         number = item.get("number")
         if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
             continue
-        head = None
-        if isinstance(item.get("head"), Mapping):
-            head = _sha(item["head"].get("sha"))
-        candidates.setdefault(number, head)
+        # Number lookup only. The associated PR's .head.sha is the live
+        # current head, not a snapshot of the revision this run tested.
+        candidates.setdefault(number, None)
     if not candidates:
         raise Refuse("missing trusted PR association")
     return candidates
+
+
+def _immutable_source_heads(workflow_run: Mapping[str, Any], source_sha: str) -> set[str]:
+    """SHAs the triggering run/event actually recorded.
+
+    Live GET /pulls and /commits/{sha}/pulls heads are excluded: they describe
+    the PR now, not the revision the run tested.
+    """
+    heads = {source_sha}
+    event_prs = workflow_run.get("pull_requests") or []
+    if not isinstance(event_prs, list):
+        return heads
+    for item in event_prs:
+        if not isinstance(item, Mapping):
+            continue
+        head_obj = item.get("head")
+        if not isinstance(head_obj, Mapping):
+            continue
+        head = _sha(head_obj.get("sha"))
+        if head:
+            heads.add(head)
+    return heads
 
 
 def associate_pull_request(
@@ -345,10 +366,7 @@ def associate_pull_request(
     api: GitHubAPI,
 ) -> tuple[int, str]:
     candidates = _candidate_numbers(workflow_run, repository, source_sha, api)
-    trusted_heads = {source_sha}
-    for event_head in candidates.values():
-        if event_head:
-            trusted_heads.add(event_head)
+    trusted_heads = _immutable_source_heads(workflow_run, source_sha)
     matching: list[tuple[int, str]] = []
     for number, event_head in candidates.items():
         try:

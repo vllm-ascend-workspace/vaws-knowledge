@@ -410,7 +410,34 @@ class PublisherHelper(unittest.TestCase):
         outcome = self._publish(make_event(pull_requests=[]))
         self.assertTrue(outcome.wrote, outcome.reason)
         self.assertEqual("create", outcome.action)
-        self.assertIn(f"/repos/{OWNER_REPO}/issues/5/comments", self.api.writes()[0][1])
+        writes = self.api.writes()
+        self.assertEqual(1, len(writes))
+        self.assertEqual("POST", writes[0][0])
+        self.assertIn(f"/repos/{OWNER_REPO}/issues/5/comments", writes[0][1])
+        binding = parse_binding(writes[0][2]["body"])
+        self.assertIsNotNone(binding)
+        self.assertEqual(SOURCE_SHA, binding.head)
+        self.assertNotEqual(NEW_SHA, binding.head)
+
+    def test_commit_association_must_not_launder_a_newer_head(self):
+        # Empty event PR list, run head A, associated/current open PR head B.
+        # The association endpoint identifies the PR; its live head is not
+        # evidence that run A tested B.
+        self.api.commit_pulls[SOURCE_SHA] = [make_pull(sha=NEW_SHA)]
+        self.api.pulls[5] = make_pull(sha=NEW_SHA)
+        outcome = self._publish(make_event(pull_requests=[]))
+        self.assertFalse(outcome.wrote, outcome.reason)
+        self.assertEqual("stale head", outcome.reason)
+        self.assertEqual([], self.api.writes())
+
+    def test_same_head_fallback_ignores_live_association_head_field(self):
+        self.api.commit_pulls[SOURCE_SHA] = [make_pull(sha=NEW_SHA)]
+        self.api.pulls[5] = make_pull(sha=SOURCE_SHA)
+        outcome = self._publish(make_event(pull_requests=[]))
+        self.assertTrue(outcome.wrote, outcome.reason)
+        binding = parse_binding(self.api.writes()[0][2]["body"])
+        self.assertEqual(SOURCE_SHA, binding.head)
+        self.assertNotIn(NEW_SHA, self.api.writes()[0][2]["body"])
 
     def test_valid_fail_report_still_publishes_a_failure_comment(self):
         shutil.copy(FAIL_REPORT, self.work / "gate-results.json")
