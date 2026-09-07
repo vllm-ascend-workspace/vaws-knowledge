@@ -1,0 +1,100 @@
+# Test fixture for tools/ — synthetic, not knowledge. See tests/fixtures/tools/README.md.
+schema_version: 2
+kind: known-failure-signatures
+layer: verified
+updated_at: '2026-09-07'
+entries:
+- uuid: b405a7d7-26c3-4f44-b7a8-93b4c5d6e758
+  slug: fixture-unverified-status-in-verified-layer
+  content_hash: sha256:c2d13dee0652056f1f33e5d932ec1f3e045b8f00b78af6cc59ac33c8d3c65df0
+  status: unverified
+  confidence: medium
+  scope:
+    soc:
+      any: true
+      basis: The failure is in hostname resolution inside the container image, which happens before any
+        device is opened; reproduced on two SoC generations.
+    cann:
+      any: true
+      basis: Resolution happens in the gloo store before CANN is initialised, so no CANN code path is
+        involved.
+    driver:
+      any: true
+      basis: No driver interaction occurs on this path; the process fails before device open.
+    python_abi:
+      any: true
+      basis: The defect is in container /etc/hosts content, not in any compiled extension.
+    torch:
+      range:
+        min: 2.5.0
+        max: null
+    torch_npu:
+      any: true
+      basis: The failing call is torch.distributed gloo hostname resolution, which torch_npu does not
+        override.
+    vllm:
+      range:
+        min: 0.9.0
+        max: null
+    vllm_ascend:
+      any: true
+      basis: Triggered by the container image, not by plugin code; observed across several plugin revisions.
+    model:
+      any: true
+      basis: Occurs during distributed init, before any weights are read.
+    topology:
+      values:
+      - tp2
+      - tp4
+      - tp8
+      - tp16
+    execution_mode:
+      any: true
+      basis: Failure precedes graph capture and eager execution alike.
+    component:
+      values:
+      - service-bootstrap
+  provenance:
+    contributor: anonymous
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-09-07'
+    redaction_profile: r1
+  verification:
+    evidence:
+    - type: run_manifest
+      ref: example-run-0000
+      note: Synthetic reference. A real entry points at a resolvable manifest id.
+    verified_by:
+    - example-reviewer
+    verified_against:
+      soc: ExampleSoC-A
+      cann: 0.0.EXAMPLE
+      driver: 0.0.example
+      python_abi: cpython-311-example
+      torch: 2.5.1
+      torch_npu: 2.5.1.example
+      vllm: 0.0.0+example
+      vllm_ascend: 0.0.0+example
+      model: example-model
+      topology: tp8
+      execution_mode: eager
+    last_verified_at: '2026-09-07'
+  lifecycle:
+    first_seen: '2026-09-07'
+    updated_at: '2026-09-07'
+    superseded_by: null
+    resolved_by: null
+  rule:
+    summary: Distributed init fails because the container does not resolve its own hostname (fixture-unverified-status-in-verified-layer)
+    symptom: The service crashes or hangs during torch.distributed init with gloo errors naming the container
+      hostname, even for single-node tensor parallel above one rank.
+    root_cause: Fresh containers do not map their own hostname in /etc/hosts. The gloo store resolves
+      the local hostname at init and fails when it does not resolve to an address.
+    resolution: Map the container hostname to a loopback address in /etc/hosts before starting the service,
+      and enforce it in container bootstrap so every new container is correct on first launch.
+    avoidance: Do not start by tuning gloo or HCCL interface environment variables. Check hostname resolution
+      first; in this container family it is the root cause and the environment variables are a distraction.
+    fingerprints:
+    - gloo makedeviceforhostname
+    - name or service not known hostname
+    - torch.distributed gloo init failed container
