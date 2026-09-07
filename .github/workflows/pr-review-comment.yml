@@ -1,0 +1,44 @@
+name: Review comment
+
+# Trusted publisher for the review-gate artifact. workflow_run always
+# executes this file from the default branch, never from the pull request.
+# It must not check out the PR head, must not install PR dependencies, and
+# must not execute artifact files. Cross-run artifact download needs
+# actions:read; posting the comment needs pull-requests:write.
+
+on:
+  workflow_run:
+    workflows: ["Review gates"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: review-report
+          run-id: ${{ github.event.workflow_run.id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: review-report
+
+      - name: Publish the bound review comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: python3 bot/publish_comment.py --artifact-dir review-report

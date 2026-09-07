@@ -1,0 +1,67 @@
+# Synthetic fixture. Not knowledge. See README.md in this directory.
+#
+# The same claim as dup-original.yaml exported again under a fresh uuid while
+# carrying the *same* content_hash. That is always a mistake (an identity was
+# minted for a revision that already exists) and the gate blocks on it.
+schema_version: 2
+kind: known-failure-signatures
+layer: unverified
+updated_at: '2026-09-05'
+entries:
+- uuid: 7a1d2e3f-0012-4a11-8b22-000000000012
+  slug: fixture-hccl-timeout-missing-loopback-route
+  content_hash: sha256:0000000000000000000000000000000000000000000000000000000000000b10
+  status: unverified
+  confidence: medium
+  scope:
+    soc:
+      any: true
+      basis: The failure is in host networking before any collective is issued.
+    cann:
+      any: true
+      basis: HCCL is not reached; the socket connect fails first.
+    driver:
+      any: true
+      basis: No device is opened before the connect failure.
+    python_abi:
+      any: true
+      basis: Host networking defect, no compiled extension involved.
+    torch:
+      range: {min: 2.5.0, max: null}
+    torch_npu:
+      any: true
+      basis: The failing call is the torch.distributed rendezvous, which torch_npu does not override.
+    vllm:
+      range: {min: 0.9.0, max: null}
+    vllm_ascend:
+      any: true
+      basis: Container image defect, observed across plugin revisions.
+    model:
+      any: true
+      basis: Occurs before any weights are read.
+    topology:
+      values: [tp2, tp4, tp8]
+    execution_mode:
+      any: true
+      basis: Rendezvous precedes graph capture and eager execution alike.
+    component:
+      values: [service-bootstrap]
+  provenance:
+    contributor: fixture-other-submitter
+    origin_repo: example-org/fixture-fork-two
+    submitted_at: '2026-09-05'
+    redaction_profile: r1
+  lifecycle:
+    first_seen: '2026-09-05'
+    updated_at: '2026-09-05'
+  rule:
+    summary: Tensor-parallel rendezvous times out because the loopback route is missing
+    symptom: Multi-rank service start hangs at the torch.distributed rendezvous and times out
+      with a connection refused error naming the local rank address.
+    root_cause: The container network namespace has no loopback route, so the rendezvous
+      store connect to the local rank address is refused before HCCL is initialised.
+    resolution: Add the loopback route in the container bootstrap before launching the
+      service so every rank can reach the rendezvous store.
+    fingerprints:
+    - rendezvous connection refused
+    - torch.distributed timeout local rank
