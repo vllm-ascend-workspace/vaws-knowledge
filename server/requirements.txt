@@ -1,0 +1,20 @@
+# Dependencies for server/ only. The root requirements.txt covers the schema
+# contract suite and is not touched by this package.
+#
+# PyYAML is the single runtime dependency, and even it is soft: JSON knowledge
+# documents and JSON config load without it, and the service reports the
+# limitation instead of failing. Nothing here needs torch, torch_npu, or NPU
+# hardware -- the service only reads and writes text documents.
+PyYAML>=6.0
+
+# Deliberately NOT required:
+#
+#   mcp          - the official SDK. The stdio Content-Length framing is
+#                  implemented in server/mcp_server.py so the service runs on
+#                  a plain interpreter. If the SDK is importable we report it
+#                  in `initialize`, but we do not switch transports based on
+#                  what happens to be installed.
+#   jsonschema   - capture performs a structural check that mirrors
+#                  schemas/knowledge-v2.schema.json. When jsonschema is
+#                  present (it is in the root requirements.txt) capture also
+#                  validates against the real schema and reports that it did.
