@@ -1,0 +1,39 @@
+# Opt-in template for a fork or local consumer that wants to pull the
+# published verified snapshot. Copy this file yourself; this repository
+# never writes it into other repositories, never installs a local
+# scheduler, and never claims it has run on all forks.
+#
+# GitHub schedules in new public forks are disabled by default. Central
+# collection of *upward* candidates does not require enabling this file.
+#
+# A central workflow can publish a snapshot and inspect forks. It cannot
+# populate another developer's untracked `.vaws-local/knowledge/shared/`
+# cache. Point the existing client import at an exact source revision or
+# snapshot directory after Phase B shared-cache trust checks:
+# only corpus/verified (or snapshot verified/), recorded source repo/ref,
+# last-valid-cache preserved on a failed refresh, unverified/project
+# documents excluded from shared.
+
+name: Pull verified knowledge snapshot
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '12 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Fetch the verified snapshot artifact from vaws-knowledge
+        run: |
+          echo "Download the verified-snapshot artifact for an exact corpus_revision."
+          echo "Import only snapshot/verified/ (or corpus/verified at that revision)."
+          echo "Do not import corpus/unverified or project-layer documents as shared."
+          echo "On a failed refresh, keep the last valid local shared cache."
+          echo "This job cannot write another machine's .vaws-local/knowledge/shared/."

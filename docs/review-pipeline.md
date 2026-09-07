@@ -165,6 +165,43 @@ python3 bot/report.py --mode pr corpus examples --asserted asserted.json
 
 The second command is an explicit handoff. Gate results remain authoritative.
 
+## Trusted advisory review wiring
+
+`.github/workflows/advisory-review.yml` (`Advisory review`) is a distinct
+default-branch `workflow_run` listener on `Review gates`. It is not the
+`Review comment` publisher and it is not the unprivileged pull-request
+workflow.
+
+The secret-bearing job checks out `${{ github.sha }}` (the trusted default
+branch) with `persist-credentials: false`. It never checks out the pull
+request head, never installs pull-request dependencies, and never treats the
+untrusted gate artifact as authority. It resolves the pull request only from
+the same trusted event/API association as `bot/publish_comment.py`, then
+fetches selected `corpus/` and `examples/` YAML at that run's **immutable**
+`head_sha`. A current mutable PR head cannot enlarge an old run's immutable
+head set.
+
+Trusted `load` / `schema` / `redaction` gates run again through
+`bot/triage_grok.py` before any provider egress. `XAI_API_KEY` and `XAI_MODEL`
+must be explicitly configured. Missing configuration yields a visible
+`unavailable` advisory artifact and **zero** provider calls; that is not an
+empty successful semantic review. The advisory JSON is uploaded as an
+artifact. A separate comment job (no model secret) may publish an advisory
+comment with marker `<!-- vaws-knowledge-advisory-grok:v1 -->`. It reuses
+current-head / repository / bot-authorship checks and will not update a human
+comment or the deterministic review-bot comment.
+
+Model output cannot approve a change, set `verified`, advance re-verification
+dates, resolve conflicts, or edit source. Promotion remains behind evidence
+and non-submitter confirmation.
+
+The periodic collection workflow also runs `bot/triage_grok.py` on *already
+gated* eligible exports, with the same missing-config behaviour.
+
+`.github/workflows/advisory-review.yml` is not active as a live listener until
+this revision is on the default branch. Offline tests do not establish a real
+Grok response or a deployed GitHub review.
+
 ## Policy is tracked, not configured in CI
 
 The staleness horizon and the supported-version window live in `bot/policy.yaml`

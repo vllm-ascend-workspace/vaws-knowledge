@@ -169,6 +169,72 @@ explicit, and gives up reproducibility for that run.
 directory, so a `kind` may be split across files when one grows unwieldy, and the
 `layer` field inside each document must still agree with its directory.
 
+## Central collection (trusted default branch)
+
+vaws-knowledge can also *collect* already-public knowledge YAML instead of
+waiting for every fork to enable a workflow. `.github/workflows/collect.yml`
+runs daily at 04:27 UTC (off-hour, finite; knowledge arrival is source-driven
+rather than a months-long staleness horizon) and on `workflow_dispatch`.
+
+Dispatch `preview` never writes. Scheduled runs, and dispatch `propose`, may
+open candidate PRs **in this repository only** after the existing export,
+schema, redaction, plan and propose gates pass. The collector never writes to
+a contributing fork and does not require fork owners to enable Actions.
+
+Discovery is bound to scaffold repository numeric id **1196723340**, resolved
+to the current `full_name` on every run (`GET /repositories/1196723340`).
+Names may change during an organization transfer. Each listed fork is
+re-fetched and accepted only when its `source`/`parent` numeric id matches
+that frozen parent; a name prefix is not identity. Private or unreachable
+sources stay uninspected — they are not a reason to add credentials. The
+source-side recipe is unchanged: run `tools/export.py` locally and open a PR.
+
+Fetched bytes are stored outside the trusted checkout and are never placed on
+`sys.path`. Only ordinary `100644` blobs under `.agents/knowledge/*.yaml` at a
+**frozen** default-branch commit SHA are read. Executables, symlinks,
+submodules, path traversal and oversize blobs are rejected before use.
+v1 / incomplete / unknown scope is recorded as unsupported; the two migrated
+scaffold entries with unresolved dimensions and the v1 model facts are
+blocked, and zero eligible entries is an honest no-op.
+
+Identical `uuid`+`content_hash` observations are deduplicated with every
+source binding preserved. Conflicting revisions of the same identity are
+reported, never last-writer-wins. `sync/plan.py` and `sync/propose.py
+--open-pr` remain the upsert/ownership implementation. The collector will not
+pass `--skip-gates`, `--drop-undeclared` or `--allow-duplicate-candidates`.
+
+A public GitHub blob proves where bytes were read, not who the contributor is
+and not whether the claim is true. Central re-scan does not prove that a
+source-side scan occurred.
+
+## Consuming a verified snapshot
+
+`sync/snapshot.py` (and `.github/workflows/publish-snapshot.yml`) publish the
+existing verified snapshot after schema/integrity **and** redaction gates.
+`corpus/unverified/` is never published. An empty verified corpus is an
+accurately labelled empty snapshot (`entry_count: 0`), not runtime evidence.
+
+Import against an **exact** `corpus_revision` / `snapshot_digest`. The
+accepted Phase B shared-cache rules still apply: only `corpus/verified/` (or
+the snapshot's `verified/` directory) may enter shared; unverified and
+project-zone documents cannot; source repo/ref must be recorded; a failed
+refresh must preserve the last valid shared cache; query/get use the same
+trust checks.
+
+Point the existing client at that exact snapshot directory, for example:
+
+```
+VAWS_KNOWLEDGE_SHARED_ROOTS=/path/to/verified-snapshot/verified
+```
+
+or at `corpus/verified/` of a checkout pinned to the snapshot's
+`corpus_revision`. A central workflow can publish a snapshot and inspect
+forks; it cannot populate another developer's untracked
+`.vaws-local/knowledge/shared/` by itself. An optional copy-yourself template
+lives at `docs/periodic-pull-template.yml`. Do not install it into other
+repositories from here. GitHub schedules in new public forks are disabled by
+default; central collection does not depend on those schedules being enabled.
+
 ## Where the work happens
 
 The fork runs schema validation and redaction **before** proposing. The main
