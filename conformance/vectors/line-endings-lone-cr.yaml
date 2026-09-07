@@ -1,0 +1,55 @@
+# Conformance vector: a lone CR is a line ending too (pinned reading).
+#
+# federation.md step 3 says "normalize line endings to LF" without enumerating
+# them. CRLF is beyond dispute. A lone CR is a line ending in the classic-Mac
+# sense, and a Python implementation written with str.splitlines() or a
+# regex on [\r\n]+ will normalize it, while one written as
+# replace("\r\n", "\n") will not.
+#
+# So two reasonable implementations disagree here, which is why the case is a
+# vector rather than a footnote. The kit pins CR -> LF, the broader reading,
+# and records the choice in conformance/README.md. A fork that fails only this
+# vector has found a spec question, not a bug in itself.
+#
+# Synthetic fixture content. Not knowledge. Do not cite.
+id: line-endings-lone-cr
+title: A lone CR normalizes to LF
+spec: docs/federation.md - canonicalization step 3 (pinned reading)
+tests:
+- a bare CR inside prose becomes LF
+- a bare CR mixed with CRLF and LF in one string normalizes uniformly
+entry:
+  uuid: 3ce401af-073d-4fee-88ad-2e878a207a7c
+  slug: vector-line-endings-lone-cr
+  content_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  status: unverified
+  confidence: low
+  scope:
+    soc: {values: ['ExampleSoC-A']}
+    cann: {values: ['0.0.EXAMPLE']}
+    driver: {values: ['0.0.example']}
+    python_abi: {values: ['cpython-311-example']}
+    torch: {values: ['2.5.1']}
+    torch_npu: {values: ['2.5.1.example']}
+    vllm: {values: ['0.0.0+example']}
+    vllm_ascend: {values: ['0.0.0+example']}
+    model: {any: true, basis: 'Fixture vector; independence asserted for shape only.'}
+    topology: {values: ['tp8']}
+    execution_mode: {values: ['eager']}
+    component: {values: ['service-bootstrap']}
+  provenance:
+    contributor: anonymous
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-09-07'
+    redaction_profile: r1
+  lifecycle:
+    first_seen: '2026-09-07'
+    updated_at: '2026-09-07'
+  rule:
+    summary: Fixture entry carrying a bare CR
+    symptom: "Alpha line.\rBeta line."
+    root_cause: "Mixed endings in one string:\rbare CR,\r\nthen CRLF,\nthen LF."
+    resolution: Treat CR, CRLF and LF as the same line ending before hashing.
+expected_payload: |-
+  {"rule":{"resolution":"Treat CR, CRLF and LF as the same line ending before hashing.","root_cause":"Mixed endings in one string:\nbare CR,\nthen CRLF,\nthen LF.","summary":"Fixture entry carrying a bare CR","symptom":"Alpha line.\nBeta line."},"scope":{"cann":{"values":["0.0.EXAMPLE"]},"component":{"values":["service-bootstrap"]},"driver":{"values":["0.0.example"]},"execution_mode":{"values":["eager"]},"model":{"any":true,"basis":"Fixture vector; independence asserted for shape only."},"python_abi":{"values":["cpython-311-example"]},"soc":{"values":["ExampleSoC-A"]},"topology":{"values":["tp8"]},"torch":{"values":["2.5.1"]},"torch_npu":{"values":["2.5.1.example"]},"vllm":{"values":["0.0.0+example"]},"vllm_ascend":{"values":["0.0.0+example"]}}}
+expected_content_hash: sha256:fd0e291be0007d8272cdd2069d7b51335aeaafb5c9c5e6d58dfca55c60ac5093

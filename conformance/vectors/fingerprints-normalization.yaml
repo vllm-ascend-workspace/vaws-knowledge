@@ -1,0 +1,69 @@
+# Conformance vector: fingerprint normalization.
+#
+# federation.md step 2 is six operations in one sentence - lowercase, strip,
+# collapse internal runs, drop duplicates, drop empties, sort - and the order
+# matters: three of the inputs below are the same fingerprint and only collide
+# after case folding and whitespace collapsing. An implementation that
+# de-duplicates before normalizing keeps all three and diverges.
+#
+# The input list is also deliberately out of order, and contains an empty
+# string and a whitespace-only string.
+#
+# Synthetic fixture content. Not knowledge. Do not cite.
+id: fingerprints-normalization
+title: Fingerprints are lowercased, stripped, collapsed, de-duplicated and sorted
+spec: docs/federation.md - canonicalization step 2
+tests:
+- case folding of fingerprints
+- surrounding whitespace stripped
+- internal whitespace runs collapsed to one space, including tabs
+- duplicates that only collide after normalization are dropped
+- empty and whitespace-only items are dropped
+- output is sorted, regardless of input order
+notes: >-
+  Uses ASCII whitespace only. The spec does not define which characters count
+  as whitespace, and the kit does not pin that; see the ambiguity list in
+  conformance/README.md.
+entry:
+  uuid: 7a2994ea-57cc-4e86-9530-89b2b0604a21
+  slug: vector-fingerprints-normalization
+  content_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  status: unverified
+  confidence: low
+  scope:
+    soc: {values: ['ExampleSoC-A']}
+    cann: {values: ['0.0.EXAMPLE']}
+    driver: {values: ['0.0.example']}
+    python_abi: {values: ['cpython-311-example']}
+    torch: {range: {min: '2.5.0', max: null}}
+    torch_npu: {values: ['2.5.1.example']}
+    vllm: {range: {min: '0.9.0', max: null}}
+    vllm_ascend: {any: true, basis: 'Fixture vector; independence asserted for shape only.'}
+    model: {any: true, basis: 'Fixture vector; independence asserted for shape only.'}
+    topology: {values: ['tp8']}
+    execution_mode: {values: ['eager']}
+    component: {values: ['service-bootstrap']}
+  provenance:
+    contributor: anonymous
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-09-07'
+    redaction_profile: r1
+  lifecycle:
+    first_seen: '2026-09-07'
+    updated_at: '2026-09-07'
+  rule:
+    summary: Fixture entry for fingerprint normalization
+    symptom: Retrieval matching misses a known signature because fingerprints were stored unnormalized.
+    root_cause: Fingerprints were captured verbatim from log output, so case and spacing vary between captures of the same signature.
+    resolution: Normalize fingerprints at export time exactly as federation.md step 2 specifies.
+    fingerprints:
+    - 'zz Trailing Case TEST'
+    - '  GLOO makeDeviceForHostname  '
+    - "gloo\tmakeDeviceForHostname"
+    - 'gloo    makedeviceforhostname'
+    - 'Name or service   not known hostname'
+    - ''
+    - '   '
+expected_payload: |-
+  {"rule":{"fingerprints":["gloo makedeviceforhostname","name or service not known hostname","zz trailing case test"],"resolution":"Normalize fingerprints at export time exactly as federation.md step 2 specifies.","root_cause":"Fingerprints were captured verbatim from log output, so case and spacing vary between captures of the same signature.","summary":"Fixture entry for fingerprint normalization","symptom":"Retrieval matching misses a known signature because fingerprints were stored unnormalized."},"scope":{"cann":{"values":["0.0.EXAMPLE"]},"component":{"values":["service-bootstrap"]},"driver":{"values":["0.0.example"]},"execution_mode":{"values":["eager"]},"model":{"any":true,"basis":"Fixture vector; independence asserted for shape only."},"python_abi":{"values":["cpython-311-example"]},"soc":{"values":["ExampleSoC-A"]},"topology":{"values":["tp8"]},"torch":{"range":{"max":null,"min":"2.5.0"}},"torch_npu":{"values":["2.5.1.example"]},"vllm":{"range":{"max":null,"min":"0.9.0"}},"vllm_ascend":{"any":true,"basis":"Fixture vector; independence asserted for shape only."}}}
+expected_content_hash: sha256:a8675da3eb30d26d1a046535e2e262d5f671869606d09ca56e2cbae35898a327
