@@ -78,6 +78,27 @@ class HashVectors(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertNotIn("FAIL", result.stdout)
 
+    def test_tools_adapter_passes_every_vector(self):
+        result = run_runner("--hash-cmd", impl("impl_tools.py"))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("FAIL", result.stdout)
+        source = (FIXTURES / "impl_tools.py").read_text()
+        self.assertIn("from tools import canonical", source)
+        self.assertNotIn("import reference", source)
+        self.assertNotIn("from conformance", source)
+
+    def test_server_fallback_adapter_passes_every_vector(self):
+        result = run_runner("--hash-cmd", impl("impl_server.py"))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("FAIL", result.stdout)
+        self.assertIn("PASS  non-ascii-whitespace-preserved", result.stdout)
+        self.assertIn("SKIP  schema-valid-control", result.stdout)
+
+    def test_sync_adapter_passes_every_vector(self):
+        result = run_runner("--hash-cmd", impl("impl_sync.py"))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("FAIL", result.stdout)
+
     def test_json_input_format_is_accepted(self):
         result = run_runner(
             "--hash-cmd",
@@ -106,9 +127,11 @@ class HashVectors(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertEqual("FAIL", status_of(result.stdout, "fingerprints-normalization"))
         self.assertEqual("FAIL", status_of(result.stdout, "fingerprints-all-empty"))
+        self.assertEqual("FAIL", status_of(result.stdout, "ascii-lowercase-preserves-nonascii"))
         self.assertEqual("PASS", status_of(result.stdout, "anchor-valid-entry"))
         self.assertEqual("PASS", status_of(result.stdout, "rule-optional-keys-absent"))
         self.assertEqual("PASS", status_of(result.stdout, "line-endings-lone-cr"))
+        self.assertEqual("PASS", status_of(result.stdout, "line-trailing-ascii-whitespace"))
 
     def test_payload_command_locates_the_divergence(self):
         result = run_runner(
@@ -209,6 +232,8 @@ class RunnerContract(unittest.TestCase):
         result = run_runner("--list")
         self.assertEqual(0, result.returncode)
         self.assertIn("anchor-valid-entry", result.stdout)
+        self.assertIn("non-ascii-whitespace-preserved", result.stdout)
+        self.assertIn("no-unicode-normalization", result.stdout)
         self.assertIn("redaction-credential", result.stdout)
         self.assertIn("[group: anchor-scope-rule]", result.stdout)
 

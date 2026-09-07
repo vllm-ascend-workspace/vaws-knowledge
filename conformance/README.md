@@ -86,10 +86,15 @@ Details:
 Examples:
 
 ```bash
-# this repository, once tools/canonical.py exists
+# this repository: drive the real tools/server/sync APIs in a subprocess.
+# Do not point --hash-cmd at conformance/reference.py and call that a pass.
 python3 conformance/runner.py \
-  --hash-cmd "python3 tools/canonical.py" \
-  --payload-cmd "python3 tools/canonical.py --payload"
+  --hash-cmd "python3 tests/fixtures/conformance/impl_tools.py" \
+  --payload-cmd "python3 tests/fixtures/conformance/impl_tools.py --payload"
+python3 conformance/runner.py \
+  --hash-cmd "python3 tests/fixtures/conformance/impl_server.py"
+python3 conformance/runner.py \
+  --hash-cmd "python3 tests/fixtures/conformance/impl_sync.py"
 
 # schema / redaction: tools/validate.py and tools/redact.py take a file
 # path and return a structured result; they are not gate commands. The
@@ -178,10 +183,10 @@ python3 -m unittest discover -s tests
   `schemas/knowledge-v2.schema.json` directly.
 - **That your exporter produces the right bytes.** Only that it produces the
   same bytes twice.
-- **Agreement on anything the specification leaves open.** See the next
-  section: the vectors deliberately avoid most of those cases, so two
-  implementations can both pass this kit and still disagree on an entry
-  containing, say, a non-breaking space.
+- **Agreement on anything the specification still leaves open.** See the
+  next section. The former whitespace / lowercase / normalization / sort /
+  per-line-trailing cases are now pinned by vectors, because
+  `docs/federation.md` states them exactly.
 
 ## The normative specification
 
@@ -198,32 +203,33 @@ becoming the standard everyone conforms to.
 
 ## Where the specification is ambiguous
 
-These are the places where two reasonable implementations, both written
-carefully from `docs/federation.md`, can produce different hashes. They are
-listed rather than silently decided, because a silent decision by this kit
-would make the kit the spec.
+`docs/federation.md` is normative. Several former gaps are now stated
+there exactly; this kit pins them with vectors rather than treating them
+as unpinned. A silent decision by this kit would still make the kit the
+spec, so remaining gaps stay listed.
 
-**Not pinned — no vector depends on them, and `selfcheck.py` enforces that.**
+**Pinned by `docs/federation.md` and by this kit.** A fork that reads
+them differently fails a vector. Do not "fix" the vector; fix the
+implementation.
 
-1. **What counts as whitespace.** Steps 2 and 3 say "whitespace". Python's
-   `str.strip()` and `\s` are Unicode-aware and eat U+00A0, U+3000, U+2028;
-   an ASCII-only implementation in another language does not. An entry
-   containing a non-breaking space — pasted from a document or a web page,
-   which happens — hashes differently under the two readings.
-2. **Unicode normalization form.** Never mentioned. The same visible text in
-   NFC and NFD is two different byte strings and therefore two different
-   hashes. Two editors on two platforms can produce both.
-3. **`lower()` vs `casefold()`** in step 2. They differ on `ß`, `İ` and
-   others. "Lowercase every item" does not say which.
-4. **Fingerprint sort order** in step 2. A code-point sort and a
-   collation-aware sort agree on ASCII and disagree on almost everything else.
-5. **Per-line trailing whitespace.** Step 3 strips the string's leading and
-   trailing whitespace and forbids reflowing. Whether trailing spaces at the
-   end of an interior line survive is not stated; an implementation built on
-   `splitlines()` plus `rstrip()` per line drops them.
+1. **Whitespace is exactly the six ASCII characters** U+0009, U+000A,
+   U+000B, U+000C, U+000D, U+0020 (`non-ascii-whitespace-preserved`).
+   NBSP and U+3000 are content, including at the edges of a string and
+   inside a fingerprint. Python's `str.strip()` and `\s` consume them
+   and diverge.
+2. **Lowercasing is ASCII-only** (`ascii-lowercase-preserves-nonascii`).
+   `İ` (U+0130), `É` and `Σ` stay as themselves; `ABC` becomes `abc`.
+   Full Unicode `lower()` / `casefold()` is not the rule.
+3. **No Unicode normalization form is applied** (`no-unicode-normalization`).
+   NFD `e` + combining acute is not composed to `é`.
+4. **Fingerprints sort byte-wise over UTF-8** (`fingerprint-byte-order`),
+   not by locale collation.
+5. **Trailing ASCII whitespace is stripped from every line**, then the
+   whole value is ASCII-stripped (`line-trailing-ascii-whitespace` in
+   rule prose, `nested-scope-line-trailing-whitespace` in nested scope
+   strings). Leading whitespace on an interior line is kept.
 
-**Pinned by this kit — a fork that reads them differently fails a vector, and
-should open an issue rather than "fix" itself.**
+**Still pinned by this kit as readings of remaining silence.**
 
 6. **A lone CR is a line ending** (`line-endings-lone-cr`). Step 3 says
    "normalize line endings to LF" without enumerating them. `replace("\r\n",
@@ -259,12 +265,12 @@ should open an issue rather than "fix" itself.**
 
 **Adjacent ambiguities this kit does not cover.**
 
-12. **Whether hashing may precede schema validation.** Nothing states an
-    order, and it matters: YAML `min: 2.5` is a float, which serializes as
-    `2.5` rather than `"2.5"` and hashes differently from the string the
-    schema requires. An implementation that hashes before validating can
-    publish a hash for a document that is about to be rejected. Validate
-    first.
+12. **Invalid types are not hash vectors.** `docs/federation.md` step 0 is
+    validate-first: a YAML `min: 2.5` is a float, and canonicalization must
+    not stringify it into a published hash. The knowledge tools/server/sync
+    paths reject that class of input at the entry/CLI boundary. There is no
+    hash vector for it, because a successful `sha256:` for a schema-invalid
+    entry would be the wrong verdict.
 13. **"near-identical `rule`"** in the duplicate-detection rule is undefined,
     so two bots will disagree about which entries are duplicate candidates.
     That is bot behaviour rather than canonicalization, so there is no vector
@@ -277,15 +283,19 @@ should open an issue rather than "fix" itself.**
 
 ## Vector inventory
 
-`vectors/` — canonicalization, 11 vectors. Group `anchor-scope-rule` is three
+`vectors/` — canonicalization, 17 vectors. Group `anchor-scope-rule` is three
 inputs that must all produce the recorded hash of `examples/valid-entry.yaml`.
+The original 11 expected hashes are unchanged: those entries contain no
+character the old Unicode-aware reading and the ratified ASCII reading
+disagree on. New vectors pin the ratified cases; they were not produced by
+blanket-regenerating hashes.
 
 | Vector | What it pins |
 |---|---|
 | `anchor-valid-entry` | the recorded hash of `examples/valid-entry.yaml`; all three constraint forms |
-| `anchor-metadata-mutated` | step 1: status, confidence, slug, provenance, lifecycle, verification and the stored `content_hash` field are all excluded |
+| `anchor-metadata-mutated` | step 1: status, confidence, slug, provenance (including `redaction_profile`), lifecycle, revalidation (`verification.last_verified_at`, `verified_by`, evidence), `redaction_cleared_under` and the stored `content_hash` field are all excluded |
 | `anchor-key-order-scrambled` | input mapping order and fingerprint order are irrelevant |
-| `fingerprints-normalization` | step 2 in full: case, edges, internal runs, dedup after normalization, empties, sort |
+| `fingerprints-normalization` | step 2 in full for ASCII: case, edges, internal runs, dedup after normalization, empties, sort |
 | `fingerprints-all-empty` | a fingerprint list that normalizes to `[]` keeps its key |
 | `line-endings-crlf` | CRLF → LF, in rule prose and in a scope basis |
 | `line-endings-lone-cr` | a bare CR is a line ending too |
@@ -293,6 +303,12 @@ inputs that must all produce the recorded hash of `examples/valid-entry.yaml`.
 | `non-ascii-content` | `ensure_ascii=False`, `(",", ":")`, UTF-8 |
 | `scope-constraint-forms` | `values` / `range` (bounded and half-open, `null` preserved) / `any`; non-fingerprint array order |
 | `rule-optional-keys-absent` | absent optionals are not defaulted in |
+| `non-ascii-whitespace-preserved` | NBSP and U+3000 are content; ASCII whitespace on the same list still collapses |
+| `ascii-lowercase-preserves-nonascii` | fingerprint lowercasing is A–Z only; `İ É Σ` survive |
+| `line-trailing-ascii-whitespace` | interior-line trailing ASCII whitespace in rule prose |
+| `nested-scope-line-trailing-whitespace` | the same rule inside nested scope basis and values |
+| `fingerprint-byte-order` | fingerprints sort byte-wise over UTF-8 |
+| `no-unicode-normalization` | NFD sequences are not NFC-composed |
 
 `gate_vectors/` — 14 vectors: 6 redaction refusals + 1 clean control,
 4 schema refusals + 1 valid control, 2 export idempotence. Run
@@ -329,8 +345,8 @@ on demand is exactly how a wrong vector becomes the standard. Instead:
 4. Run `python3 conformance/selfcheck.py` and
    `python3 -m unittest discover -s tests`. The self-check will refuse a
    vector whose hash and payload disagree, whose input does not canonicalize to
-   its payload, that breaks its invariance group, or that depends on any of the
-   unpinned ambiguities above.
+   its payload, or that breaks its invariance group. Never blanket-regenerate
+   expected hashes as a blessing step.
 
 Changing `examples/valid-entry.yaml` changes the anchor. `selfcheck.py` will
 fail until `anchor-valid-entry` is regenerated, which is the intended amount of

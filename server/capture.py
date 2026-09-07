@@ -36,7 +36,7 @@ import subprocess
 import sys
 import uuid as _uuid
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .layers import (
     WRITABLE_LAYERS,
@@ -70,7 +70,9 @@ KIND_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HASH_RE = re.compile(r"sha256:[0-9a-f]{64}")
-_WS_RE = re.compile(r"\s+")
+ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+_ASCII_WS_RE = re.compile(r"[ \t\n\r\x0b\x0c]+")
 
 #: argv shapes tried against tools/canonical.py, entry JSON on stdin. The
 #: sibling module's CLI is not fixed yet, so this probes rather than assumes.
@@ -103,31 +105,100 @@ class CaptureRejected(Exception):
 # --------------------------------------------------------------------------
 
 
+def _ascii_lower(value: str) -> str:
+    """Step 2: A–Z → a–z only. Non-ASCII letters are left unchanged."""
+
+    return value.translate(_ASCII_LOWER)
+
+
 def _normalize_string(value: str) -> str:
-    """Step 3: strip ends, normalize line endings to LF, do not reflow."""
+    """Step 3: LF endings, per-line trailing ASCII whitespace, then outer ASCII strip."""
 
     text = value.replace("\r\n", "\n").replace("\r", "\n")
-    return text.strip()
+    text = "\n".join(line.rstrip(ASCII_WHITESPACE) for line in text.split("\n"))
+    return text.strip(ASCII_WHITESPACE)
 
 
-def _normalize_fingerprints(items: Any) -> list[str]:
-    """Step 2: lowercase, trim, collapse whitespace, drop dupes/empties, sort."""
+def _normalize_fingerprints(items: Any) -> Any:
+    """Step 2: ASCII-lower, ASCII-trim, collapse ASCII runs, drop dupes/empties, byte-sort.
 
-    if not isinstance(items, Iterable) or isinstance(items, (str, bytes, Mapping)):
-        return []
+    Non-list values and lists with a non-string item are returned unchanged so a
+    hash is not invented by stringifying them.
+    """
+
+    if not isinstance(items, list):
+        return items
     seen: set[str] = set()
     for item in items:
-        text = _WS_RE.sub(" ", str(item).strip().lower())
+        if not isinstance(item, str):
+            return list(items)
+        text = _ASCII_WS_RE.sub(" ", _ascii_lower(item).strip(ASCII_WHITESPACE))
         if text:
             seen.add(text)
-    return sorted(seen)
+    return sorted(seen, key=lambda s: s.encode("utf-8"))
+
+
+def _payload_type_error(value: Any, path: str, *, in_fingerprints: bool = False) -> str | None:
+    """Step 0: name a type this fallback must not coerce into a hash."""
+
+    if isinstance(value, Mapping):
+        for key, sub in value.items():
+            if not isinstance(key, str):
+                return (
+                    f"{path}: mapping keys must be strings, got {type(key).__name__} "
+                    f"{key!r}; canonicalization does not stringify keys"
+                )
+            child = f"{path}.{key}"
+            if key == "fingerprints" and not isinstance(sub, list):
+                return (
+                    f"{child} must be a list of strings, got {type(sub).__name__}; "
+                    "canonicalization does not stringify fingerprint items"
+                )
+            err = _payload_type_error(sub, child, in_fingerprints=(key == "fingerprints"))
+            if err:
+                return err
+        return None
+    if isinstance(value, list):
+        if in_fingerprints:
+            for index, item in enumerate(value):
+                if not isinstance(item, str):
+                    return (
+                        f"{path}[{index}]: fingerprint items must be strings, got "
+                        f"{type(item).__name__} {item!r}; canonicalization does not "
+                        "stringify them"
+                    )
+            return None
+        for index, item in enumerate(value):
+            err = _payload_type_error(item, f"{path}[{index}]")
+            if err:
+                return err
+        return None
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return None
+    if isinstance(value, (int, float)):
+        return (
+            f"{path}: numeric value {value!r} is a {type(value).__name__} and is not "
+            "canonicalized; quote it as a string (canonicalization does not stringify types)"
+        )
+    return (
+        f"{path}: unsupported type {type(value).__name__}; "
+        "canonicalization does not coerce it"
+    )
 
 
 def _normalize_value(value: Any) -> Any:
     if isinstance(value, str):
         return _normalize_string(value)
     if isinstance(value, Mapping):
-        return {str(k): _normalize_value(v) for k, v in value.items()}
+        out: dict[str, Any] = {}
+        for key, sub in value.items():
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"mapping keys must be strings, got {type(key).__name__} {key!r}; "
+                    "canonicalization does not stringify keys"
+                )
+            out[key] = _normalize_value(sub)
+        return out
     if isinstance(value, (list, tuple)):
         return [_normalize_value(v) for v in value]
     return value
@@ -138,15 +209,19 @@ def canonical_payload(entry: Mapping[str, Any]) -> str:
 
     rule_in = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
     scope_in = entry.get("scope") if isinstance(entry.get("scope"), Mapping) else {}
+    for label, node in (("rule", rule_in), ("scope", scope_in)):
+        err = _payload_type_error(node, label)
+        if err:
+            raise ValueError(err)
 
     rule: dict[str, Any] = {}
     for key, value in rule_in.items():
         if key == "fingerprints":
-            rule[str(key)] = _normalize_fingerprints(value)
+            rule[key] = _normalize_fingerprints(value)
         else:
-            rule[str(key)] = _normalize_value(value)
+            rule[key] = _normalize_value(value)
 
-    scope = {str(k): _normalize_value(v) for k, v in scope_in.items()}
+    scope = {k: _normalize_value(v) for k, v in scope_in.items()}
 
     return json.dumps(
         {"rule": rule, "scope": scope},
@@ -338,7 +413,7 @@ def validate_entry(entry: Mapping[str, Any], *, kind: str) -> list[str]:
         fingerprints = rule.get("fingerprints")
         if fingerprints is not None and (
             not isinstance(fingerprints, (list, tuple))
-            or any(not isinstance(f, str) or not f.strip() for f in fingerprints)
+            or any(not isinstance(f, str) or not f for f in fingerprints)
         ):
             problems.append("rule.fingerprints must be a list of non-empty strings")
 
@@ -566,17 +641,34 @@ def capture(
 
     warnings: list[str] = []
 
+    for label, node in (("rule", draft.get("rule")), ("scope", draft.get("scope"))):
+        if isinstance(node, Mapping):
+            err = _payload_type_error(node, label)
+            if err:
+                raise CaptureRejected([err])
+
     rule = draft.get("rule")
     if isinstance(rule, Mapping) and rule.get("fingerprints") is not None:
+        fingerprints = rule.get("fingerprints")
+        if not isinstance(fingerprints, list) or any(
+            not isinstance(item, str) for item in fingerprints
+        ):
+            raise CaptureRejected(
+                [
+                    "rule.fingerprints must be a list of strings; canonicalization "
+                    "does not stringify fingerprint items"
+                ]
+            )
         # Store fingerprints in their canonical form. The hash normalizes them
         # anyway (docs/federation.md step 2); storing the raw list would mean
         # nobody could reproduce content_hash from the file they are reading.
         rule = dict(rule)
-        normalized = _normalize_fingerprints(rule.get("fingerprints"))
-        if normalized != list(rule.get("fingerprints") or []):
+        normalized = _normalize_fingerprints(fingerprints)
+        if normalized != list(fingerprints):
             warnings.append(
-                "rule.fingerprints were normalized (lowercased, whitespace collapsed, "
-                "deduplicated, sorted) so the stored form matches the hashed form"
+                "rule.fingerprints were normalized (ASCII-lowercased, ASCII whitespace "
+                "collapsed, deduplicated, byte-sorted) so the stored form matches the "
+                "hashed form"
             )
         rule["fingerprints"] = normalized
         draft["rule"] = rule
@@ -587,7 +679,10 @@ def capture(
             "The shared corpus grants that status through review, not through capture."
         )
 
-    hash_value, hash_info = content_hash(draft, repo_root())
+    try:
+        hash_value, hash_info = content_hash(draft, repo_root())
+    except ValueError as exc:
+        raise CaptureRejected([str(exc)]) from exc
     supplied_hash = draft.get("content_hash")
     if supplied_hash and supplied_hash != hash_value:
         warnings.append(

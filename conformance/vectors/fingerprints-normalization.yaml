@@ -21,9 +21,9 @@ tests:
 - empty and whitespace-only items are dropped
 - output is sorted, regardless of input order
 notes: >-
-  Uses ASCII whitespace only. The spec does not define which characters count
-  as whitespace, and the kit does not pin that; see the ambiguity list in
-  conformance/README.md.
+  Uses ASCII whitespace and ASCII case only. Non-ASCII spaces, ASCII-only
+  lowercase of İ/É/Σ, and byte-wise fingerprint sort are pinned by dedicated
+  vectors rather than by this one.
 entry:
   uuid: 7a2994ea-57cc-4e86-9530-89b2b0604a21
   slug: vector-fingerprints-normalization

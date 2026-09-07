@@ -212,14 +212,15 @@ which makes the server drivable by hand.
 ## Known duplication
 
 `capture.py` reimplements the `content_hash` canonicalization specified in
-[docs/federation.md](../docs/federation.md) because `tools/canonical.py` did
-not exist when this package was written. The implementation prefers the tool
-when it is present: it probes a few CLI shapes with the entry JSON on stdin,
-uses the tool's hash when one comes back, and reports a `disagreement`
-warning if the tool and the fallback differ. Once `tools/canonical.py` has a
-stable interface, `builtin_content_hash` should be deleted and imported from
-there instead. `content_hash_source` in every capture result says which
-implementation produced the value.
+[docs/federation.md](../docs/federation.md) because the fallback must remain
+usable when `tools/canonical.py` is not installed beside the server. The
+implementation prefers the tool when it is present: it probes a few CLI
+shapes with the entry JSON on stdin, uses the tool's hash when one comes
+back, and reports a `disagreement` warning if the tool and the fallback
+differ. The fallback follows the same ratified rule (ASCII whitespace and
+lowercase, per-line trailing ASCII whitespace, no type coercion).
+`content_hash_source` in every capture result says which implementation
+produced the value.
 
 ## One thing schema v2 cannot express
 

@@ -112,21 +112,41 @@ def normalize_dates(obj: Any) -> Any:
 
 
 # --------------------------------------------------------------------------
-# canonicalization (docs/federation.md, "Idempotency", steps 1-5)
+# canonicalization (docs/federation.md, "Idempotency", steps 0-5)
 #
 # NOTE: this duplicates what tools/canonical.py is meant to own. It exists
 # because sync/ must not import from tools/ and cannot guess that tool's CLI.
 # It is pinned against examples/valid-entry.yaml by tests/test_sync_canonical.py
 # and should be collapsed onto tools/canonical.py once that CLI is stable.
+# Do not stringify fingerprint items, mapping keys, or numeric bounds.
+
+
+ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+_ASCII_WS_RUN = re.compile(r"[ \t\n\r\x0b\x0c]+")
+
+
+def _ascii_lower(value: str) -> str:
+    return value.translate(_ASCII_LOWER)
 
 
 def _norm_text(value: str) -> str:
-    return value.replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.rstrip(ASCII_WHITESPACE) for line in text.split("\n"))
+    return text.strip(ASCII_WHITESPACE)
 
 
 def _canon_strings(obj: Any) -> Any:
     if isinstance(obj, dict):
-        return {k: _canon_strings(v) for k, v in obj.items()}
+        out = {}
+        for key, sub in obj.items():
+            if not isinstance(key, str):
+                raise SyncError(
+                    f"mapping keys must be strings, got {type(key).__name__} {key!r}; "
+                    "canonicalization does not stringify keys"
+                )
+            out[key] = _canon_strings(sub)
+        return out
     if isinstance(obj, list):
         return [_canon_strings(v) for v in obj]
     if isinstance(obj, str):
@@ -134,22 +154,80 @@ def _canon_strings(obj: Any) -> Any:
     return obj
 
 
-def canonical_fingerprints(items: Iterable[Any]) -> list[str]:
+def _payload_type_error(value: Any, path: str, *, in_fingerprints: bool = False) -> str | None:
+    if isinstance(value, dict):
+        for key, sub in value.items():
+            if not isinstance(key, str):
+                return (
+                    f"{path}: mapping keys must be strings, got {type(key).__name__} "
+                    f"{key!r}; canonicalization does not stringify keys"
+                )
+            child = f"{path}.{key}"
+            if key == "fingerprints" and not isinstance(sub, list):
+                return (
+                    f"{child} must be a list of strings, got {type(sub).__name__}; "
+                    "canonicalization does not stringify fingerprint items"
+                )
+            err = _payload_type_error(sub, child, in_fingerprints=(key == "fingerprints"))
+            if err:
+                return err
+        return None
+    if isinstance(value, list):
+        if in_fingerprints:
+            for index, item in enumerate(value):
+                if not isinstance(item, str):
+                    return (
+                        f"{path}[{index}]: fingerprint items must be strings, got "
+                        f"{type(item).__name__} {item!r}; canonicalization does not "
+                        "stringify them"
+                    )
+            return None
+        for index, item in enumerate(value):
+            err = _payload_type_error(item, f"{path}[{index}]")
+            if err:
+                return err
+        return None
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return None
+    if isinstance(value, (int, float)):
+        return (
+            f"{path}: numeric value {value!r} is a {type(value).__name__} and is not "
+            "canonicalized; quote it as a string (canonicalization does not stringify types)"
+        )
+    return (
+        f"{path}: unsupported type {type(value).__name__}; "
+        "canonicalization does not coerce it"
+    )
+
+
+def canonical_fingerprints(items: Iterable[Any]) -> Any:
+    if not isinstance(items, list):
+        return items
     seen: set[str] = set()
     for item in items:
         if not isinstance(item, str):
-            item = str(item)
-        item = re.sub(r"\s+", " ", item.strip().lower())
+            return list(items)
+        item = _ASCII_WS_RUN.sub(" ", _ascii_lower(item).strip(ASCII_WHITESPACE))
         if item:
             seen.add(item)
-    return sorted(seen)
+    return sorted(seen, key=lambda s: s.encode("utf-8"))
 
 
 def canonical_payload(entry: dict) -> dict:
-    rule = _canon_strings(entry.get("rule", {}))
+    rule_in = entry.get("rule", {})
+    scope_in = entry.get("scope", {})
+    for label, node in (("rule", rule_in), ("scope", scope_in)):
+        if isinstance(node, dict):
+            err = _payload_type_error(node, label)
+            if err:
+                raise SyncError(err)
+    rule = _canon_strings(rule_in)
     if isinstance(rule, dict) and "fingerprints" in rule:
-        rule["fingerprints"] = canonical_fingerprints(entry["rule"].get("fingerprints") or [])
-    scope = _canon_strings(entry.get("scope", {}))
+        fps = None
+        if isinstance(entry.get("rule"), dict):
+            fps = entry["rule"].get("fingerprints")
+        rule["fingerprints"] = canonical_fingerprints(fps)
+    scope = _canon_strings(scope_in)
     return {"rule": rule, "scope": scope}
 
 

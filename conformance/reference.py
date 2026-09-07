@@ -41,33 +41,28 @@ import sys
 
 PAYLOAD_KEYS = ("rule", "scope")
 
-# The whitespace class used for stripping and for collapsing runs.
-#
-# AMBIGUITY: docs/federation.md says "whitespace" without defining it. Python's
-# `\s` and `str.strip()` are Unicode-aware (they eat NBSP, ideographic space,
-# U+2028 ...); a Go/Rust/JS implementation written from the same prose is very
-# likely to be ASCII-only. This file takes the ASCII-only reading, which is the
-# narrower of the two, and no vector contains non-ASCII whitespace.
+# Whitespace for steps 2 and 3 is exactly these six ASCII characters.
+# docs/federation.md names them: U+0009, U+000A, U+000B, U+000C, U+000D,
+# U+0020. A non-breaking space or an ideographic space is content.
 ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
+ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
 
 def normalize_line_endings(text: str) -> str:
     """Step 3, first half: CRLF and lone CR become LF."""
-    # AMBIGUITY: the prose says "normalize line endings to LF" and does not
-    # enumerate them. CRLF -> LF is beyond dispute; a lone CR is a line ending
-    # in the classic-Mac sense and is normalized here. Vector
-    # `line-endings-lone-cr` pins that reading on purpose so that a fork which
-    # disagrees fails loudly instead of diverging quietly.
+    # Lone CR is a line ending. Vector `line-endings-lone-cr` pins that.
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def normalize_string(text: str) -> str:
-    """Step 3: normalize line endings, strip the outer edges, reflow nothing."""
-    return normalize_line_endings(text).strip(ASCII_WHITESPACE)
+    """Step 3: LF endings, per-line trailing ASCII whitespace, then outer ASCII strip."""
+    text = normalize_line_endings(text)
+    text = "\n".join(line.rstrip(ASCII_WHITESPACE) for line in text.split("\n"))
+    return text.strip(ASCII_WHITESPACE)
 
 
 def collapse_whitespace(text: str) -> str:
-    """Collapse every run of whitespace to a single space (step 2 only)."""
+    """Collapse every run of ASCII whitespace to a single U+0020 (step 2 only)."""
     out: list[str] = []
     previous_was_space = False
     for char in text:
@@ -81,29 +76,26 @@ def collapse_whitespace(text: str) -> str:
     return "".join(out)
 
 
+def ascii_lower(text: str) -> str:
+    """Step 2: A–Z → a–z only. İ, É, Σ and so on are left unchanged."""
+    return text.translate(ASCII_LOWER)
+
+
 def normalize_fingerprints(items: list) -> list:
-    """Step 2: lowercase, strip, collapse runs, drop empties, dedup, sort."""
+    """Step 2: ASCII-lower, ASCII-strip, collapse runs, drop empties, dedup, byte-sort."""
     normalized = []
     for item in items:
         if not isinstance(item, str):
             # Non-strings are schema violations, not canonicalization
             # questions. Pass them through untouched so a hash mismatch is not
-            # mistaken for a normalization bug.
+            # mistaken for a normalization bug. Production CLIs reject them
+            # before publishing a hash.
             normalized.append(item)
             continue
-        # AMBIGUITY: str.lower() vs str.casefold() differ on e.g. "ß" and "İ".
-        # lower() is the narrower reading of "lowercase every item"; no vector
-        # contains a character where the two disagree.
-        text = collapse_whitespace(
-            normalize_line_endings(item).lower().strip(ASCII_WHITESPACE)
-        )
+        text = collapse_whitespace(ascii_lower(item).strip(ASCII_WHITESPACE))
         if text:
             normalized.append(text)
-    # AMBIGUITY: "sort" is taken as an ordinary code-point sort. Locale or
-    # Unicode-collation sorting would reorder non-ASCII fingerprints; the
-    # non-ASCII vector keeps its fingerprints in an order where both readings
-    # agree.
-    return sorted(set(normalized))
+    return sorted(set(normalized), key=lambda s: s.encode("utf-8"))
 
 
 def normalize_value(value, *, in_fingerprints: bool = False):
@@ -111,7 +103,7 @@ def normalize_value(value, *, in_fingerprints: bool = False):
     if isinstance(value, dict):
         # Keys are schema-fixed identifiers and are never normalized: the
         # schema's additionalProperties:false means an odd key is rejected
-        # rather than cleaned up.
+        # rather than cleaned up. Do not stringify a non-string key.
         return {
             key: normalize_value(sub, in_fingerprints=(key == "fingerprints"))
             for key, sub in value.items()
@@ -122,8 +114,10 @@ def normalize_value(value, *, in_fingerprints: bool = False):
         return [normalize_value(item) for item in value]
     if isinstance(value, str):
         return normalize_string(value)
-    # null / bool / numbers pass through: `range.min: null` is a real value and
-    # a numeric bound is a schema problem, not a hashing problem.
+    # null / bool pass through. A numeric bound is a schema problem: production
+    # hash CLIs reject it rather than stringifying. This file still passes it
+    # through so a vector author can see the JSON number, which is not a
+    # published hash.
     return value
 
 

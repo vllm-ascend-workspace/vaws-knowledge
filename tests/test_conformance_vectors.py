@@ -50,7 +50,22 @@ class CanonicalizationCoverage(unittest.TestCase):
         self.assertNotEqual(
             anchor["entry"]["status"], entry["status"], "the vector changed no status"
         )
-        self.assertNotIn("verification", entry)
+        self.assertNotEqual(
+            anchor["entry"]["verification"]["last_verified_at"],
+            entry["verification"]["last_verified_at"],
+            "the vector did not change a revalidation date",
+        )
+        self.assertNotEqual(
+            anchor["entry"]["verification"]["verified_by"],
+            entry["verification"]["verified_by"],
+            "the vector did not change a reviewer identity",
+        )
+        self.assertNotEqual(
+            anchor["entry"]["provenance"]["redaction_profile"],
+            entry["provenance"]["redaction_profile"],
+            "the vector did not change redaction_profile",
+        )
+        self.assertEqual("r99", entry["redaction_cleared_under"])
         self.assertNotEqual(anchor["entry"]["provenance"], entry["provenance"])
         self.assertNotEqual(anchor["entry"]["lifecycle"], entry["lifecycle"])
 
@@ -135,6 +150,67 @@ class CanonicalizationCoverage(unittest.TestCase):
         rule = self.by_id["rule-optional-keys-absent"]["entry"]["rule"]
         self.assertNotIn("avoidance", rule)
         self.assertNotIn("fingerprints", rule)
+
+    def test_nbsp_and_ideographic_space_are_preserved(self):
+        vector = self.by_id["non-ascii-whitespace-preserved"]
+        summary = vector["entry"]["rule"]["summary"]
+        self.assertIn("\u00a0", summary)
+        self.assertIn("\u3000", summary)
+        fingerprints = vector["entry"]["rule"]["fingerprints"]
+        self.assertTrue(any("\u00a0" in item for item in fingerprints))
+        self.assertTrue(any("\u3000" in item for item in fingerprints))
+        payload = vector["expected_payload"]
+        self.assertIn("\u00a0", payload)
+        self.assertIn("\u3000", payload)
+        self.assertIn('"c d"', payload)
+
+    def test_ascii_lowercase_preserves_non_ascii_letters(self):
+        fingerprints = self.by_id["ascii-lowercase-preserves-nonascii"]["entry"]["rule"][
+            "fingerprints"
+        ]
+        self.assertTrue(any("İ" in item for item in fingerprints))
+        self.assertTrue(any("É" in item for item in fingerprints))
+        self.assertTrue(any("Σ" in item for item in fingerprints))
+        payload = self.by_id["ascii-lowercase-preserves-nonascii"]["expected_payload"]
+        self.assertIn("abc İ É Σ", payload)
+        self.assertNotIn("i\u0307", payload)
+
+    def test_interior_line_trailing_whitespace_is_stripped_in_rule_prose(self):
+        summary = self.by_id["line-trailing-ascii-whitespace"]["entry"]["rule"]["summary"]
+        self.assertIn("  \n", summary)
+        payload = self.by_id["line-trailing-ascii-whitespace"]["expected_payload"]
+        self.assertIn("First line\\nSecond line", payload)
+        self.assertNotIn("First line  \\n", payload)
+
+    def test_interior_line_trailing_whitespace_is_stripped_in_nested_scope(self):
+        basis = self.by_id["nested-scope-line-trailing-whitespace"]["entry"]["scope"]["soc"][
+            "basis"
+        ]
+        self.assertIn("\t \n", basis)
+        values = self.by_id["nested-scope-line-trailing-whitespace"]["entry"]["scope"][
+            "topology"
+        ]["values"]
+        self.assertTrue(any("  \n  " in item for item in values))
+        payload = self.by_id["nested-scope-line-trailing-whitespace"]["expected_payload"]
+        self.assertIn("Synthetic first line\\nsecond line", payload)
+        self.assertIn("line one\\n  indented line two", payload)
+
+    def test_fingerprint_byte_order_is_utf8(self):
+        authored = self.by_id["fingerprint-byte-order"]["entry"]["rule"]["fingerprints"]
+        self.assertEqual(["я", "é", "z", "a"], authored)
+        payload = self.by_id["fingerprint-byte-order"]["expected_payload"]
+        self.assertIn('["a","z","é","я"]', payload)
+
+    def test_no_unicode_normalization_is_applied(self):
+        import unicodedata
+
+        vector = self.by_id["no-unicode-normalization"]
+        summary = vector["entry"]["rule"]["summary"]
+        self.assertNotEqual(unicodedata.normalize("NFC", summary), summary)
+        self.assertEqual(unicodedata.normalize("NFD", summary), summary)
+        payload = vector["expected_payload"]
+        self.assertIn("\u0301", payload)
+        self.assertNotEqual(unicodedata.normalize("NFC", payload), payload)
 
 
 class GateCoverage(unittest.TestCase):

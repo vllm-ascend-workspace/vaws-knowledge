@@ -36,7 +36,10 @@ class CanonicalHash(unittest.TestCase):
         e["slug"] = "renamed"
         e["lifecycle"]["updated_at"] = "2030-01-01"
         e["verification"]["last_verified_at"] = "2030-01-01"
+        e["verification"]["verified_by"] = ["example-revalidator"]
         e["provenance"]["origin_repo"] = "someone-else/fork"
+        e["provenance"]["redaction_profile"] = "r19"
+        e["redaction_cleared_under"] = "r99"
         e["confidence"] = "low"
         self.assertEqual(self.entry["content_hash"], _common.content_hash(e))
 
@@ -72,6 +75,39 @@ class CanonicalHash(unittest.TestCase):
         self.assertIn('"summary":"Ünïcode summary","symptom":"', s)
         self.assertIn('"],"resolution":"', s, "compact separators, keys sorted")
         self.assertIn('},"scope":{"cann":{', s)
+
+    def test_nbsp_is_content_and_ascii_lower_is_ascii_only(self):
+        e = copy.deepcopy(self.entry)
+        e["rule"]["summary"] = "\u00a0" + e["rule"]["summary"] + "\u3000"
+        e["rule"]["fingerprints"] = ["ABC İ É Σ", "A\u00a0B"]
+        payload = _common.canonical_payload(e)
+        self.assertTrue(payload["rule"]["summary"].startswith("\u00a0"))
+        self.assertEqual(
+            ["abc İ É Σ", "a\u00a0b"],
+            payload["rule"]["fingerprints"],
+        )
+
+    def test_per_line_trailing_ascii_whitespace_is_stripped_in_rule_and_scope(self):
+        e = copy.deepcopy(self.entry)
+        e["rule"]["summary"] = "First line  \nSecond line"
+        e["scope"]["soc"]["basis"] = "Synthetic first line\t \nsecond line"
+        payload = _common.canonical_payload(e)
+        self.assertEqual("First line\nSecond line", payload["rule"]["summary"])
+        self.assertEqual("Synthetic first line\nsecond line", payload["scope"]["soc"]["basis"])
+
+    def test_numeric_bound_is_rejected_not_stringified(self):
+        e = copy.deepcopy(self.entry)
+        e["scope"]["torch"]["range"]["min"] = 2.5
+        with self.assertRaises(_common.SyncError) as ctx:
+            _common.content_hash(e)
+        self.assertIn("2.5", str(ctx.exception))
+
+    def test_non_string_fingerprint_is_rejected_not_stringified(self):
+        e = copy.deepcopy(self.entry)
+        e["rule"]["fingerprints"] = [123]
+        with self.assertRaises(_common.SyncError) as ctx:
+            _common.content_hash(e)
+        self.assertIn("123", str(ctx.exception))
 
     def test_yaml_date_quoting_does_not_matter(self):
         # A producer that writes unquoted dates yields date objects on load;

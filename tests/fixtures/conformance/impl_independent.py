@@ -2,44 +2,59 @@
 """A second, independent implementation of the canonicalization.
 
 Written from docs/federation.md rather than from conformance/reference.py, and
-in a deliberately different style - regex-based collapsing, dict comprehension
-recursion, splitlines() for line endings. It exists so the test suite can show
-that the vectors are reproducible from the spec by someone who did not write
-the reference, which is the only interesting property a test fixture can have
-here.
+in a deliberately different style - translate-based ASCII lowercasing, an
+explicit UTF-8 sort key, split-on-LF after CR normalization. It exists so the
+test suite can show that the vectors are reproducible from the spec by someone
+who did not write the reference, which is the only interesting property a test
+fixture can have here.
 
 If this file and conformance/reference.py ever disagree, one of them has
-misread the spec and the spec is probably ambiguous. That is a finding, not a
-test failure to paper over.
+misread the spec.
 """
 
 import hashlib
 import json
-import re
 import sys
 
 import yaml
 
-WHITESPACE_RUN = re.compile(r"[ \t\n\r\x0b\x0c]+")
+ASCII_WS = " \t\n\r\x0b\x0c"
+ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
 
 def to_lf(text):
-    # splitlines() splits on CR, CRLF and LF (among others); joining with \n
-    # is the same normalization the reference does with two replaces.
-    return "\n".join(text.split("\r\n")).replace("\r", "\n")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def plain(text):
-    return to_lf(text).strip(" \t\n\r\x0b\x0c")
+    text = to_lf(text)
+    text = "\n".join(line.rstrip(ASCII_WS) for line in text.split("\n"))
+    return text.strip(ASCII_WS)
+
+
+def collapse_ascii_ws(text):
+    out = []
+    in_ws = False
+    for char in text:
+        if char in ASCII_WS:
+            if not in_ws:
+                out.append(" ")
+            in_ws = True
+        else:
+            out.append(char)
+            in_ws = False
+    return "".join(out)
 
 
 def fingerprints(items):
-    cleaned = {
-        WHITESPACE_RUN.sub(" ", plain(item.lower()))
-        for item in items
-        if isinstance(item, str)
-    }
-    return sorted(item for item in cleaned if item)
+    cleaned = set()
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        text = collapse_ascii_ws(item.translate(ASCII_LOWER).strip(ASCII_WS))
+        if text:
+            cleaned.add(text)
+    return sorted(cleaned, key=lambda s: s.encode("utf-8"))
 
 
 def walk(node, key=None):

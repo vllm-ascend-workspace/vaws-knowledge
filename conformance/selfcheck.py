@@ -16,9 +16,9 @@ What it proves:
   * every invariance group agrees on one hash;
   * the anchor vector still matches examples/valid-entry.yaml and the hash
     recorded there, when that file is present;
-  * no vector depends on a question docs/federation.md leaves open: no
-    non-ASCII whitespace, no string whose NFC and NFD forms differ, no
-    fingerprint where lower() and casefold() disagree;
+  * the kit still refuses a vector whose recorded payload is not what
+    the reference produces, so an NFC-composed expected payload cannot
+    silently replace an NFD input;
   * a vector survives the runner's own wire format unchanged;
   * every gate vector declares what is wrong with it, the declared bad value is
     really present, and it is drawn from a reserved documentation range rather
@@ -36,7 +36,6 @@ import json
 import pathlib
 import re
 import sys
-import unicodedata
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -126,20 +125,6 @@ def _load_yaml_module():
         )
         raise SystemExit(2) from None
     return yaml
-
-
-def _payload_strings(node, path="", in_fingerprints=False):
-    """Yield (path, string, in_fingerprints) for every string in a payload."""
-    if isinstance(node, dict):
-        for key, value in node.items():
-            yield from _payload_strings(
-                value, f"{path}.{key}", in_fingerprints=(key == "fingerprints")
-            )
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            yield from _payload_strings(value, f"{path}[{index}]", in_fingerprints)
-    elif isinstance(node, str):
-        yield path, node, in_fingerprints
 
 
 # --- canonicalization vectors ---------------------------------------------
@@ -253,32 +238,6 @@ def check_hash_vectors(problems: Problems) -> list:
             "entry.content_hash should be either the expected hash or the "
             f"all-zero placeholder, got {stored!r}",
         )
-
-        # No vector may depend on a question the spec leaves open.
-        for spath, text, in_fingerprints in _payload_strings(vector["entry"]):
-            for char in text:
-                if char.isspace() and char not in reference.ASCII_WHITESPACE:
-                    problems.check(
-                        False,
-                        where,
-                        f"{spath} contains non-ASCII whitespace U+{ord(char):04X}; "
-                        "the spec does not define the whitespace class",
-                    )
-                    break
-            problems.check(
-                unicodedata.normalize("NFC", text) == text
-                and unicodedata.normalize("NFD", text) == text,
-                where,
-                f"{spath} differs between NFC and NFD; the spec does not "
-                "specify a normalization form, so no vector may depend on one",
-            )
-            if in_fingerprints:
-                problems.check(
-                    text.lower() == text.casefold(),
-                    where,
-                    f"{spath} is a fingerprint where lower() and casefold() "
-                    "disagree; the spec says only 'lowercase'",
-                )
 
         # A vector must survive the runner's wire format unchanged.
         for fmt, dumped in (
