@@ -17,9 +17,14 @@ The contract is therefore a CLI one:
                     a hash mismatches - it is not itself a conformance
                     requirement.
 
-  gate command      reads one document on stdin, prints `accept` or `reject`
-                    on stdout. If it prints neither, exit status 0 is read as
-                    accept and non-zero as reject.
+  gate command      reads one document on stdin, prints one verdict token
+                    (`accept` or `reject`, or an unambiguous documented
+                    alias) on stdout, and nothing else. Acceptance requires
+                    exit 0 plus an accept token. Rejection requires exit 0
+                    or 1 plus a reject token. Exit status alone is never a
+                    verdict: a crash, a missing command, a timeout, or
+                    malformed stdout is a protocol failure (FAIL), not
+                    reject.
 
   export command    reads one document on stdin, writes the exported bytes on
                     stdout. Run twice per vector and compared byte for byte.
@@ -28,7 +33,7 @@ Usage:
 
     python3 conformance/runner.py --hash-cmd "python3 tools/canonical.py"
     python3 conformance/runner.py --hash-cmd "..." --payload-cmd "... --payload"
-    python3 conformance/runner.py --schema-cmd "python3 tools/validate.py --stdin"
+    python3 conformance/runner.py --schema-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py schema"
     python3 conformance/runner.py --list
 
 Exit status: 0 if everything run passed, 1 if any vector failed, 2 for a usage
@@ -40,8 +45,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 
@@ -53,6 +60,11 @@ HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 ACCEPT_TOKENS = {"accept", "accepted", "ok", "pass", "passed", "valid", "clean"}
 REJECT_TOKENS = {"reject", "rejected", "refuse", "refused", "fail", "failed", "invalid"}
+
+# Surrounding ASCII whitespace around a verdict token is ignored. Unicode
+# space (NBSP, etc.) is not, so a token wrapped in it is malformed.
+ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
+STDERR_LIMIT = 240
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 
@@ -128,22 +140,47 @@ def encode_input(payload, fmt: str) -> bytes:
     return text.encode("utf-8")
 
 
+class CommandResult:
+    """Outcome of one implementation command.
+
+    `code` is the process exit status when the process completed, or None
+    if it did not (timeout or spawn failure). Partial stdout from a
+    timeout is retained so the gate interpreter can prove it is ignored.
+    """
+
+    def __init__(self, code, stdout, stderr, failure=None):
+        self.code = code
+        self.stdout = stdout
+        self.stderr = stderr
+        self.failure = failure  # None | "timeout" | "oserror"
+
+
 def run_command(command: str, stdin_bytes: bytes, timeout: float):
-    """Run one implementation command. Returns (exit_code, stdout, stderr)."""
+    """Run one implementation command. Returns a CommandResult."""
     try:
-        proc = subprocess.run(  # noqa: S602 - a command supplied by the caller
+        proc = subprocess.Popen(  # noqa: S602 - a command supplied by the caller
             command,
             shell=True,
-            input=stdin_bytes,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        return None, b"", f"command timed out after {timeout}s".encode()
     except OSError as exc:
-        return None, b"", str(exc).encode()
-    return proc.returncode, proc.stdout, proc.stderr
+        return CommandResult(None, b"", str(exc).encode(), "oserror")
+    try:
+        stdout, stderr = proc.communicate(input=stdin_bytes, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=1)
+        except Exception:
+            stdout, stderr = b"", b""
+        return CommandResult(None, stdout or b"", stderr or b"", "timeout")
+    return CommandResult(proc.returncode, stdout, stderr)
 
 
 def first_line(data: bytes) -> str:
@@ -152,6 +189,19 @@ def first_line(data: bytes) -> str:
         if line:
             return line
     return ""
+
+
+def bounded_stderr(err: bytes) -> str:
+    """One diagnostic line from stderr; never dump a document or traceback."""
+    text = err.decode("utf-8", "replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    # A Python traceback's useful line is the exception, not "Traceback…".
+    chosen = lines[-1] if lines[0].startswith("Traceback ") else lines[0]
+    if len(chosen) > STDERR_LIMIT:
+        return chosen[:STDERR_LIMIT] + "..."
+    return chosen
 
 
 # --- reporting -------------------------------------------------------------
@@ -210,14 +260,21 @@ class Report:
 def run_hash_vectors(vectors, report, hash_cmd, payload_cmd, fmt, timeout):
     for vector in vectors:
         stdin_bytes = encode_input(vector["entry"], fmt)
-        code, out, err = run_command(hash_cmd, stdin_bytes, timeout)
+        result = run_command(hash_cmd, stdin_bytes, timeout)
+        code, out, err = result.code, result.stdout, result.stderr
         expected = str(vector["expected_content_hash"]).strip()
         actual = first_line(out)
         details = []
+        if result.failure == "timeout":
+            details.append(f"      command timed out after {timeout}s")
+            if err.strip():
+                details.append(f"      stderr: {bounded_stderr(err)}")
+            report.record(FAIL, vector["id"], vector["title"], details)
+            continue
         if code is None or code != 0:
             details.append(f"      command exited {code}")
             if err.strip():
-                details.append(f"      stderr: {first_line(err)}")
+                details.append(f"      stderr: {bounded_stderr(err)}")
             report.record(FAIL, vector["id"], vector["title"], details)
             continue
         if not HASH_RE.match(actual):
@@ -233,7 +290,8 @@ def run_hash_vectors(vectors, report, hash_cmd, payload_cmd, fmt, timeout):
         details.append(f"      expected {expected}")
         details.append(f"      actual   {actual}")
         if payload_cmd:
-            pcode, pout, perr = run_command(payload_cmd, stdin_bytes, timeout)
+            payload = run_command(payload_cmd, stdin_bytes, timeout)
+            pcode, pout, perr = payload.code, payload.stdout, payload.stderr
             if pcode == 0:
                 details.extend(
                     payload_diff(
@@ -243,7 +301,7 @@ def run_hash_vectors(vectors, report, hash_cmd, payload_cmd, fmt, timeout):
                 )
             else:
                 details.append(
-                    f"      payload command exited {pcode}: {first_line(perr)}"
+                    f"      payload command exited {pcode}: {bounded_stderr(perr)}"
                 )
         else:
             details.append(
@@ -256,16 +314,87 @@ def run_hash_vectors(vectors, report, hash_cmd, payload_cmd, fmt, timeout):
 # --- gate vectors ----------------------------------------------------------
 
 
-def read_verdict(code, out, err):
-    """Map a gate command's output to accept / reject, or None if unreadable."""
-    token = first_line(out).split()[0].lower().rstrip(":.,") if first_line(out) else ""
+def parse_verdict_token(stdout: bytes):
+    """Return (accept|reject|None, error-reason-or-None).
+
+    Surrounding ASCII whitespace and an optional trailing newline are
+    ignored. Extra prose, extra lines, or a non-token are malformed.
+    """
+    try:
+        text = stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "malformed stdout (not utf-8)"
+    stripped = text.strip(ASCII_WHITESPACE)
+    if not stripped:
+        return None, "no verdict token"
+    if any(char in ASCII_WHITESPACE for char in stripped):
+        return None, "malformed stdout (not a single verdict token)"
+    token = stripped.lower()
     if token in ACCEPT_TOKENS:
-        return "accept"
+        return "accept", None
     if token in REJECT_TOKENS:
-        return "reject"
+        return "reject", None
+    shown = token if len(token) <= 40 else token[:40] + "..."
+    return None, f"malformed stdout (unknown token {shown!r})"
+
+
+def _protocol_details(reason, result):
+    details = [f"      gate execution/protocol failure: {reason}"]
+    if result.code is not None:
+        details.append(f"      exit: {result.code}")
+    err_line = bounded_stderr(result.stderr)
+    if err_line:
+        details.append(f"      stderr: {err_line}")
+    return details
+
+
+def interpret_gate(result: CommandResult):
+    """Return (verdict, details). verdict is None on protocol failure."""
+    if result.failure == "timeout":
+        return None, _protocol_details("timed out before completing", result)
+    if result.failure == "oserror":
+        return None, _protocol_details("could not be started", result)
+    code = result.code
     if code is None:
-        return None
-    return "accept" if code == 0 else "reject"
+        return None, _protocol_details("did not complete", result)
+    if code < 0:
+        return None, _protocol_details(
+            f"terminated by signal {-code}", result
+        )
+    # A shell reports a signaled child as 128+sig rather than a negative
+    # wait status. That is still termination, not a semantic verdict.
+    if 128 < code <= 159:
+        return None, _protocol_details(
+            f"terminated by signal {code - 128} (exit {code})", result
+        )
+    if code in (126, 127):
+        return None, _protocol_details(
+            f"exit {code} (command not found or not executable)", result
+        )
+    if code > 1:
+        return None, _protocol_details(
+            f"exit {code} is not a semantic verdict", result
+        )
+    token, parse_err = parse_verdict_token(result.stdout)
+    if token is None:
+        return None, _protocol_details(parse_err, result)
+    if token == "accept" and code != 0:
+        return None, _protocol_details(
+            f"accept token with exit {code} (accept requires exit 0)", result
+        )
+    return token, []
+
+
+def read_verdict(code, out, err, *, timed_out=False, os_error=False):
+    """Map a completed gate run to accept / reject, or None on failure.
+
+    Exit status is never itself a verdict. A token emitted before
+    timeout or termination is ignored: pass timed_out=True, or pass
+    code=None, and the result is None even if stdout looks like reject.
+    """
+    failure = "timeout" if timed_out else ("oserror" if os_error else None)
+    verdict, _details = interpret_gate(CommandResult(code, out, err, failure))
+    return verdict
 
 
 def run_gate_vectors(vectors, report, commands, fmt, timeout):
@@ -285,15 +414,23 @@ def run_gate_vectors(vectors, report, commands, fmt, timeout):
             first = run_command(command, stdin_bytes, timeout)
             second = run_command(command, stdin_bytes, timeout)
             details = []
-            for index, (code, _out, err) in enumerate((first, second), start=1):
-                if code is None or code != 0:
-                    details.append(f"      run {index} exited {code}")
-                    if err.strip():
-                        details.append(f"      stderr: {first_line(err)}")
+            for index, run in enumerate((first, second), start=1):
+                if run.failure == "timeout":
+                    details.append(f"      run {index} timed out")
+                    if run.stderr.strip():
+                        details.append(
+                            f"      stderr: {bounded_stderr(run.stderr)}"
+                        )
+                elif run.code is None or run.code != 0:
+                    details.append(f"      run {index} exited {run.code}")
+                    if run.stderr.strip():
+                        details.append(
+                            f"      stderr: {bounded_stderr(run.stderr)}"
+                        )
             if details:
                 report.record(FAIL, vector["id"], vector["title"], details)
                 continue
-            if first[1] == second[1]:
+            if first.stdout == second.stdout:
                 report.record(PASS, vector["id"], vector["title"])
                 continue
             report.record(
@@ -302,43 +439,39 @@ def run_gate_vectors(vectors, report, commands, fmt, timeout):
                 vector["title"],
                 [
                     "      two exports of the same document differ",
-                    f"      run 1: {len(first[1])} bytes, "
-                    f"run 2: {len(second[1])} bytes",
+                    f"      run 1: {len(first.stdout)} bytes, "
+                    f"run 2: {len(second.stdout)} bytes",
                 ]
                 + payload_diff(
-                    first[1].decode("utf-8", "replace"),
-                    second[1].decode("utf-8", "replace"),
+                    first.stdout.decode("utf-8", "replace"),
+                    second.stdout.decode("utf-8", "replace"),
                 ),
             )
             continue
 
-        code, out, err = run_command(command, stdin_bytes, timeout)
-        verdict = read_verdict(code, out, err)
+        result = run_command(command, stdin_bytes, timeout)
+        verdict, details = interpret_gate(result)
         if verdict is None:
-            report.record(
-                FAIL,
-                vector["id"],
-                vector["title"],
-                [f"      gate command could not be run: {first_line(err)}"],
-            )
+            report.record(FAIL, vector["id"], vector["title"], details)
             continue
         if verdict == expected:
             report.record(PASS, vector["id"], vector["title"])
             continue
-        details = [f"      expected verdict {expected}, got {verdict}"]
+        mismatch = [f"      expected verdict {expected}, got {verdict}"]
         if vector.get("offending"):
-            details.append(
+            mismatch.append(
                 f"      declared offending value: "
                 f"{vector['offending'].get('class')} at "
                 f"{vector['offending'].get('location')}"
             )
         if vector.get("violation"):
-            details.append(
+            mismatch.append(
                 f"      declared violation: {vector['violation'].get('rule')}"
             )
-        if err.strip():
-            details.append(f"      stderr: {first_line(err)}")
-        report.record(FAIL, vector["id"], vector["title"], details)
+        err_line = bounded_stderr(result.stderr)
+        if err_line:
+            mismatch.append(f"      stderr: {err_line}")
+        report.record(FAIL, vector["id"], vector["title"], mismatch)
 
 
 # --- CLI -------------------------------------------------------------------
@@ -414,7 +547,8 @@ def main(argv=None) -> int:
         _die(
             "nothing to run. Give at least one implementation command, e.g.\n"
             "  --hash-cmd \"python3 tools/canonical.py\"\n"
-            "  --schema-cmd \"python3 tools/validate.py --stdin\"\n"
+            "  --schema-cmd \"python3 tests/fixtures/conformance/"
+            "gate_tools_adapter.py schema\"\n"
             "Run --list to see the vector inventory, or --help for the contract."
         )
 

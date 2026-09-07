@@ -43,8 +43,8 @@ recognised; give the ones you have.
 |---|---|---|
 | `--hash-cmd` | one entry | `sha256:<64 hex>` |
 | `--payload-cmd` | one entry | the canonical JSON payload (optional, for diffs) |
-| `--redaction-cmd` | one document | `accept` or `reject` |
-| `--schema-cmd` | one document | `accept` or `reject` |
+| `--redaction-cmd` | one document | one verdict token: `accept` or `reject` |
+| `--schema-cmd` | one document | one verdict token: `accept` or `reject` |
 | `--export-cmd` | one document | the exported bytes |
 
 Details:
@@ -52,16 +52,36 @@ Details:
 - An entry arrives as a YAML mapping by default; pass
   `--input-format entry-json` if JSON is easier. Documents arrive as
   `document-yaml` by default, `--gate-format document-json` otherwise.
-- stderr is ignored, so log freely. stdout is a machine contract: the first
-  non-empty line is the answer.
-- A gate that prints neither verdict word is read by exit status — `0` is
-  accept, non-zero is reject — so an existing validator that just exits
-  non-zero can be wired in without changes.
+- Hash/export stderr is ignored, so those commands may log freely. Gate
+  stderr is not a verdict; a protocol failure report may include one
+  bounded line of it. Do not write the input document or secrets there.
+- Gate stdout is a machine contract: exactly one verdict token. Surrounding
+  ASCII whitespace and an optional trailing newline are ignored. Extra
+  prose, extra lines, or a non-token is a protocol failure, not a parse
+  hint. Documented spellings are `accept` and `reject`. Unambiguous aliases
+  already recognised by the runner remain: `accepted` / `ok` / `pass` /
+  `passed` / `valid` / `clean` for accept, and `rejected` / `refuse` /
+  `refused` / `fail` / `failed` / `invalid` for reject.
+- **Compatibility break.** Exit status is never itself a verdict. An
+  adapter that only exits 0/1, or that exits non-zero because it could not
+  start, used to make every negative vector PASS. That guessing is gone and
+  there is no flag that restores it. Gate acceptance requires a completed
+  process, exit 0, and an explicit accept token. Gate rejection requires a
+  completed process, exit 0 or 1, and an explicit reject token. Exit 0
+  with `reject` stays legal (simple adapters). Exit 1 with `reject` stays
+  legal (the bundled schema fixture). No token, malformed stdout,
+  contradictory token/exit pairs, exit 2 or higher, command-not-found
+  126/127, signal termination, timeout, and spawn failure are
+  execution/protocol failures. They FAIL the row even when the vector
+  expected `reject`. A token printed before a timeout is not a completed
+  result.
 - `--export-cmd` is run **twice per vector** and the two stdout byte strings
   are compared. The kit stores no expected export output: the corpus file
   format is your business, its stability is the federation's business.
-- Exit status: `0` everything run passed, `1` a vector failed, `2` a usage or
-  vector-loading problem.
+- Exit status of the runner itself is unchanged: `0` everything run
+  passed, `1` a vector failed, `2` a usage or vector-loading problem.
+  Vector classes with no command stay SKIP; an unconfigured gate is not
+  PASS.
 
 Examples:
 
@@ -71,7 +91,16 @@ python3 conformance/runner.py \
   --hash-cmd "python3 tools/canonical.py" \
   --payload-cmd "python3 tools/canonical.py --payload"
 
-# a fork's own client, in any language
+# schema / redaction: tools/validate.py and tools/redact.py take a file
+# path and return a structured result; they are not gate commands. The
+# adapter below maps a *completed* ValidationResult / findings list onto
+# one token and prints no token if the tool never returns that result:
+python3 conformance/runner.py \
+  --schema-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py schema" \
+  --redaction-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py redaction"
+
+# a fork's own client, in any language — the client must print accept or
+# reject; do not wrap an exit-only validator without an adapter
 python3 conformance/runner.py \
   --hash-cmd "./my-fork-client hash --stdin" \
   --schema-cmd "./my-fork-client validate --stdin" \
@@ -81,6 +110,32 @@ python3 conformance/runner.py \
 python3 conformance/runner.py --list
 python3 conformance/runner.py --hash-cmd "..." --only fingerprints
 ```
+
+The adapter recipe (`tests/fixtures/conformance/gate_tools_adapter.py`) is
+the one this repository uses against the real tools:
+
+1. Read the document from stdin and write it to a temporary `.yaml` file
+   — that is the input format `tools/validate.py` and `tools/redact.py`
+   actually support. They do not read stdin, and they do not accept `-`
+   as a file.
+2. Call the Python API on that path: `tools.validate.validate_paths` or
+   `tools.redact.scan_file`. Do not wrap the CLI and guess from its exit
+   status. A process that exits 1 because `jsonschema` raised during
+   import has not validated anything.
+3. Print `accept` only when that call returns a completed
+   `ValidationResult` with `ok` true, or a findings list that is empty.
+   Print `reject` only when it returns `ValidationResult.ok` false, or a
+   non-empty findings list. Forward finding text on stderr, never on
+   stdout.
+4. If import, `RuntimeError`, `OSError`, `ToolError`, or any other
+   exception occurs before a structured result is returned, print no
+   token and exit non-zero. The runner records that as a protocol
+   failure. A function that never returns cannot authorize `reject`.
+
+A copy-paste adapter that shells out to `tools/validate.py --stdin`,
+passes `-` as a filename, or maps any CLI exit 1 onto `reject` is the
+failure mode this contract exists to close. Do not add a "legacy"
+guess-from-exit flag.
 
 A failure prints the expected and actual hash, and — if `--payload-cmd` is
 available — the character offset where your canonical payload first diverges
