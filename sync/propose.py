@@ -248,10 +248,12 @@ def render_commit_message(proposal: Proposal) -> str:
 
 @dataclasses.dataclass
 class PullRequestResult:
-    status: str  # created | exists | nothing-to-propose | failed
+    status: str  # created | exists | nothing-to-propose | failed | conflicts
     branch: str | None = None
     url: str | None = None
     detail: str = ""
+    plan: dict | None = None
+    conflicts: list | None = None
 
 
 def _run(runner: Runner, cmd: list[str], cwd: pathlib.Path | None = None) -> subprocess.CompletedProcess:
@@ -259,6 +261,13 @@ def _run(runner: Runner, cmd: list[str], cwd: pathlib.Path | None = None) -> sub
     if proc.returncode != 0:
         raise SyncError(f"command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stdout}{proc.stderr}")
     return proc
+
+
+def _plan_payload(plan: Plan | None) -> tuple[dict | None, list]:
+    if plan is None:
+        return None, []
+    conflicts = [item.to_public() for item in plan.by_action("conflict") + plan.by_action("duplicate-candidate")]
+    return plan.to_public(), conflicts
 
 
 def existing_pull_request(runner: Runner, repo: pathlib.Path, branch: str) -> str | None:
@@ -307,19 +316,42 @@ def open_pull_request(
         plan = compute_plan([load_export(p) for p in exports], corpus, day=day)
         proposal = build_proposal(plan, corpus, allow_duplicate_candidates=allow_duplicate_candidates)
         log(render_plan(plan))
+        public_plan, plan_conflicts = _plan_payload(plan)
         if proposal.is_empty:
-            return PullRequestResult(status="nothing-to-propose", detail="every entry is a no-op or unapplied")
+            status = "conflicts" if plan_conflicts else "nothing-to-propose"
+            detail = (
+                "planner reported conflicts or duplicate candidates; nothing written"
+                if plan_conflicts
+                else "every entry is a no-op or unapplied"
+            )
+            return PullRequestResult(
+                status=status,
+                detail=detail,
+                plan=public_plan,
+                conflicts=plan_conflicts,
+            )
 
         written = apply_proposal(proposal, corpus)
         result_gates = run_result_gates(tools, written, runner=runner)
         if not all(g.ok for g in result_gates):
-            return PullRequestResult(status="failed", detail=gates_summary(result_gates))
+            return PullRequestResult(
+                status="failed",
+                detail=gates_summary(result_gates),
+                plan=public_plan,
+                conflicts=plan_conflicts,
+            )
 
         branch = proposal.branch_name()
         url = existing_pull_request(runner, repo, branch)
         if url:
-            return PullRequestResult(status="exists", branch=branch, url=url,
-                                     detail="an open PR for this exact proposal already exists")
+            return PullRequestResult(
+                status="exists",
+                branch=branch,
+                url=url,
+                detail="an open PR for this exact proposal already exists",
+                plan=public_plan,
+                conflicts=plan_conflicts,
+            )
 
         _run(runner, ["git", "checkout", "-b", branch], cwd=worktree)
         _run(runner, ["git", "add", "--", *[str(p.relative_to(worktree)) for p in written]], cwd=worktree)
@@ -342,7 +374,13 @@ def open_pull_request(
                  "--title", render_pr_title(proposal), "--body-file", str(body_path)],
                 cwd=repo,
             )
-        return PullRequestResult(status="created", branch=branch, url=(proc.stdout or "").strip())
+        return PullRequestResult(
+            status="created",
+            branch=branch,
+            url=(proc.stdout or "").strip(),
+            plan=public_plan,
+            conflicts=plan_conflicts,
+        )
     finally:
         runner(["git", "worktree", "remove", str(worktree)], cwd=str(repo))
 

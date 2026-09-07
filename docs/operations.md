@@ -44,7 +44,8 @@ fakes and **zero** live network:
 - model advisory cannot approve or promote
 - verified-only publish with manifest verification
 - workflow names, triggers, permissions and checkout boundaries
-- successful-export-only handoff; always-present sanitized result
+- successful-export-only handoff via isolated current-success directory and manifest
+- proposal mode reports the existing proposer's fresh-main plan, not a stale local preview
 - incompatible same-uuid/hash metadata reported, not coalesced
 - public retrieval bindings and planner conflict outcomes
 - advisory selected-blob failure is unavailable with zero provider calls

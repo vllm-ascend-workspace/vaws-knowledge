@@ -188,6 +188,7 @@ class PermissionBoundaries(unittest.TestCase):
         self.assertIn("GitHub-required approval", self.collect_text)
         self.assertIn("collect-handoff", self.collect_text)
         self.assertIn("--handoff-dir", self.collect_text)
+        self.assertIn("CURRENT_SUCCESS_DIR", self.collect_text)
         self.assertNotIn("name: collect-exports", self.collect_text)
 
     def test_secret_bearing_advisory_job_does_not_checkout_pr_code(self):

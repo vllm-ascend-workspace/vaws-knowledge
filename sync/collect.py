@@ -11,7 +11,7 @@ fetched bytes, and never treats a GitHub blob as contributor identity or
 technical truth.
 
     python3 sync/collect.py --mode preview --stash /tmp/vaws-collect --json coverage.json
-    python3 sync/collect.py --mode propose --from-exports /tmp/vaws-collect/exports
+    python3 sync/collect.py --mode propose --from-exports /tmp/vaws-collect/handoff/success/<token>
 
 Preview never calls git/gh write APIs. Propose reuses sync/plan.py and
 sync/propose.py (no --skip-gates / --drop-undeclared / --allow-duplicate-candidates).
@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import pathlib
+import secrets
 import shutil
 import sys
 import urllib.error
@@ -1238,9 +1239,8 @@ def write_deduped_exports(unique: Sequence[Observation], stash: pathlib.Path) ->
             continue
         by_kind.setdefault(item.kind or "known-failure-signatures", []).append(item)
     paths: list[pathlib.Path] = []
-    out_dir = stash / "exports" / "deduped"
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
+    token = secrets.token_hex(8)
+    out_dir = stash / "exports" / "assembled" / token
     out_dir.mkdir(parents=True, exist_ok=True)
     for kind, group in sorted(by_kind.items()):
         entries = [dict(item.entry) for item in group if item.entry is not None]
@@ -1305,36 +1305,21 @@ def propose_exports(
             "gates": [{"name": g.name, "status": g.status} for g in gates],
         }
     corpus_dir = pathlib.Path(repo) / "corpus"
-    plan = compute_plan([load_export(p) for p in export_paths], load_corpus(corpus_dir), day=day)
-    proposal_obj = build_proposal(plan, load_corpus(corpus_dir), allow_duplicate_candidates=False)
-    conflicts = _plan_conflicts(plan)
+    local_plan = compute_plan([load_export(p) for p in export_paths], load_corpus(corpus_dir), day=day)
+    local_conflicts = _plan_conflicts(local_plan)
     planned = {
-        "conflicts": conflicts,
-        "plan": plan.to_public(),
+        "conflicts": local_conflicts,
+        "plan": local_plan.to_public(),
         "pr_ci": PR_CI_NOTE,
+        "plan_source": "local-checkout",
     }
     if mode != "propose":
-        status = "preview"
         detail = "preview mode never writes branches or pull requests"
-        if conflicts:
-            status = "preview"
-            detail = "preview; planner reported conflicts or duplicate candidates"
+        if local_conflicts:
+            detail = "preview; planner reported conflicts or duplicate candidates against the local checkout"
         return {
             **planned,
-            "status": status,
-            "wrote": False,
-            "detail": detail,
-        }
-    if proposal_obj.is_empty:
-        status = "conflicts" if conflicts else "nothing-to-propose"
-        detail = (
-            "planner reported conflicts or duplicate candidates; nothing written"
-            if conflicts
-            else "every entry is a no-op or unapplied"
-        )
-        return {
-            **planned,
-            "status": status,
+            "status": "preview",
             "wrote": False,
             "detail": detail,
         }
@@ -1353,11 +1338,23 @@ def propose_exports(
     try:
         result = opener(list(export_paths), **opener_kwargs)
     except TypeError:
-        opener_kwargs.pop("central_collection")
+        opener_kwargs.pop("central_collection", None)
         result = opener(list(export_paths), **opener_kwargs)
+    fresh_plan = getattr(result, "plan", None)
+    fresh_conflicts = getattr(result, "conflicts", None)
+    if fresh_plan is not None:
+        planned = {
+            "conflicts": list(fresh_conflicts or []),
+            "plan": fresh_plan,
+            "pr_ci": PR_CI_NOTE,
+            "plan_source": "fresh-main",
+        }
+    status = result.status
+    if status == "nothing-to-propose" and planned["conflicts"]:
+        status = "conflicts"
     return {
         **planned,
-        "status": result.status,
+        "status": status,
         "wrote": result.status == "created",
         "branch": result.branch,
         "url": result.url,
@@ -1394,24 +1391,36 @@ def public_coverage(result: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+CURRENT_SUCCESS_MANIFEST = "current-success.json"
+
+
 def write_handoff(handoff_dir: pathlib.Path, public: Mapping[str, Any], export_paths: Sequence[pathlib.Path]) -> None:
-    """Write this run's sanitized result and only currently successful exports."""
+    """Write this run's sanitized result and an isolated current-success export dir.
+
+    Prior generated files are not removed. Downstream jobs must read only the
+    directory named in current-success.json; assembled/failed staging is not
+    current successful output.
+    """
     handoff_dir = pathlib.Path(handoff_dir)
-    exports = handoff_dir / "exports"
-    if exports.exists():
-        shutil.rmtree(exports)
-    exports.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_hex(8)
+    relative = f"success/{token}"
+    dest = handoff_dir / "success" / token
+    dest.mkdir(parents=True, exist_ok=True)
+    names = []
     for path in export_paths:
-        shutil.copy2(path, exports / pathlib.Path(path).name)
-    (handoff_dir / "result.json").write_text(json_dumps(public), encoding="utf-8")
-
-
-def _discard_assembled_exports(paths: Sequence[pathlib.Path]) -> None:
-    for path in paths:
-        try:
-            pathlib.Path(path).unlink()
-        except FileNotFoundError:
-            continue
+        name = pathlib.Path(path).name
+        shutil.copy2(path, dest / name)
+        names.append(name)
+    manifest = {
+        "directory": relative,
+        "files": names,
+        "eligible": bool(names),
+    }
+    (handoff_dir / CURRENT_SUCCESS_MANIFEST).write_text(json_dumps(manifest), encoding="utf-8")
+    (handoff_dir / "CURRENT_SUCCESS_DIR").write_text(relative + "\n", encoding="utf-8")
+    payload = dict(public)
+    payload["current_success"] = manifest
+    (handoff_dir / "result.json").write_text(json_dumps(payload), encoding="utf-8")
 
 
 def run_collection(
@@ -1525,7 +1534,8 @@ def run_collection(
         gates = run_source_gates(tools_dir, export_paths, runner=runner, skip=False)
         if not all(gate.ok for gate in gates):
             _record(coverage_buckets["rejected"], reason="mandatory_gates_failed")
-            _discard_assembled_exports(export_paths)
+            # Leave failed assembled YAML in the isolated assembled token
+            # directory; it is not current successful handoff output.
             export_paths = []
     eligible_count = sum(1 for item in unique if item.classification == "eligible")
     proposal = propose_exports(

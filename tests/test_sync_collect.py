@@ -526,18 +526,37 @@ class CollectControls(synctest.SyncTestCase):
         (fault / "jsonschema.py").write_text('raise RuntimeError("assembled-document validator crash")\n')
 
         def runner(cmd, **kw):
-            if any("/exports/deduped/" in str(x) for x in cmd) and any(str(x).endswith("/validate.py") for x in cmd):
+            if any("/exports/assembled/" in str(x) for x in cmd) and any(str(x).endswith("/validate.py") for x in cmd):
                 env = dict(os.environ)
                 env["PYTHONPATH"] = str(fault)
                 return subprocess.run(cmd, **kw, env=env, text=True, capture_output=True)
             return synctest._common.default_runner(cmd, **kw)
 
-        result = self._run(mode="preview", runner=runner)
-        retained = [p for p in (self.stash / "exports" / "deduped").rglob("*") if p.is_file()]
-        self.assertEqual([], retained, retained)
+        handoff = self.stash / "handoff"
+        result = self._run(mode="preview", runner=runner, handoff_dir=handoff)
         self.assertEqual([], result["export_paths"])
         self.assertTrue(any(item.get("reason") == "mandatory_gates_failed" for item in result["coverage"]["rejected"]))
         self.assertEqual([], self.pr_calls)
+        manifest = json.loads((handoff / "current-success.json").read_text(encoding="utf-8"))
+        self.assertEqual([], manifest["files"])
+        success_dir = handoff / manifest["directory"]
+        self.assertEqual([], list(success_dir.glob("*.yaml")))
+        assembled = [p for p in (self.stash / "exports" / "assembled").rglob("*.yaml") if p.is_file()]
+        self.assertTrue(assembled, "failed assembled YAML stays isolated, not current success")
+
+    def test_current_success_manifest_ignores_prior_generated_files(self):
+        handoff = self.stash / "handoff"
+        stale = handoff / "success" / "oldtoken" / "stale.yaml"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("stale-not-current\n", encoding="utf-8")
+        result = self._run(mode="preview", handoff_dir=handoff)
+        self.assertEqual(0, result["eligible_count"])
+        manifest = json.loads((handoff / "current-success.json").read_text(encoding="utf-8"))
+        self.assertEqual([], manifest["files"])
+        success_dir = handoff / manifest["directory"]
+        self.assertEqual([], list(success_dir.glob("*.yaml")))
+        self.assertTrue(stale.is_file())
+        self.assertNotEqual(stale.parent.resolve(), success_dir.resolve())
 
 
 class CollectProposeIdempotency(synctest.SyncTestCase):
@@ -635,6 +654,78 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
             check=True,
         )
         self.assertNotIn("Changed verified claim.", show.stdout)
+
+    def test_fresh_main_verified_conflict_uses_proposer_plan(self):
+        e = self.new_entry("fresh-main")
+        export = self.make_export([e])
+        verified = dict(e)
+        verified["status"] = "verified"
+        verified["confidence"] = "high"
+        verified["verification"] = self.entry(synctest.UUID_VERIFIED)["verification"]
+        verified["rule"] = dict(e["rule"], resolution=e["rule"]["resolution"] + " already on origin main")
+        verified["content_hash"] = _common.content_hash(verified)
+        remote_repo = self.tmp / "advance-main"
+        subprocess.run(["git", "clone", "--quiet", str(self.remote), str(remote_repo)], check=True, capture_output=True)
+        dest = remote_repo / "corpus" / "verified" / "known-failure-signatures.yaml"
+        doc = _common.load_yaml(dest)
+        doc["entries"].append(verified)
+        dest.write_text(_common.dump_yaml(doc), encoding="utf-8")
+        subprocess.run(["git", "-C", str(remote_repo), "add", "-A"], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=collect-test",
+                "-c",
+                "user.email=collect-test@example.invalid",
+                "-C",
+                str(remote_repo),
+                "commit",
+                "--quiet",
+                "-m",
+                "verified candidate on origin main",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(["git", "-C", str(remote_repo), "push", "--quiet", "origin", "main"], check=True, capture_output=True)
+        local_plan = collect_mod.compute_plan(
+            [_common.load_export(export)],
+            collect_mod.load_corpus(self.repo / "corpus"),
+            day="2026-09-10",
+        )
+        self.assertEqual("new", local_plan.items[0].action)
+        result = collect_mod.propose_exports(
+            [export],
+            repo=self.repo,
+            tools_dir=synctest.REPO / "tools",
+            mode="propose",
+            runner=self.runner,
+            open_pr=lambda *a, **k: propose_mod.open_pull_request(*a, **{**k, "runner": self.runner}),
+        )
+        actions = [item["action"] for item in (result.get("plan") or {}).get("items", [])]
+        self.assertNotEqual(["new"], actions, result)
+        self.assertTrue(result.get("conflicts") or "conflict" in actions, result)
+        self.assertEqual("fresh-main", result.get("plan_source"), result)
+        self.assertFalse(result["wrote"])
+        self.assertEqual([], [c for c in self.gh_calls if c[1:3] == ["pr", "create"]])
+
+    def test_fresh_main_noop_uses_proposer_plan(self):
+        export = self.make_export([self.entry(synctest.UUID_UNVERIFIED)])
+        result = collect_mod.propose_exports(
+            [export],
+            repo=self.repo,
+            tools_dir=synctest.REPO / "tools",
+            mode="propose",
+            runner=self.runner,
+            open_pr=lambda *a, **k: propose_mod.open_pull_request(*a, **{**k, "runner": self.runner}),
+        )
+        self.assertEqual("nothing-to-propose", result["status"], result)
+        actions = [item["action"] for item in (result.get("plan") or {}).get("items", [])]
+        self.assertEqual(["no-op"], actions, result)
+        self.assertEqual("fresh-main", result.get("plan_source"), result)
+        self.assertFalse(result["wrote"])
+        self.assertEqual([], [c for c in self.gh_calls if c[1:3] == ["pr", "create"]])
 
     def test_central_collection_pr_body_does_not_claim_source_side_scan(self):
         export = self.make_export([self.new_entry("central-body")])

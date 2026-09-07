@@ -119,10 +119,13 @@ jobs:
         run: |
           set -euo pipefail
           stash="${RUNNER_TEMP}/vaws-collect-propose"
-          mkdir -p "$stash" collect-handoff/exports
+          mkdir -p "$stash"
+          success_rel=$(cat collect-handoff/CURRENT_SUCCESS_DIR)
+          success_dir="collect-handoff/${success_rel}"
+          mkdir -p "$success_dir"
           python3 sync/collect.py \
             --mode propose \
-            --from-exports collect-handoff/exports \
+            --from-exports "$success_dir" \
             --stash "$stash" \
             --json propose-result.json
           test -s propose-result.json
@@ -165,11 +168,13 @@ jobs:
       - name: Advisory triage of gated exports
         run: |
           set -euo pipefail
-          mkdir -p collect-handoff/exports
+          success_rel=$(cat collect-handoff/CURRENT_SUCCESS_DIR)
+          success_dir="collect-handoff/${success_rel}"
+          mkdir -p "$success_dir"
           files=()
           while IFS= read -r f; do
             files+=("$f")
-          done < <(find collect-handoff/exports -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+          done < <(find "$success_dir" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
           if [ ${#files[@]} -eq 0 ]; then
             printf '%s\n' '{"advisory":true,"status":"unavailable","reason":"no eligible input","provider":{"called":false},"notes":["Unavailable is not a successful semantic review."]}' > collect-advisory.json
           else
