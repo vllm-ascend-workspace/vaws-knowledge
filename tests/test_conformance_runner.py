@@ -477,6 +477,27 @@ class RealToolAdapter(unittest.TestCase):
         )
         self.assertEqual("PASS", status_of(result.stdout, "redaction-ipv4"))
 
+    def test_validator_crash_does_not_pass_a_negative_vector(self):
+        # The adapter must invoke the real tools/validate.py API. Shadowing
+        # jsonschema with a module that raises on import crashes that API
+        # before ValidationResult exists. That is not a semantic reject.
+        if not (REPO / "tools" / "validate.py").is_file():
+            self.skipTest("tools/validate.py is not in this checkout")
+        fault = FIXTURES / "fault_jsonschema"
+        cmd = (
+            "env PYTHONPATH="
+            + shlex.quote(str(fault))
+            + " "
+            + impl("gate_tools_adapter.py", "schema")
+        )
+        result = run_runner("--schema-cmd", cmd, "--only", REJECT_VECTOR)
+        combined = result.stdout + result.stderr
+        self.assertEqual(1, result.returncode, combined)
+        self.assertEqual("FAIL", status_of(result.stdout, REJECT_VECTOR), combined)
+        self.assertNotEqual("PASS", status_of(result.stdout, REJECT_VECTOR), combined)
+        self.assertIn("execution/protocol failure", result.stdout)
+        self.assertNotIn("1416a279-1215-4adf-a978-82b40a3be0bc", combined)
+
 
 if __name__ == "__main__":
     unittest.main()

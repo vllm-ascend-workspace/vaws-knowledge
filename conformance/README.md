@@ -92,9 +92,9 @@ python3 conformance/runner.py \
   --payload-cmd "python3 tools/canonical.py --payload"
 
 # schema / redaction: tools/validate.py and tools/redact.py take a file
-# path, print findings, and use exit 0 (clean), 1 (findings), 2 (usage).
-# They are not gate commands. Map that structured result onto one token
-# and propagate anything else without a token:
+# path and return a structured result; they are not gate commands. The
+# adapter below maps a *completed* ValidationResult / findings list onto
+# one token and prints no token if the tool never returns that result:
 python3 conformance/runner.py \
   --schema-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py schema" \
   --redaction-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py redaction"
@@ -115,19 +115,27 @@ The adapter recipe (`tests/fixtures/conformance/gate_tools_adapter.py`) is
 the one this repository uses against the real tools:
 
 1. Read the document from stdin and write it to a temporary `.yaml` file
-   — that is the input format `tools/validate.py` and
-   `tools/redact.py --check` actually support. They do not read stdin, and
-   they do not accept `-` as a file.
-2. Invoke the tool on that path. Capture its stdout (findings) onto the
-   adapter's stderr so it cannot be mistaken for a verdict token.
-3. Exit 0 from the tool → print `accept` and exit 0. Exit 1 → print
-   `reject` and exit 1. Any other exit, a spawn failure, or a signal →
-   print no token and propagate that status, which the runner records as a
-   protocol failure.
+   — that is the input format `tools/validate.py` and `tools/redact.py`
+   actually support. They do not read stdin, and they do not accept `-`
+   as a file.
+2. Call the Python API on that path: `tools.validate.validate_paths` or
+   `tools.redact.scan_file`. Do not wrap the CLI and guess from its exit
+   status. A process that exits 1 because `jsonschema` raised during
+   import has not validated anything.
+3. Print `accept` only when that call returns a completed
+   `ValidationResult` with `ok` true, or a findings list that is empty.
+   Print `reject` only when it returns `ValidationResult.ok` false, or a
+   non-empty findings list. Forward finding text on stderr, never on
+   stdout.
+4. If import, `RuntimeError`, `OSError`, `ToolError`, or any other
+   exception occurs before a structured result is returned, print no
+   token and exit non-zero. The runner records that as a protocol
+   failure. A function that never returns cannot authorize `reject`.
 
-A copy-paste adapter that shells out to `tools/validate.py --stdin` or
-passes `-` as a filename is the failure mode this contract exists to
-close. Do not add a "legacy" guess-from-exit flag.
+A copy-paste adapter that shells out to `tools/validate.py --stdin`,
+passes `-` as a filename, or maps any CLI exit 1 onto `reject` is the
+failure mode this contract exists to close. Do not add a "legacy"
+guess-from-exit flag.
 
 A failure prints the expected and actual hash, and — if `--payload-cmd` is
 available — the character offset where your canonical payload first diverges
