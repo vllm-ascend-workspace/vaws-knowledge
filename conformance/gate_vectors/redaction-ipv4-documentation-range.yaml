@@ -1,0 +1,122 @@
+# SYNTHETIC BAD VALUES - THIS FILE EXISTS TO BE REJECTED.
+#
+# Every address, hostname, path, e-mail and credential-shaped string in
+# conformance/gate_vectors/ is invented for the purpose of being refused by a
+# conforming gate. None of it came from a real machine, a real account or a
+# real deployment. The addresses are RFC 5737 documentation ranges, the
+# hostnames end in .invalid (RFC 2606), and the credentials are the string
+# EXAMPLE repeated. A bulk redaction scan of this repository should treat this
+# directory as expected-fail fixtures, not as a leak.
+#
+# An IPv4 address from a documentation range - the contested case.
+#
+# 192.0.2.13 is inside 192.0.2.0/24, RFC 5737 TEST-NET-1. CONTRIBUTING.md says
+# "IP addresses" without qualification, so on the literal reading this must be
+# refused, and that is what this vector pins.
+#
+# A reasonable implementation disagrees: an address that can never route
+# discloses nothing, so exempting the documentation ranges costs no privacy
+# and keeps synthetic examples usable. tools/redact.py on the parallel
+# source-side-gate branch does exactly that, and therefore fails this vector
+# and only this one.
+#
+# The disagreement is a specification question, not a bug in either side. It
+# is recorded in conformance/README.md; a gate that exempts reserved ranges
+# should run the kit with that exemption disabled, or record this vector as a
+# reasoned deviation with the reason attached.
+#
+id: redaction-ipv4-documentation-range
+gate: redaction
+expected_verdict: reject
+title: An IPv4 address from a documentation range must also be refused (contested)
+spec: CONTRIBUTING.md - Submit only what you are free to publish
+contested: true
+offending:
+  class: ipv4
+  value: 192.0.2.13
+  location: document.entries[0].rule.symptom
+  synthetic_source: RFC 5737 TEST-NET-1 documentation range
+notes: >-
+  Pinned on the literal reading of CONTRIBUTING.md. See "Where the
+  specification is ambiguous" in conformance/README.md before changing an
+  implementation to satisfy it.
+document:
+  schema_version: 2
+  kind: known-failure-signatures
+  layer: unverified
+  updated_at: '2026-09-07'
+  entries:
+  - uuid: 1416a279-1215-4adf-a978-82b40a3be0bc
+    slug: example-container-hostname-missing-from-etc-hosts
+    content_hash: sha256:cbba8793f37d777a84f9e850afe4700bb4ac6fd4e537176be2e280a831498910
+    status: unverified
+    confidence: low
+    scope:
+      soc:
+        any: true
+        basis: The failure is in hostname resolution inside the container image, which happens before
+          any device is opened; reproduced on two SoC generations.
+      cann:
+        any: true
+        basis: Resolution happens in the gloo store before CANN is initialised, so no CANN code path is
+          involved.
+      driver:
+        any: true
+        basis: No driver interaction occurs on this path; the process fails before device open.
+      python_abi:
+        any: true
+        basis: The defect is in container /etc/hosts content, not in any compiled extension.
+      torch:
+        range:
+          min: 2.5.0
+          max: null
+      torch_npu:
+        any: true
+        basis: The failing call is torch.distributed gloo hostname resolution, which torch_npu does not
+          override.
+      vllm:
+        range:
+          min: 0.9.0
+          max: null
+      vllm_ascend:
+        any: true
+        basis: Triggered by the container image, not by plugin code; observed across several plugin revisions.
+      model:
+        any: true
+        basis: Occurs during distributed init, before any weights are read.
+      topology:
+        values:
+        - tp2
+        - tp4
+        - tp8
+        - tp16
+      execution_mode:
+        any: true
+        basis: Failure precedes graph capture and eager execution alike.
+      component:
+        values:
+        - service-bootstrap
+    provenance:
+      contributor: anonymous
+      origin_repo: vllm-ascend-workspace/vaws-knowledge
+      submitted_at: '2026-09-07'
+      redaction_profile: r1
+    lifecycle:
+      first_seen: '2026-09-07'
+      updated_at: '2026-09-07'
+      superseded_by: null
+      resolved_by: null
+    rule:
+      summary: Distributed init fails because the container does not resolve its own hostname
+      symptom: 'The service never becomes reachable: the health probe against 192.0.2.13:8000 times out
+        while the process is still initialising.'
+      root_cause: Fresh containers do not map their own hostname in /etc/hosts. The gloo store resolves
+        the local hostname at init and fails when it does not resolve to an address.
+      resolution: Map the container hostname to a loopback address in /etc/hosts before starting the service,
+        and enforce it in container bootstrap so every new container is correct on first launch.
+      avoidance: Do not start by tuning gloo or HCCL interface environment variables. Check hostname resolution
+        first; in this container family it is the root cause and the environment variables are a distraction.
+      fingerprints:
+      - gloo makedeviceforhostname
+      - name or service not known hostname
+      - torch.distributed gloo init failed container
