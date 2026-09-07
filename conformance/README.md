@@ -266,11 +266,14 @@ implementation.
 **Adjacent ambiguities this kit does not cover.**
 
 12. **Invalid types are not hash vectors.** `docs/federation.md` step 0 is
-    validate-first: a YAML `min: 2.5` is a float, and canonicalization must
-    not stringify it into a published hash. The knowledge tools/server/sync
-    paths reject that class of input at the entry/CLI boundary. There is no
-    hash vector for it, because a successful `sha256:` for a schema-invalid
-    entry would be the wrong verdict.
+    validate-first. `tools/canonical.py` runs the existing schema
+    structural/type checks (and the numeric-version walk) before printing a
+    hash or payload. It does not require the stored `content_hash` to already
+    match, so a stale derived hash on a schema-valid claim can still be
+    recomputed. A raw empty fingerprint string is a CLI reject (`minLength: 1`);
+    kit vectors that need "normalizes to empty" use nonempty ASCII-whitespace
+    strings instead. There is no hash vector for a schema-invalid type, because
+    a successful `sha256:` for that input would be the wrong verdict.
 13. **"near-identical `rule`"** in the duplicate-detection rule is undefined,
     so two bots will disagree about which entries are duplicate candidates.
     That is bot behaviour rather than canonicalization, so there is no vector
@@ -295,8 +298,8 @@ blanket-regenerating hashes.
 | `anchor-valid-entry` | the recorded hash of `examples/valid-entry.yaml`; all three constraint forms |
 | `anchor-metadata-mutated` | step 1: status, confidence, slug, provenance (including `redaction_profile`), lifecycle, revalidation (`verification.last_verified_at`, `verified_by`, evidence), `redaction_cleared_under` and the stored `content_hash` field are all excluded |
 | `anchor-key-order-scrambled` | input mapping order and fingerprint order are irrelevant |
-| `fingerprints-normalization` | step 2 in full for ASCII: case, edges, internal runs, dedup after normalization, empties, sort |
-| `fingerprints-all-empty` | a fingerprint list that normalizes to `[]` keeps its key |
+| `fingerprints-normalization` | step 2 in full for ASCII: case, edges, internal runs, dedup after normalization, empties, sort. Raw `""` was replaced with nonempty ASCII-whitespace-only items so the fixture is schema-valid (`minLength: 1`); they still drop, so the expected hash is unchanged |
+| `fingerprints-all-empty` | a fingerprint list that normalizes to `[]` keeps its key. Inputs are nonempty ASCII-whitespace-only strings, not raw `""`, for the same schema reason; expected hash unchanged |
 | `line-endings-crlf` | CRLF → LF, in rule prose and in a scope basis |
 | `line-endings-lone-cr` | a bare CR is a line ending too |
 | `outer-whitespace-and-no-reflow` | edges stripped everywhere, including `scope`; interiors untouched |

@@ -6,8 +6,11 @@
 # after case folding and whitespace collapsing. An implementation that
 # de-duplicates before normalizing keeps all three and diverges.
 #
-# The input list is also deliberately out of order, and contains an empty
-# string and a whitespace-only string.
+# The input list is also deliberately out of order, and contains
+# ASCII-whitespace-only items. A raw empty string is schema-invalid
+# (minLength=1) and is a CLI reject, not a hash vector; whitespace-only
+# strings are schema-valid and still drop under step 2, so the expected
+# hash is unchanged.
 #
 # Synthetic fixture content. Not knowledge. Do not cite.
 id: fingerprints-normalization
@@ -62,7 +65,7 @@ entry:
     - "gloo\tmakeDeviceForHostname"
     - 'gloo    makedeviceforhostname'
     - 'Name or service   not known hostname'
-    - ''
+    - ' '
     - '   '
 expected_payload: |-
   {"rule":{"fingerprints":["gloo makedeviceforhostname","name or service not known hostname","zz trailing case test"],"resolution":"Normalize fingerprints at export time exactly as federation.md step 2 specifies.","root_cause":"Fingerprints were captured verbatim from log output, so case and spacing vary between captures of the same signature.","summary":"Fixture entry for fingerprint normalization","symptom":"Retrieval matching misses a known signature because fingerprints were stored unnormalized."},"scope":{"cann":{"values":["0.0.EXAMPLE"]},"component":{"values":["service-bootstrap"]},"driver":{"values":["0.0.example"]},"execution_mode":{"values":["eager"]},"model":{"any":true,"basis":"Fixture vector; independence asserted for shape only."},"python_abi":{"values":["cpython-311-example"]},"soc":{"values":["ExampleSoC-A"]},"topology":{"values":["tp8"]},"torch":{"range":{"max":null,"min":"2.5.0"}},"torch_npu":{"values":["2.5.1.example"]},"vllm":{"range":{"max":null,"min":"0.9.0"}},"vllm_ascend":{"any":true,"basis":"Fixture vector; independence asserted for shape only."}}}

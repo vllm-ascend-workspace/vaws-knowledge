@@ -83,7 +83,7 @@ class CanonicalizationRules(unittest.TestCase):
             "  Torch.Distributed   gloo init FAILED container ",
             "gloo makedeviceforhostname",
             "GLOO MAKEDEVICEFORHOSTNAME",  # duplicate after lowercasing
-            "",
+            "",  # schema-invalid at the CLI; low-level helper still drops it
             "   ",
             "name or\tservice not known hostname",
         ]
@@ -185,6 +185,95 @@ class CanonicalizationRules(unittest.TestCase):
         with self.assertRaises(ToolError) as ctx:
             canonical.content_hash(e)
         self.assertIn("stringify", str(ctx.exception))
+
+
+class CliValidateFirstTests(unittest.TestCase):
+    """The public CLI must use schema types before printing a hash.
+
+    Low-level helpers are not a validation shortcut. A stale stored
+    content_hash on a schema-valid claim must still recompute.
+    """
+
+    def setUp(self):
+        self.doc = load_yaml(EXAMPLE_ENTRY)
+
+    def _write_json(self, tmp, name, doc):
+        path = tmp / name
+        path.write_text(json.dumps(doc, ensure_ascii=False) + "\n", encoding="utf-8")
+        return path
+
+    def _run_cli(self, path, *extra):
+        return run_tool("canonical", str(path), *extra)
+
+    def test_valid_document_prints_the_anchor(self):
+        with TempDir() as tmp:
+            path = self._write_json(tmp, "valid.json", self.doc)
+            proc = self._run_cli(path)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(ANCHOR_HASH, proc.stdout)
+        self.assertNotIn("sha256:", proc.stderr)
+
+    def test_float_bound_is_rejected_with_no_hash(self):
+        self.doc["entries"][0]["scope"]["torch"]["range"]["min"] = 2.5
+        with TempDir() as tmp:
+            proc = self._run_cli(self._write_json(tmp, "float_bound.json", self.doc))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("sha256:", proc.stdout)
+        self.assertIn("2.5", proc.stderr)
+
+    def test_bool_bound_is_rejected_with_no_hash(self):
+        self.doc["entries"][0]["scope"]["torch"]["range"]["min"] = True
+        with TempDir() as tmp:
+            proc = self._run_cli(self._write_json(tmp, "bool_bound.json", self.doc))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("sha256:", proc.stdout)
+
+    def test_null_summary_is_rejected_with_no_hash(self):
+        self.doc["entries"][0]["rule"]["summary"] = None
+        with TempDir() as tmp:
+            proc = self._run_cli(self._write_json(tmp, "null_summary.json", self.doc))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("sha256:", proc.stdout)
+
+    def test_array_basis_is_rejected_with_no_hash(self):
+        self.doc["entries"][0]["scope"]["soc"]["basis"] = ["synthetic basis"]
+        with TempDir() as tmp:
+            proc = self._run_cli(self._write_json(tmp, "array_basis.json", self.doc))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("sha256:", proc.stdout)
+
+    def test_bool_summary_is_rejected_with_no_hash(self):
+        self.doc["entries"][0]["rule"]["summary"] = True
+        with TempDir() as tmp:
+            proc = self._run_cli(self._write_json(tmp, "bool_summary.json", self.doc))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("sha256:", proc.stdout)
+
+    def test_empty_fingerprint_is_rejected_with_no_hash(self):
+        self.doc["entries"][0]["rule"]["fingerprints"] = [""]
+        with TempDir() as tmp:
+            proc = self._run_cli(self._write_json(tmp, "empty_fingerprint.json", self.doc))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("sha256:", proc.stdout)
+
+    def test_payload_flag_is_also_refused_for_invalid_types(self):
+        self.doc["entries"][0]["rule"]["summary"] = True
+        with TempDir() as tmp:
+            proc = self._run_cli(self._write_json(tmp, "bool_summary.json", self.doc), "--payload")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn('"rule":', proc.stdout)
+        self.assertNotIn("sha256:", proc.stdout)
+
+    def test_stale_hash_on_a_changed_valid_claim_is_recomputed(self):
+        entry = self.doc["entries"][0]
+        entry["rule"]["summary"] += " (reworded)"
+        stale = entry["content_hash"]
+        with TempDir() as tmp:
+            proc = self._run_cli(self._write_json(tmp, "stale_hash.json", self.doc))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("sha256:", proc.stdout)
+        self.assertNotIn(stale, proc.stdout)
+        self.assertNotIn("regenerate", proc.stderr)
 
 
 if __name__ == "__main__":

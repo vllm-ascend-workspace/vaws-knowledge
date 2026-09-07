@@ -1,8 +1,11 @@
 # Conformance vector: a fingerprint list that normalizes to nothing.
 #
-# Every item is empty or whitespace-only, so step 2 drops all of them. The
-# question the spec does not answer is what happens to the key: step 2 says to
-# drop empties, and says nothing about dropping the now-empty list.
+# Every item is nonempty ASCII-whitespace-only (schema minLength=1 forbids a
+# raw empty string at the public CLI boundary), so step 2 still drops all of
+# them. The expected hash is unchanged: whitespace-only strings normalize to
+# the same empties as the former raw "" item. The question the spec does not
+# answer is what happens to the key: step 2 says to drop empties, and says
+# nothing about dropping the now-empty list.
 #
 # This vector pins the literal reading - the key stays, with an empty array -
 # because the alternative (silently removing the key) would make an entry with
@@ -51,7 +54,7 @@ entry:
     root_cause: A capture template left the fingerprint slots blank and the exporter did not drop them.
     resolution: Drop empty fingerprints at export and keep the key so the shape stays stable.
     fingerprints:
-    - ''
+    - ' '
     - '   '
     - "\t"
 expected_payload: |-

@@ -8,10 +8,11 @@ every federated sync becomes a revision storm.
 
 The steps, restated from the contract so that a deviation is visible in review:
 
-0. Validate first. Never coerce types: a YAML ``min: 2.5`` is a float, a
-   non-string fingerprint item is not a signature, and a non-string mapping
-   key is not a schema field. Reject those at this CLI and at any caller that
-   would otherwise publish a hash.
+0. Validate first. The CLI runs the existing schema structural/type checks
+   (via ``tools.validate``) before printing a hash or payload. It does not
+   require the stored ``content_hash`` to already match, so a stale derived
+   hash can still be recomputed. Low-level helpers still refuse to stringify
+   types; they are not a public validation shortcut.
 1. Take only ``scope`` and ``rule``. Nothing else.
 2. ``rule.fingerprints``: lowercase ASCII letters only, strip leading and
    trailing ASCII whitespace, collapse internal runs of ASCII whitespace to
@@ -46,6 +47,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tools._common import (  # noqa: E402
+    EXIT_FINDINGS,
     EXIT_OK,
     ToolError,
     iter_corpus_files,
@@ -231,8 +233,25 @@ def main(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Import lazily: tools.validate imports this module at load time.
+    from tools import validate  # noqa: PLC0415
+
+    loaded: list[tuple[Path, Any]] = []
+    problems: list[Any] = []
     for path in iter_corpus_files(args.paths):
         doc = load_document(path)
+        problems.extend(validate.structural_type_problems(doc, relpath(path)))
+        loaded.append((path, doc))
+    if problems:
+        for problem in problems:
+            print(problem.render(), file=sys.stderr)
+        print(
+            "canonical: refusing to publish a hash or payload for schema-invalid input",
+            file=sys.stderr,
+        )
+        return EXIT_FINDINGS
+
+    for path, doc in loaded:
         for index, entry in enumerate(_entries_of(doc)):
             label = entry.get("uuid", f"entries[{index}]") if isinstance(entry, Mapping) else f"entries[{index}]"
             if args.payload:
