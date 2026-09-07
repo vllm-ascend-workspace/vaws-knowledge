@@ -17,6 +17,18 @@ import sys
 
 import yaml
 
+# The documentation ranges are exempt per CONTRIBUTING.md. A gate that refuses
+# them refuses the fixtures that prove it works, which is why the rule was
+# resolved in the tool's favour rather than the prose's. Note that reserved is
+# not the same as exempt: RFC 2544 benchmarking space (198.18.0.0/15) is
+# reserved and still refused, because it does turn up in real internal networks.
+ALLOWED = (
+    re.compile(r"\b192\.0\.2\.\d{1,3}\b"),  # RFC 5737 TEST-NET-1
+    re.compile(r"\b198\.51\.100\.\d{1,3}\b"),  # RFC 5737 TEST-NET-2
+    re.compile(r"\b203\.0\.113\.\d{1,3}\b"),  # RFC 5737 TEST-NET-3
+    re.compile(r"\b127\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),  # loopback
+)
+
 PATTERNS = {
     "ipv4": re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b"),
     "email": re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
@@ -52,7 +64,10 @@ def main():
         for name, pattern in PATTERNS.items():
             match = pattern.search(text)
             if match:
-                findings.append(f"{name}: {match.group(0)}")
+                found = match.group(0)
+                if name == "ipv4" and any(a.fullmatch(found) for a in ALLOWED):
+                    continue
+                findings.append(f"{name}: {found}")
     if findings:
         print("reject")
         for finding in findings:

@@ -8,38 +8,46 @@
 # EXAMPLE repeated. A bulk redaction scan of this repository should treat this
 # directory as expected-fail fixtures, not as a leak.
 #
-# An IPv4 address from a documentation range - the contested case.
+# An IPv4 address from a documentation range - resolved: this one is allowed.
 #
-# 192.0.2.13 is inside 192.0.2.0/24, RFC 5737 TEST-NET-1. CONTRIBUTING.md says
-# "IP addresses" without qualification, so on the literal reading this must be
-# refused, and that is what this vector pins.
+# 192.0.2.13 is inside 192.0.2.0/24, RFC 5737 TEST-NET-1.
 #
-# A reasonable implementation disagrees: an address that can never route
-# discloses nothing, so exempting the documentation ranges costs no privacy
-# and keeps synthetic examples usable. tools/redact.py on the parallel
-# source-side-gate branch does exactly that, and therefore fails this vector
-# and only this one.
+# This vector was originally written as expected_verdict: reject, pinning the
+# literal reading of CONTRIBUTING.md, which banned "IP addresses" without
+# qualification. It was marked contested because tools/redact.py exempted the
+# documentation ranges, so it was the one vector the real implementation
+# failed.
 #
-# The disagreement is a specification question, not a bug in either side. It
-# is recorded in conformance/README.md; a gate that exempts reserved ranges
-# should run the kit with that exemption disabled, or record this vector as a
-# reasoned deviation with the reason attached.
+# The dispute was decided in the implementation's favour: an address that can
+# never route discloses nothing, and fixtures that prove the screening works
+# need a rejectable value to feed it. CONTRIBUTING.md now states the exemption
+# explicitly and docs/decisions.md records the reasoning. The general point was
+# that a rule disagreeing with its own enforcement is worse than either
+# alternative, because readers follow the prose and tools follow the code.
+#
+# So the verdict is flipped and the vector now pins the exemption rather than
+# the literal reading. Its complement, redaction-ipv4, uses 198.18.7.42 from
+# the RFC 2544 benchmarking range, which is deliberately **not** exempt because
+# that space does appear in real internal networks - so the kit still holds a
+# rejecting IPv4 vector, and the two together pin exactly where the line sits.
 #
 id: redaction-ipv4-documentation-range
 gate: redaction
-expected_verdict: reject
-title: An IPv4 address from a documentation range must also be refused (contested)
-spec: CONTRIBUTING.md - Submit only what you are free to publish
-contested: true
-offending:
+expected_verdict: accept
+title: An IPv4 address from a documentation range is permitted
+spec: CONTRIBUTING.md - Submit only what you are free to publish (one exemption)
+permitted:
   class: ipv4
   value: 192.0.2.13
   location: document.entries[0].rule.symptom
   synthetic_source: RFC 5737 TEST-NET-1 documentation range
 notes: >-
-  Pinned on the literal reading of CONTRIBUTING.md. See "Where the
-  specification is ambiguous" in conformance/README.md before changing an
-  implementation to satisfy it.
+  Formerly contested and pinned on the literal reading, with 192.0.2.13
+  declared as an offending value. Resolved in favour of the exemption, so the
+  address is now declared under `permitted` instead: an accept vector must not
+  claim a defect, since `offending` means "the thing the gate has to catch".
+  See docs/decisions.md for the reasoning, and redaction-ipv4 for the reserved
+  range that is still refused.
 document:
   schema_version: 2
   kind: known-failure-signatures
