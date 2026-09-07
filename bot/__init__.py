@@ -7,6 +7,7 @@ run only ever permits an entry into ``corpus/unverified/``.
 
 Every module in this package is runnable both as ``python3 bot/<mod>.py`` and
 as ``python3 -m bot.<mod>``, and prints machine-readable JSON with ``--json``.
+``triage_grok`` is an optional advisory adapter and cannot establish truth.
 """
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "report",
     "similarity",
     "staleness",
+    "triage_grok",
     "versions",
 ]

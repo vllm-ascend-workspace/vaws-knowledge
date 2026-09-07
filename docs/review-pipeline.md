@@ -124,6 +124,47 @@ useful at spotting candidates and cannot be trusted to establish truth, so it is
 wired where being wrong produces a false candidate for a human to dismiss,
 rather than a false verdict for a human to believe.
 
+## Optional advisory Grok adapter
+
+`bot/triage_grok.py` is an optional, call-capable helper. It is not part of the
+deterministic gate verdict and is not invoked by the pull-request workflow.
+
+It freezes the selected input bytes first, then runs the existing `load`,
+`schema`, and `redaction` gates against that snapshot, and only then may call
+a configured xAI Chat Completions endpoint. The snapshot mapping keeps the
+physical `corpus/verified` and `corpus/unverified` path context the schema
+gate already uses, and directory freeze includes the YAML/YML/JSON files those
+CLIs discover; provider entry discovery remains the bot's YAML set. Selected
+symbolic links and visible linked members are refused before that mapping;
+ordinary files reached only through a platform parent alias are not. The
+advisory artifact binds the snapshot bytes as well as the selected
+UUID/`content_hash` set. `XAI_API_KEY`
+and `XAI_MODEL` must be explicitly present in the environment; this repository
+does not ship them. Missing configuration, a failed mandatory gate, no eligible
+input, or a provider/parse failure is `unavailable` / `error`, never a
+successful semantic review. Corpus prose is sent as untrusted data. The adapter
+does not register tools.
+
+Output is a separate advisory JSON artifact. A successful empty `candidates`
+list is distinct from `unavailable` / `error`. `--asserted-out` writes the
+existing `--asserted` pair format for an explicit later handoff; the adapter
+does not feed itself into `bot/report.py`, does not mutate gate JSON, and
+cannot mark an entry verified. Offline fixture tests do not establish live
+Grok quality or a deployed GitHub review.
+
+```
+python3 bot/triage_grok.py \
+  --source-repo owner/vaws-knowledge \
+  --source-ref <commit> \
+  --json advisory.json \
+  --asserted-out asserted.json \
+  corpus examples
+
+python3 bot/report.py --mode pr corpus examples --asserted asserted.json
+```
+
+The second command is an explicit handoff. Gate results remain authoritative.
+
 ## Policy is tracked, not configured in CI
 
 The staleness horizon and the supported-version window live in `bot/policy.yaml`
