@@ -20,6 +20,9 @@ What it proves:
     the reference produces, so an NFC-composed expected payload cannot
     silently replace an NFD input;
   * a vector survives the runner's own wire format unchanged;
+  * every hash-vector entry is schema-valid against
+    schemas/knowledge-v2.schema.json, so a public-boundary fixture cannot
+    carry an invalid UUID or other structural defect;
   * every gate vector declares what is wrong with it, the declared bad value is
     really present, and it is drawn from a reserved documentation range rather
     than from anything real;
@@ -278,6 +281,42 @@ def check_hash_vectors(problems: Problems) -> list:
     return vectors
 
 
+def check_hash_vectors_against_schema(problems: Problems, vectors: list):
+    """Hash-vector entries must be schema-valid as public-boundary fixtures."""
+    try:
+        from jsonschema import Draft202012Validator
+    except ImportError:
+        problems.note(
+            "jsonschema is not installed, so hash vectors were not validated "
+            "against schemas/knowledge-v2.schema.json. Install it with: "
+            "python3 -m pip install jsonschema"
+        )
+        return
+    if not SCHEMA.is_file():
+        problems.note(
+            "schemas/knowledge-v2.schema.json is not present in this checkout, "
+            "so hash vectors were not validated against it"
+        )
+        return
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    validator = Draft202012Validator(
+        {
+            "$schema": schema.get("$schema"),
+            "$defs": schema.get("$defs", {}),
+            "$ref": "#/$defs/entry",
+        }
+    )
+    for vector in vectors:
+        where = f"vectors/{vector['id']}.yaml"
+        errors = list(validator.iter_errors(vector["entry"]))
+        detail = "; ".join(f"{list(e.path)}: {e.message}" for e in errors[:3])
+        problems.check(
+            not errors,
+            where,
+            f"the hash-vector entry must be schema-valid: {detail}",
+        )
+
+
 def check_anchor(problems: Problems, vectors: list):
     """The anchor vector must still agree with examples/valid-entry.yaml."""
     yaml = _load_yaml_module()
@@ -506,6 +545,7 @@ def check_kit_independence(problems: Problems):
 def run(quiet: bool = False) -> Problems:
     problems = Problems(quiet=quiet)
     vectors = check_hash_vectors(problems)
+    check_hash_vectors_against_schema(problems, vectors)
     check_anchor(problems, vectors)
     gate_vectors = check_gate_vectors(problems)
     check_gate_vectors_against_schema(problems, gate_vectors)

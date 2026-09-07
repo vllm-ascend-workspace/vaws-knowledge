@@ -311,6 +311,15 @@ class GateVectorsAgainstTheRealSchema(unittest.TestCase):
         self.assertEqual([], problems.items)
         self.assertEqual([], problems.notes, "the schema check did not actually run")
 
+    def test_every_hash_vector_entry_is_schema_valid(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            problems = selfcheck.Problems(quiet=True)
+            vectors = selfcheck.check_hash_vectors(problems)
+            selfcheck.check_hash_vectors_against_schema(problems, vectors)
+        self.assertEqual([], problems.items)
+        self.assertEqual([], problems.notes, "the schema check did not actually run")
+
 
 if __name__ == "__main__":
     unittest.main()

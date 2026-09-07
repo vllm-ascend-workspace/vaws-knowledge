@@ -14,7 +14,7 @@ tests:
 - an NFD sequence in a fingerprint is hashed as authored after ASCII lower
 - NFC composition must not be applied
 entry:
-  uuid: b16f3273-90c4-4f46-c183-6e7f30415266
+  uuid: b16f3273-90c4-4f46-8183-6e7f30415266
   slug: vector-no-unicode-normalization
   content_hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
   status: unverified
