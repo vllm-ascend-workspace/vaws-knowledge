@@ -147,6 +147,80 @@ This exception was found by checking the rule against
 correctly omits it from `verified_against`. A rule that fails on the repository's
 own reference fixture is a wrong rule, not a broken fixture.
 
+### 14. A passing re-scan had nowhere to record its result
+
+Reported while implementing `sync/rescan.py`, and it is a genuine hole in the
+design rather than an ambiguity in its wording.
+
+`docs/federation.md` specified that when the redaction ruleset tightens, every
+entry recorded under an older profile is re-scanned rather than trusted. But
+`provenance.redaction_profile` is defined as the profile applied *at export
+time* — an immutable historical fact about the export, which cannot be advanced.
+So an entry that passed the new scan had no field in which to say so.
+
+The consequences are concrete: the same entries would be re-scanned on every run
+forever, and a published snapshot's advertised profile floor could never rise
+above its oldest export, which makes the floor useless as a signal.
+
+**Resolution:** a new optional, main-repo-owned `redaction_cleared_under` on the
+entry, recording the highest ruleset the entry has been re-scanned clean under.
+It is deliberately **not** part of the `content_hash` payload — it describes how
+the entry was processed, not what it claims, which is the same rule that keeps
+review and re-verification from changing a revision. A snapshot's floor is the
+minimum across its entries of `redaction_cleared_under` where present and
+`provenance.redaction_profile` otherwise.
+
+This is additive and optional, so it does not break the implementations already
+written: they validate against the shipped schema file rather than a hardcoded
+field list, so the field becomes valid everywhere at once.
+
+### 15. A revision targeting an entry that is already verified
+
+Two rules collide: same `uuid` with a different `content_hash` is a revision, and
+a fork never writes into `corpus/verified/`.
+
+**Resolution:** report it as a conflict and fail closed, with the formed revision
+attached to the report so a maintainer can take it through review deliberately.
+Applying it silently would let a fork edit reviewed content; dropping it silently
+would lose a correction to a fact that is already being consumed. It becomes a
+decision somebody makes rather than one the tooling makes for them.
+
+### 16. What a fork's export may own
+
+**Resolution:** the ownership table now in `docs/federation.md`. Forks own
+`scope`, `rule`, `slug`, `confidence` and `provenance`; the main repo owns
+`status`, `redaction_cleared_under`, the review-state parts of `lifecycle`,
+`conflicts` and `verification`. A proposal touching a main-repo field is rejected
+rather than quietly filtered, because filtering would make the proposer believe
+something landed that did not.
+
+A fork proposing `status: verified` is downgraded to `unverified` with its
+`verification` record kept as evidence for the reviewer, and `confidence` capped
+at `medium` — the schema forbids `high` on an unverified claim, so something has
+to give, and capping confidence is less lossy than discarding the evidence.
+
+### 17. Duplicate candidates do not land by default
+
+**Resolution:** reported, not written; landing one is opt-in, and merging a pair
+is a human decision recorded with `lifecycle.supersedes`. Landing them
+automatically would grow the corpus with near-duplicate pairs nobody chose to
+keep separate.
+
+### 18. Reproducible snapshots versus a generation timestamp
+
+These pull against each other by nature.
+
+**Resolution:** the snapshot timestamp comes from the corpus revision's committer
+date, or `SOURCE_DATE_EPOCH` when set, so the same corpus always yields
+byte-identical output. Stamping the wall clock stays available but must be asked
+for explicitly, and gives up reproducibility for that run.
+
+### 19. Corpus file layout was unspecified
+
+**Resolution:** `corpus/<review-zone>/<kind>.yaml`, with readers accepting any
+`*.yaml` under a zone directory so a large `kind` can be split across files. The
+`layer` field inside each document must still agree with its directory.
+
 ---
 
 ## Deferred to one batched change

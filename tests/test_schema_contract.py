@@ -206,6 +206,43 @@ class KnowledgeSchemaContract(unittest.TestCase):
             lambda e, d: e.update(content_hash="32d1e6611f47083c885205b4f4ef398ea238c0e7"),
         )
 
+    # -- re-scan bookkeeping is separate from export-time provenance -------
+
+    def test_accepts_redaction_cleared_under(self):
+        doc = self._mutate(lambda e, d: e.update(redaction_cleared_under="r2"))
+        errors = list(self.validator.iter_errors(doc))
+        self.assertEqual([], errors, "a re-scanned entry must be able to record its profile")
+
+    def test_rejects_malformed_redaction_cleared_under(self):
+        self._assert_rejected(
+            "a cleared-under value that is not a profile identifier",
+            lambda e, d: e.update(redaction_cleared_under="cleaned"),
+        )
+
+    def test_cleared_under_does_not_change_the_revision(self):
+        # The revision tracks what an entry claims. Re-scanning it is
+        # processing, so it must not look like a new revision to sync.
+        import hashlib
+        import json
+
+        def payload(entry):
+            rule = json.loads(json.dumps(entry["rule"]))
+            fps = rule.get("fingerprints")
+            if fps is not None:
+                rule["fingerprints"] = sorted({" ".join(f.lower().split()) for f in fps if f.strip()})
+            text = json.dumps(
+                {"rule": rule, "scope": entry["scope"]},
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        before = payload(self.doc["entries"][0])
+        after = payload(self._mutate(lambda e, d: e.update(redaction_cleared_under="r9"))["entries"][0])
+        self.assertEqual(before, after)
+        self.assertEqual(self.doc["entries"][0]["content_hash"], before)
+
     # -- document level -----------------------------------------------------
 
     def test_rejects_wrong_schema_version(self):

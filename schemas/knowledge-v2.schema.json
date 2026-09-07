@@ -311,6 +311,11 @@
           "enum": ["verified", "unverified", "stale", "deprecated", "resolved"]
         },
         "confidence": { "enum": ["high", "medium", "low"] },
+        "redaction_cleared_under": {
+          "$comment": "Main-repo owned, and deliberately separate from provenance.redaction_profile. That field records which ruleset cleared the entry at export time and is an immutable historical fact; this one records the highest ruleset the entry has since been re-scanned clean under. Without the split, a passing re-scan has nowhere to record its result, so the same entries are re-scanned forever and a published snapshot's profile floor can never rise above the oldest export. Not part of the content_hash payload: it describes how the entry was processed, not what it claims. A fork must not set it.",
+          "type": "string",
+          "pattern": "^r[0-9]+$"
+        },
         "scope": { "$ref": "#/$defs/scope" },
         "provenance": { "$ref": "#/$defs/provenance" },
         "verification": { "$ref": "#/$defs/verification" },

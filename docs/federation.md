@@ -81,6 +81,59 @@ looser wording differently — one recursing into `scope`, one not. Both produce
 plausible hashes. That is precisely the silent divergence that breaks per-entry
 idempotency, so the wording is now exact rather than reasonable.
 
+## Field ownership
+
+A revision proposal from a fork may only change the fields a fork owns. The rest
+belong to the main repo and describe review state, which a proposer cannot know.
+
+| Owner | Fields |
+|---|---|
+| fork | `scope`, `rule`, `slug`, `confidence`, `provenance` |
+| main repo | `status`, `redaction_cleared_under`, `lifecycle.first_seen`, `lifecycle.supersedes`, `lifecycle.superseded_by`, `lifecycle.resolved_by`, `conflicts`, `verification` |
+| derived | `content_hash`, and the document's `updated_at` |
+
+`lifecycle.updated_at` is the one shared field: the proposer advances it (see
+above), and the main repo does not rewrite it.
+
+A proposal that changes a main-repo field is rejected rather than filtered. A
+fork proposing `status: verified` is downgraded to `unverified` with its
+`verification` record retained as evidence for whoever reviews it, and its
+`confidence` capped at `medium`, because the schema forbids `high` on an
+unverified claim.
+
+## A revision targeting an already-verified entry
+
+Two rules collide here: same `uuid` with a different `content_hash` is a
+revision, and a fork never writes into `corpus/verified/`.
+
+**Resolution: report it as a conflict, fail closed.** The proposal does not land,
+and the formed revision is attached to the report so a maintainer can take it
+through review deliberately. Silently applying it would let a fork edit reviewed
+content, and silently dropping it would lose a correction to a fact that is
+already being consumed — so it becomes a decision somebody makes, rather than one
+the tooling makes for them.
+
+## Duplicate candidates do not land by default
+
+A near-identical `rule` under a different `uuid` is reported, not written.
+Landing it automatically would grow the corpus with pairs nobody chose to keep
+separate. Writing it is opt-in, and merging the pair is a human decision recorded
+with `lifecycle.supersedes`.
+
+## Snapshot determinism
+
+"Reproducible" and "carries a generation timestamp" pull against each other. The
+published snapshot resolves it by taking its timestamp from the corpus revision's
+committer date, or `SOURCE_DATE_EPOCH` when set, so the same corpus always
+produces byte-identical output. Stamping the actual wall clock is available but
+explicit, and gives up reproducibility for that run.
+
+## Corpus layout
+
+`corpus/<review-zone>/<kind>.yaml`. Readers accept any `*.yaml` under a zone
+directory, so a `kind` may be split across files when one grows unwieldy, and the
+`layer` field inside each document must still agree with its directory.
+
 ## Where the work happens
 
 The fork runs schema validation and redaction **before** proposing. The main
@@ -101,7 +154,20 @@ on CI.
 `provenance.redaction_profile` records which ruleset version cleared each entry
 at export time. When the ruleset tightens to `r<N+1>`, everything below `r<N+1>`
 is re-scanned in bulk rather than trusted. Entries that fail the new rules are
-quarantined out of `verified/` until corrected.
+quarantined out of `verified/` until corrected — and quarantine is a *proposal*
+the re-scan emits, never an edit it performs.
+
+An entry that **passes** the re-scan gets `redaction_cleared_under` set to the
+new profile. This is a separate field from `provenance.redaction_profile` on
+purpose: that one is an immutable historical fact about the export, so it cannot
+be advanced, and without somewhere else to record the result a passing re-scan
+would leave no trace. The consequences of conflating them are concrete — the same
+entries would be re-scanned on every run forever, and a published snapshot's
+profile floor could never rise above its oldest export.
+
+The floor a snapshot advertises is therefore the minimum, across its entries, of
+`redaction_cleared_under` where present and `provenance.redaction_profile`
+otherwise.
 
 ## Deletion
 
