@@ -129,13 +129,15 @@ rather than a false verdict for a human to believe.
 `bot/triage_grok.py` is an optional, call-capable helper. It is not part of the
 deterministic gate verdict and is not invoked by the pull-request workflow.
 
-It loads the supplied paths, runs the existing `load`, `schema`, and
-`redaction` gates, and only then may call a configured xAI Chat Completions
-endpoint. `XAI_API_KEY` and `XAI_MODEL` must be explicitly present in the
-environment; this repository does not ship them. Missing configuration, a
-failed mandatory gate, or a provider/parse failure is `unavailable` / `error`,
-never a successful semantic review. Corpus prose is sent as untrusted data.
-The adapter does not register tools.
+It freezes the selected input bytes first, then runs the existing `load`,
+`schema`, and `redaction` gates against that snapshot, and only then may call
+a configured xAI Chat Completions endpoint. The advisory artifact binds the
+snapshot bytes as well as the selected UUID/`content_hash` set. `XAI_API_KEY`
+and `XAI_MODEL` must be explicitly present in the environment; this repository
+does not ship them. Missing configuration, a failed mandatory gate, no eligible
+input, or a provider/parse failure is `unavailable` / `error`, never a
+successful semantic review. Corpus prose is sent as untrusted data. The adapter
+does not register tools.
 
 Output is a separate advisory JSON artifact. A successful empty `candidates`
 list is distinct from `unavailable` / `error`. `--asserted-out` writes the

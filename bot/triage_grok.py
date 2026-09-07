@@ -5,9 +5,11 @@ and, when explicitly configured, calls the documented xAI Chat Completions
 endpoint for short contradiction *candidates*. It is not a gate, not a
 publisher, and not a verifier.
 
-Mandatory ``load`` / ``schema`` / ``redaction`` gates run before any provider
-egress. Missing configuration, a failed mandatory gate, or a provider/parse
-failure is ``unavailable`` / ``error``, never a successful semantic review.
+Mandatory ``load`` / ``schema`` / ``redaction`` gates run against a frozen
+copy of the selected input bytes before any provider egress. Missing
+configuration, a failed mandatory gate, no eligible input, or a
+provider/parse failure is ``unavailable`` / ``error``, never a successful
+semantic review.
 Corpus prose is untrusted data. Model output cannot change deterministic
 verdicts, invent verification, or publish.
 
@@ -24,6 +26,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -36,8 +39,11 @@ if __package__ in (None, ""):
 from bot.corpus import (
     RULE_BODY_FIELDS,
     SCOPE_DIMENSIONS,
+    YAML_SUFFIXES,
     DependencyError,
     EntryRef,
+    LoadError,
+    LoadResult,
     load_paths,
     relpath,
     repo_root,
@@ -319,6 +325,111 @@ def _encode_request(payload: Mapping[str, Any]) -> bytes:
     )
 
 
+@dataclass(frozen=True)
+class _Frozen:
+    original_rel: str
+    snapshot_rel: str
+    kind: str
+    digest: Optional[str] = None
+    children: tuple[tuple[str, str], ...] = ()
+
+
+def _write_frozen(dest: Path, data: bytes) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+
+
+def _dir_yaml_files(src: Path) -> list[Path]:
+    found: list[Path] = []
+    for child in src.rglob("*"):
+        if not child.is_file() or child.suffix not in YAML_SUFFIXES:
+            continue
+        if any(part.startswith(".") for part in child.relative_to(src).parts):
+            continue
+        found.append(child)
+    found.sort(key=lambda path: path.as_posix())
+    return found
+
+
+def _freeze_inputs(
+    rel_paths: Sequence[str], root: Path, snapshot_root: Path
+) -> tuple[tuple[_Frozen, ...], str]:
+    """Copy selected input bytes once. Later load/gates/payload read only this snapshot."""
+    frozen: list[_Frozen] = []
+    records: list[dict[str, str]] = []
+    for index, original_rel in enumerate(rel_paths):
+        src = (root / original_rel).resolve()
+        token = f"{index:04d}"
+        if src.is_dir():
+            snap_rel = f"{token}.dir"
+            dest_dir = snapshot_root / snap_rel
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            children: list[tuple[str, str]] = []
+            for child in _dir_yaml_files(src):
+                inner = child.relative_to(src).as_posix()
+                data = child.read_bytes()
+                _write_frozen(dest_dir / inner, data)
+                digest = hashlib.sha256(data).hexdigest()
+                children.append((inner, digest))
+                records.append(
+                    {"path": original_rel.rstrip("/") + "/" + inner, "sha256": digest}
+                )
+            records.append({"kind": "directory", "path": original_rel})
+            frozen.append(_Frozen(original_rel, snap_rel, "dir", None, tuple(children)))
+        elif src.is_file():
+            snap_rel = token + (src.suffix if src.suffix else "")
+            data = src.read_bytes()
+            _write_frozen(snapshot_root / snap_rel, data)
+            digest = hashlib.sha256(data).hexdigest()
+            records.append({"path": original_rel, "sha256": digest})
+            frozen.append(_Frozen(original_rel, snap_rel, "file", digest))
+        else:
+            snap_rel = token + ".missing"
+            records.append({"kind": "missing", "path": original_rel})
+            frozen.append(_Frozen(original_rel, snap_rel, "missing"))
+    records.sort(key=lambda item: item["path"])
+    blob = json.dumps(records, sort_keys=True, separators=(",", ":"))
+    snapshot_hash = "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    return tuple(frozen), snapshot_hash
+
+
+def _origin_path(snapshot_rel: str, frozen: Sequence[_Frozen]) -> str:
+    snap = snapshot_rel.replace("\\", "/")
+    for item in frozen:
+        item_snap = item.snapshot_rel.replace("\\", "/")
+        if item.kind == "dir":
+            prefix = item_snap.rstrip("/") + "/"
+            if snap.startswith(prefix):
+                return item.original_rel.rstrip("/") + "/" + snap[len(prefix) :]
+            if snap == item_snap.rstrip("/"):
+                return item.original_rel
+        elif snap == item_snap:
+            return item.original_rel
+    return snapshot_rel
+
+
+def _remap_loaded(loaded: LoadResult, frozen: Sequence[_Frozen]) -> LoadResult:
+    remapped = LoadResult()
+    remapped.entries = [
+        EntryRef(
+            _origin_path(ref.path, frozen),
+            ref.doc_index,
+            ref.entry_index,
+            ref.kind,
+            ref.layer,
+            ref.entry,
+        )
+        for ref in loaded.entries
+    ]
+    remapped.errors = [
+        LoadError(_origin_path(err.path, frozen), err.message) for err in loaded.errors
+    ]
+    remapped.files = [_origin_path(path, frozen) for path in loaded.files]
+    remapped.entries.sort(key=EntryRef.sort_key)
+    remapped.errors.sort(key=lambda err: (err.path, err.message))
+    return remapped
+
+
 def _select_entries(
     entries: Sequence[EntryRef],
     *,
@@ -369,6 +480,7 @@ def _artifact(
     request_id: Optional[str] = None,
     candidates: Optional[list[dict[str, str]]] = None,
     bounds: Optional[Mapping[str, Any]] = None,
+    input_snapshot_sha256: Optional[str] = None,
 ) -> dict[str, Any]:
     provider: dict[str, Any] = {
         "called": called,
@@ -396,6 +508,7 @@ def _artifact(
         "notes": list(ADVISORY_NOTES),
         "provider": provider,
         "source": {
+            "input_snapshot_sha256": input_snapshot_sha256,
             "paths": list(paths),
             "ref": ref,
             "repo": repo,
@@ -488,9 +601,12 @@ def _interpret_provider_body(
         return "error", "malformed provider response", None, returned_model, request_id
     if message.get("tool_calls") or message.get("function_call") or finish == "tool_calls":
         return "error", "provider output included a tool call", None, returned_model, request_id
-    refusal = message.get("refusal")
-    if isinstance(refusal, str) and refusal.strip():
-        return "error", "provider refused the request", None, returned_model, request_id
+    if "refusal" in message and message.get("refusal") is not None:
+        refusal = message.get("refusal")
+        if not isinstance(refusal, str):
+            return "error", "malformed provider response", None, returned_model, request_id
+        if refusal.strip():
+            return "error", "provider refused the request", None, returned_model, request_id
     if finish == "length":
         return "error", "provider output was truncated", None, returned_model, request_id
     if finish != "stop":
@@ -597,211 +713,217 @@ def run_advisory(
     env = environ if environ is not None else os.environ
     secrets = [value for value in (_env_value(env, ENV_API_KEY),) if value]
 
-    loaded = load_paths(rel_paths, root)
-    if loaded.errors:
-        load_gate = GateResult(
-            "load",
-            "Documents load",
-            "fail",
-            True,
-            f"{len(loaded.errors)} file(s) failed to load",
-            [f"`{e.path}`: {e.message}" for e in loaded.errors],
+    with tempfile.TemporaryDirectory(prefix="vaws-advisory-snap-") as tmp:
+        snapshot_root = Path(tmp)
+        frozen, snapshot_hash = _freeze_inputs(rel_paths, root, snapshot_root)
+        snapshot_rels = [item.snapshot_rel for item in frozen]
+        snapshot_abs = [str(snapshot_root / item.snapshot_rel) for item in frozen]
+        loaded = _remap_loaded(load_paths(snapshot_rels, snapshot_root), frozen)
+        if loaded.errors:
+            load_gate = GateResult(
+                "load",
+                "Documents load",
+                "fail",
+                True,
+                f"{len(loaded.errors)} file(s) failed to load",
+                [f"`{e.path}`: {e.message}" for e in loaded.errors],
+            )
+        else:
+            load_gate = GateResult(
+                "load",
+                "Documents load",
+                "pass",
+                True,
+                f"{len(loaded.files)} file(s), {len(loaded.entries)} entr"
+                f"{'y' if len(loaded.entries) == 1 else 'ies'}",
+            )
+        schema_gate = run_external_gate(
+            "schema",
+            "Schema conformance and content_hash",
+            "tools/validate.py",
+            (),
+            snapshot_abs,
+            root,
+            python=python,
         )
-    else:
-        load_gate = GateResult(
-            "load",
-            "Documents load",
-            "pass",
-            True,
-            f"{len(loaded.files)} file(s), {len(loaded.entries)} entr"
-            f"{'y' if len(loaded.entries) == 1 else 'ies'}",
+        redaction_gate = run_external_gate(
+            "redaction",
+            "Redaction re-scan",
+            "tools/redact.py",
+            ("--check",),
+            snapshot_abs,
+            root,
+            python=python,
         )
-    schema_gate = run_external_gate(
-        "schema",
-        "Schema conformance and content_hash",
-        "tools/validate.py",
-        (),
-        rel_paths,
-        root,
-        python=python,
-    )
-    redaction_gate = run_external_gate(
-        "redaction",
-        "Redaction re-scan",
-        "tools/redact.py",
-        ("--check",),
-        rel_paths,
-        root,
-        python=python,
-    )
-    gate_briefs = [_gate_brief(g) for g in (load_gate, schema_gate, redaction_gate)]
-    failed = [g for g in (load_gate, schema_gate, redaction_gate) if not g.ok]
-    common = dict(
-        paths=rel_paths,
-        repo=repo,
-        ref=ref,
-        gates=gate_briefs,
-        bounds=bounds,
-    )
-    if failed:
-        status = "unavailable" if any(g.status == UNAVAILABLE for g in failed) else "error"
-        omitted = [_pointer(e, "mandatory input gates did not pass") for e in loaded.entries]
+        gate_briefs = [_gate_brief(g) for g in (load_gate, schema_gate, redaction_gate)]
+        failed = [g for g in (load_gate, schema_gate, redaction_gate) if not g.ok]
+        common = dict(
+            paths=rel_paths,
+            repo=repo,
+            ref=ref,
+            gates=gate_briefs,
+            bounds=bounds,
+            input_snapshot_sha256=snapshot_hash,
+        )
+        if failed:
+            status = "unavailable" if any(g.status == UNAVAILABLE for g in failed) else "error"
+            omitted = [_pointer(e, "mandatory input gates did not pass") for e in loaded.entries]
+            return _artifact(
+                status=status,
+                selected=(),
+                omitted=omitted,
+                reason="mandatory input gates did not pass",
+                **common,
+            )
+
+        key = _env_value(env, ENV_API_KEY)
+        model = _env_value(env, ENV_MODEL)
+        selected, omitted, bound_error = _select_entries(
+            loaded.entries,
+            repo=repo,
+            ref=ref,
+            max_entries=entry_bound,
+            max_request_bytes=request_bound,
+            max_completion_tokens=completion_bound,
+            model=model or "unconfigured",
+        )
+        if not key:
+            return _artifact(
+                status="unavailable",
+                selected=selected,
+                omitted=omitted,
+                reason=f"{ENV_API_KEY} is not configured",
+                configured_model=model,
+                **common,
+            )
+        if not model:
+            return _artifact(
+                status="unavailable",
+                selected=selected,
+                omitted=omitted,
+                reason=f"{ENV_MODEL} is not configured",
+                **common,
+            )
+        if bound_error:
+            return _artifact(
+                status="error",
+                selected=(),
+                omitted=omitted,
+                reason=bound_error,
+                configured_model=model,
+                **common,
+            )
+        if not selected:
+            return _artifact(
+                status="unavailable",
+                selected=(),
+                omitted=omitted,
+                reason="no eligible input",
+                configured_model=model,
+                **common,
+            )
+
+        binding = _binding_hash(selected)
+        payload = _chat_request_body(
+            model,
+            SYSTEM_INSTRUCTIONS,
+            _user_message(repo, ref, binding, [_whitelist_entry(e) for e in selected]),
+            completion_bound,
+        )
+        body = _encode_request(payload)
+        if len(body) > request_bound:
+            return _artifact(
+                status="error",
+                selected=(),
+                omitted=omitted + [_pointer(e, "request_byte_limit") for e in selected],
+                reason="input exceeded the configured bounds",
+                configured_model=model,
+                **common,
+            )
+        request = HttpRequest(
+            method="POST",
+            url=CHAT_COMPLETIONS_URL,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "User-Agent": "vaws-knowledge-advisory-adapter",
+            },
+            body=body,
+            timeout=timeout_s,
+            max_response_bytes=response_bound,
+        )
+        sender = transport if transport is not None else default_http_transport
+        try:
+            response = sender(request)
+        except TimeoutError:
+            return _artifact(
+                status="error",
+                selected=selected,
+                omitted=omitted,
+                reason="provider timeout",
+                configured_model=model,
+                called=True,
+                **common,
+            )
+        except TransportFailure as exc:
+            return _artifact(
+                status="error",
+                selected=selected,
+                omitted=omitted,
+                reason=_secret_free(str(exc) or "provider transport failure", secrets),
+                configured_model=model,
+                called=True,
+                **common,
+            )
+        if not isinstance(response, HttpResponse):
+            return _artifact(
+                status="error",
+                selected=selected,
+                omitted=omitted,
+                reason="malformed provider response",
+                configured_model=model,
+                called=True,
+                **common,
+            )
+        if response.status != 200:
+            return _artifact(
+                status="error",
+                selected=selected,
+                omitted=omitted,
+                reason=_http_status_reason(response.status),
+                configured_model=model,
+                called=True,
+                **common,
+            )
+        if len(response.body) > response_bound:
+            return _artifact(
+                status="error",
+                selected=selected,
+                omitted=omitted,
+                reason="provider response exceeded the byte bound",
+                configured_model=model,
+                called=True,
+                **common,
+            )
+        status, reason, candidates, returned_model, request_id = _interpret_provider_body(
+            response.body,
+            {e.uuid for e in selected},
+            candidate_bound,
+            explanation_bound,
+        )
         return _artifact(
             status=status,
-            selected=(),
-            omitted=omitted,
-            reason="mandatory input gates did not pass",
-            **common,
-        )
-
-    key = _env_value(env, ENV_API_KEY)
-    model = _env_value(env, ENV_MODEL)
-    selected, omitted, bound_error = _select_entries(
-        loaded.entries,
-        repo=repo,
-        ref=ref,
-        max_entries=entry_bound,
-        max_request_bytes=request_bound,
-        max_completion_tokens=completion_bound,
-        model=model or "unconfigured",
-    )
-    if bound_error:
-        return _artifact(
-            status="error",
-            selected=(),
-            omitted=omitted,
-            reason=bound_error,
-            configured_model=model,
-            **common,
-        )
-    if not selected:
-        return _artifact(
-            status="success",
-            selected=(),
-            omitted=omitted,
-            configured_model=model,
-            candidates=[],
-            **common,
-        )
-    if not key:
-        return _artifact(
-            status="unavailable",
             selected=selected,
             omitted=omitted,
-            reason=f"{ENV_API_KEY} is not configured",
+            reason=reason,
             configured_model=model,
-            **common,
-        )
-    if not model:
-        return _artifact(
-            status="unavailable",
-            selected=selected,
-            omitted=omitted,
-            reason=f"{ENV_MODEL} is not configured",
-            **common,
-        )
-
-    binding = _binding_hash(selected)
-    payload = _chat_request_body(
-        model,
-        SYSTEM_INSTRUCTIONS,
-        _user_message(repo, ref, binding, [_whitelist_entry(e) for e in selected]),
-        completion_bound,
-    )
-    body = _encode_request(payload)
-    if len(body) > request_bound:
-        return _artifact(
-            status="error",
-            selected=(),
-            omitted=omitted + [_pointer(e, "request_byte_limit") for e in selected],
-            reason="input exceeded the configured bounds",
-            configured_model=model,
-            **common,
-        )
-    request = HttpRequest(
-        method="POST",
-        url=CHAT_COMPLETIONS_URL,
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "User-Agent": "vaws-knowledge-advisory-adapter",
-        },
-        body=body,
-        timeout=timeout_s,
-        max_response_bytes=response_bound,
-    )
-    sender = transport if transport is not None else default_http_transport
-    try:
-        response = sender(request)
-    except TimeoutError:
-        return _artifact(
-            status="error",
-            selected=selected,
-            omitted=omitted,
-            reason="provider timeout",
-            configured_model=model,
+            returned_model=returned_model,
+            request_id=request_id,
             called=True,
+            candidates=candidates,
             **common,
         )
-    except TransportFailure as exc:
-        return _artifact(
-            status="error",
-            selected=selected,
-            omitted=omitted,
-            reason=_secret_free(str(exc) or "provider transport failure", secrets),
-            configured_model=model,
-            called=True,
-            **common,
-        )
-    if not isinstance(response, HttpResponse):
-        return _artifact(
-            status="error",
-            selected=selected,
-            omitted=omitted,
-            reason="malformed provider response",
-            configured_model=model,
-            called=True,
-            **common,
-        )
-    if response.status != 200:
-        return _artifact(
-            status="error",
-            selected=selected,
-            omitted=omitted,
-            reason=_http_status_reason(response.status),
-            configured_model=model,
-            called=True,
-            **common,
-        )
-    if len(response.body) > response_bound:
-        return _artifact(
-            status="error",
-            selected=selected,
-            omitted=omitted,
-            reason="provider response exceeded the byte bound",
-            configured_model=model,
-            called=True,
-            **common,
-        )
-    status, reason, candidates, returned_model, request_id = _interpret_provider_body(
-        response.body,
-        {e.uuid for e in selected},
-        candidate_bound,
-        explanation_bound,
-    )
-    return _artifact(
-        status=status,
-        selected=selected,
-        omitted=omitted,
-        reason=reason,
-        configured_model=model,
-        returned_model=returned_model,
-        request_id=request_id,
-        called=True,
-        candidates=candidates,
-        **common,
-    )
 
 
 def _write_json(path: str, payload: Mapping[str, Any]) -> None:
