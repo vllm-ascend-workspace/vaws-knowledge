@@ -11,7 +11,9 @@ import sys
 
 import yaml
 
-SCHEMA = pathlib.Path(__file__).resolve().parents[3] / "schemas" / "knowledge-v2.schema.json"
+from vaws_knowledge._common import SCHEMA_PATH
+
+SCHEMA = pathlib.Path(SCHEMA_PATH)
 
 try:
     from jsonschema import Draft202012Validator

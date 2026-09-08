@@ -39,17 +39,16 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install gate dependencies
+      - name: Install the package
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          if [ -f bot/requirements.txt ]; then pip install -r bot/requirements.txt; fi
+          pip install -e .
 
       - name: Sweep the corpus
         id: sweep
         run: |
           set +e
-          python bot/report.py corpus examples \
+          python -m vaws_knowledge.bot.report corpus examples \
             --mode audit \
             --json audit-results.json \
             --markdown audit-report.md

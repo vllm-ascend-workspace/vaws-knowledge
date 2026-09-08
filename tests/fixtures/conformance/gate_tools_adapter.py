@@ -19,9 +19,6 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 EXIT_OK = 0
 EXIT_FINDINGS = 1
 EXIT_USAGE = 2
@@ -34,8 +31,8 @@ def _incomplete(message: str) -> int:
 
 def run_schema(path: Path) -> int:
     try:
-        from tools import validate
-        from tools._common import ToolError
+        from vaws_knowledge import validate
+        from vaws_knowledge._common import ToolError
     except Exception as exc:
         return _incomplete(f"adapter: cannot import validator: {exc}")
 
@@ -62,8 +59,8 @@ def run_schema(path: Path) -> int:
 
 def run_redaction(path: Path) -> int:
     try:
-        from tools import redact
-        from tools._common import ToolError
+        from vaws_knowledge import redact
+        from vaws_knowledge._common import ToolError
     except Exception as exc:
         return _incomplete(f"adapter: cannot import redactor: {exc}")
 
@@ -96,9 +93,9 @@ def run_conflicts(path: Path) -> int:
     ``bot.corpus.load_paths`` rather than looking at one entry.
     """
     try:
-        from bot.conflicts import find_conflicts, today_utc
-        from bot.corpus import DependencyError, load_paths, repo_root
-        from bot.policy import PolicyError, load_policy
+        from vaws_knowledge.bot.conflicts import find_conflicts, today_utc
+        from vaws_knowledge.bot.corpus import DependencyError, load_paths, repo_root
+        from vaws_knowledge.bot.policy import PolicyError, load_policy
     except Exception as exc:
         return _incomplete(f"adapter: cannot import the conflicts gate: {exc}")
 
@@ -147,8 +144,8 @@ def run_export(path: Path) -> int:
     try:
         import yaml
 
-        from tools import export
-        from tools._common import ToolError
+        from vaws_knowledge import export
+        from vaws_knowledge._common import ToolError
     except Exception as exc:
         return _incomplete(f"adapter: cannot import exporter: {exc}")
 

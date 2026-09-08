@@ -15,8 +15,8 @@ from test_tools_support import (
     write_yaml,
 )
 
-from tools import canonical
-from tools._common import ToolError
+from vaws_knowledge import canonical
+from vaws_knowledge._common import ToolError
 
 
 class AnchorTests(unittest.TestCase):

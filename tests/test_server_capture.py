@@ -23,15 +23,15 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "server"))
 
 import support  # noqa: E402
-from server.capture import (  # noqa: E402
+from vaws_knowledge.server.capture import (  # noqa: E402
     CaptureRefused,
     CaptureRejected,
     builtin_content_hash,
     canonical_payload,
     capture,
 )
-from server.layers import yaml  # noqa: E402
-from server.query import query  # noqa: E402
+from vaws_knowledge.server.layers import yaml  # noqa: E402
+from vaws_knowledge.server.query import query  # noqa: E402
 
 TODAY = dt.date(2026, 9, 7)
 
@@ -95,7 +95,7 @@ class RefusesEveryNonCandidateLayer(unittest.TestCase):
         self.assertEqual([], list(pathlib.Path(self.tmp.name).iterdir()))
 
     def test_refuses_when_the_candidate_mount_is_read_only(self):
-        from server.layers import load_config
+        from vaws_knowledge.server.layers import load_config
 
         config = load_config(
             {"layers": {"candidate": {"root": self.tmp.name, "read_only": True}}},
@@ -107,7 +107,7 @@ class RefusesEveryNonCandidateLayer(unittest.TestCase):
         self.assertIn("read_only", str(ctx.exception))
 
     def test_refuses_when_no_candidate_root_is_configured(self):
-        from server.layers import load_config
+        from vaws_knowledge.server.layers import load_config
 
         config = load_config(
             {"layers": {"candidate": {"enabled": False}}}, env={}, base_dir=support.FIXTURES
@@ -160,7 +160,7 @@ class WritesCandidateEntries(unittest.TestCase):
 
     def test_reports_which_canonicalization_produced_the_hash(self):
         result = self._capture()
-        self.assertIn(result["content_hash_source"], ("tools/canonical.py", "server-builtin"))
+        self.assertIn(result["content_hash_source"], ("vaws_knowledge.canonical", "server-builtin"))
 
     def test_a_supplied_content_hash_is_recomputed_and_the_override_reported(self):
         result = self._capture(draft(content_hash="sha256:" + "0" * 64))

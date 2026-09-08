@@ -15,7 +15,7 @@ from test_tools_support import (
     write_yaml,
 )
 
-from tools import validate
+from vaws_knowledge import validate
 
 INVALID = FIXTURES / "invalid"
 

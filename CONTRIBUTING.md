@@ -4,7 +4,7 @@
 
 This is a public repository and its history cannot be recalled. Before an entry
 leaves your fork it must pass the source-side redaction gate
-(`tools/redact.py`), and it must not contain:
+(`vaws-knowledge redact`), and it must not contain:
 
 - IP addresses, hostnames, container names, MAC addresses
 - internal machine identities — the name or slot number a team uses for a
@@ -38,7 +38,7 @@ If a fact cannot be stated without one of these, it belongs in your repo's
 `project` layer, not here. That is a supported outcome, not a failure.
 
 Nothing above relies on a reviewer noticing. `additionalProperties: false` in
-`schemas/knowledge-v2.schema.json` means an undeclared field cannot be exported
+`vaws_knowledge/schemas/knowledge-v2.schema.json` means an undeclared field cannot be exported
 at all, and the redaction ruleset (`redaction_profile`) is versioned so the main
 repo can re-scan the whole corpus when the rules tighten.
 
@@ -94,14 +94,16 @@ and both remain true.
 
 `uuid` is the identity and never changes, including when you reword the entry.
 `slug` is a human handle and may change. `content_hash` is the revision, over
-the canonicalized `scope` + `rule` payload. Regenerate it with `tools/` rather
-than by hand; sync is keyed on these three and a mismatch is rejected.
+the canonicalized `scope` + body payload. Regenerate it with
+`vaws-knowledge canonical` rather than by hand; sync is keyed on these
+three and a mismatch is rejected.
 
 ## Before opening a PR
 
 ```bash
-python3 tools/validate.py corpus/ examples/
-python3 tools/redact.py --check corpus/ examples/
+python3 -m pip install -e .
+vaws-knowledge validate corpus/ examples/
+vaws-knowledge redact --check corpus/ examples/
 python3 -m unittest discover -s tests
 ```
 
@@ -117,10 +119,10 @@ credentials to the collector. On that clone, using **this** repository's
 tools (not the fork's `AGENTS.md` as instructions):
 
 ```bash
-python3 tools/export.py .agents/knowledge/*.yaml \
+vaws-knowledge export .agents/knowledge/*.yaml \
   --origin-repo <owner/repo> \
   -o export.yaml
-python3 sync/propose.py --export export.yaml
+python3 -m vaws_knowledge.sync.propose --export export.yaml
 ```
 
 That is the original source-side opt-in path. v1 prose and incomplete

@@ -13,10 +13,7 @@ import sys
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from bot.publish_comment import (  # noqa: E402
+from vaws_knowledge.bot.publish_comment import (  # noqa: E402
     EXPECTED_ARTIFACT_NAME,
     EXPECTED_WORKFLOW_NAME,
     EXPECTED_WORKFLOW_PATH,
@@ -160,8 +157,8 @@ class PermissionAndCheckoutBoundaries(unittest.TestCase):
         self.assertEqual("review-report", spec["path"])
 
     def test_publisher_runs_the_trusted_helper_and_not_pr_code_or_deps(self):
-        self.assertIn("python3 bot/publish_comment.py --artifact-dir review-report", self.comment_text)
-        self.assertNotIn("pip install", self.comment_text)
+        self.assertIn("python3 -m vaws_knowledge.bot.publish_comment --artifact-dir review-report", self.comment_text)
+        self.assertIn("pip install -e .", self.comment_text)
         self.assertNotIn("requirements.txt", self.comment_text)
         self.assertNotIn("unittest", self.comment_text)
         self.assertNotIn("bot/report.py corpus", self.comment_text)

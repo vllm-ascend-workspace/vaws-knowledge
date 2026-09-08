@@ -54,11 +54,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install trusted dependencies
+      - name: Install the trusted checkout package
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          if [ -f sync/requirements.txt ]; then pip install -r sync/requirements.txt; fi
+          pip install -e .
 
       - name: Discover, fetch and gate (read-only preview)
         env:
@@ -68,7 +67,7 @@ jobs:
           stash="${RUNNER_TEMP}/vaws-collect"
           mkdir -p "$stash"
           mkdir -p collect-handoff
-          python3 sync/collect.py \
+          python3 -m vaws_knowledge.sync.collect \
             --mode preview \
             --parent-id 1196723340 \
             --stash "$stash" \
@@ -101,11 +100,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install trusted dependencies
+      - name: Install the trusted checkout package
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          if [ -f sync/requirements.txt ]; then pip install -r sync/requirements.txt; fi
+          pip install -e .
 
       - uses: actions/download-artifact@v4
         with:
@@ -123,7 +121,7 @@ jobs:
           success_rel=$(cat collect-handoff/CURRENT_SUCCESS_DIR)
           success_dir="collect-handoff/${success_rel}"
           mkdir -p "$success_dir"
-          python3 sync/collect.py \
+          python3 -m vaws_knowledge.sync.collect \
             --mode propose \
             --from-exports "$success_dir" \
             --stash "$stash" \
@@ -154,11 +152,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install trusted dependencies
+      - name: Install the trusted checkout package
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          if [ -f bot/requirements.txt ]; then pip install -r bot/requirements.txt; fi
+          pip install -e .
 
       - uses: actions/download-artifact@v4
         with:
@@ -178,7 +175,7 @@ jobs:
           if [ ${#files[@]} -eq 0 ]; then
             printf '%s\n' '{"advisory":true,"status":"unavailable","reason":"no eligible input","provider":{"called":false},"notes":["Unavailable is not a successful semantic review."]}' > collect-advisory.json
           else
-            python3 bot/triage_grok.py \
+            python3 -m vaws_knowledge.bot.triage_grok \
               --source-repo "${{ github.repository }}" \
               --source-ref "${{ github.sha }}" \
               --json collect-advisory.json \

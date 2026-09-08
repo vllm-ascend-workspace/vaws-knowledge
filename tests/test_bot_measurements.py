@@ -24,12 +24,9 @@ import sys
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from bot import conflicts, corpus, dedup  # noqa: E402
-from bot.policy import load_policy  # noqa: E402
-from tools.canonical import content_hash  # noqa: E402
+from vaws_knowledge.bot import conflicts, corpus, dedup  # noqa: E402
+from vaws_knowledge.bot.policy import load_policy  # noqa: E402
+from vaws_knowledge.canonical import content_hash  # noqa: E402
 
 CORPUS = REPO / "corpus"
 

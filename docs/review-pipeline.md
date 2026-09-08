@@ -180,14 +180,14 @@ cannot mark an entry verified. Offline fixture tests do not establish live
 Grok quality or a deployed GitHub review.
 
 ```
-python3 bot/triage_grok.py \
+python3 -m vaws_knowledge.bot.triage_grok \
   --source-repo owner/vaws-knowledge \
   --source-ref <commit> \
   --json advisory.json \
   --asserted-out asserted.json \
   corpus examples
 
-python3 bot/report.py --mode pr corpus examples --asserted asserted.json
+python3 -m vaws_knowledge.bot.report --mode pr corpus examples --asserted asserted.json
 ```
 
 The second command is an explicit handoff. Gate results remain authoritative.

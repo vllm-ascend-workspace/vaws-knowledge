@@ -7,15 +7,12 @@ import sys
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from bot.advisory_review import (  # noqa: E402
+from vaws_knowledge.bot.advisory_review import (  # noqa: E402
     ADVISORY_ARTIFACT_NAME,
     ADVISORY_WORKFLOW_NAME,
     ADVISORY_WORKFLOW_PATH,
 )
-from bot.publish_comment import EXPECTED_WORKFLOW_NAME, PUBLISHER_WORKFLOW_NAME  # noqa: E402
+from vaws_knowledge.bot.publish_comment import EXPECTED_WORKFLOW_NAME, PUBLISHER_WORKFLOW_NAME  # noqa: E402
 
 try:
     import yaml
@@ -138,7 +135,7 @@ class NamesAndTriggers(unittest.TestCase):
         self.assertIn("schedule", trigger)
         self.assertEqual("33 5 * * *", trigger["schedule"][0]["cron"])
         self.assertIn("workflow_dispatch", trigger)
-        self.assertIn("sync/snapshot.py", self.snapshot_text)
+        self.assertIn("vaws_knowledge.sync.snapshot", self.snapshot_text)
         self.assertIn("corpus/unverified", self.snapshot_text)
         self.assertIn("verified-snapshot", self.snapshot_text)
         self.assertNotIn("--skip-gates", self.snapshot_text)
@@ -208,7 +205,7 @@ class PermissionBoundaries(unittest.TestCase):
             str(step.get("env", "")) for step in _steps(comment) if isinstance(step, dict)
         ))
         self.assertIn(ADVISORY_ARTIFACT_NAME, self.advisory_text)
-        self.assertIn("bot/advisory_review.py", self.advisory_text)
+        self.assertIn("vaws_knowledge.bot.advisory_review", self.advisory_text)
 
     def test_snapshot_job_is_read_only(self):
         job = _job(self.snapshot, "snapshot")

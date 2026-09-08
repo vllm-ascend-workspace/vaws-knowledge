@@ -22,10 +22,7 @@ import sys
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from bot import gates  # noqa: E402
+from vaws_knowledge.bot import gates  # noqa: E402
 
 
 def _interpreter_with_dependencies() -> str | None:
@@ -60,7 +57,7 @@ class GreenRunStillCannotPublish(unittest.TestCase):
         if python is None:
             self.skipTest(
                 "no interpreter with jsonschema available; create .venv and "
-                "install requirements.txt to exercise the external gates"
+                "install the package (pip install -e .) to exercise the external gates"
             )
         self.report = gates.run_gates(["examples"], mode="pr", root=REPO, python=python)
 
@@ -115,7 +112,7 @@ class ReportIsDeterministic(unittest.TestCase):
         # The workflow updates a single review comment instead of posting a new
         # one. That only works if the rendering is stable, otherwise every run
         # produces a spurious edit and reviewers learn to ignore the comment.
-        from bot import report as report_mod
+        from vaws_knowledge.bot import report as report_mod
 
         first = gates.run_gates(["examples"], mode="pr", root=REPO, as_of="2026-09-07")
         second = gates.run_gates(["examples"], mode="pr", root=REPO, as_of="2026-09-07")

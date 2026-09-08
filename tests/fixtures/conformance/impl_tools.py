@@ -12,11 +12,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from tools import canonical  # noqa: E402
-from tools._common import ToolError  # noqa: E402
+from vaws_knowledge import canonical  # noqa: E402
+from vaws_knowledge._common import ToolError  # noqa: E402
 
 
 def _load(text: str):

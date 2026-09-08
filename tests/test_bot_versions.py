@@ -19,10 +19,7 @@ import sys
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from bot import versions  # noqa: E402
+from vaws_knowledge.bot import versions  # noqa: E402
 
 LESS, EQUAL, GREATER, UNDECIDABLE = -1, 0, 1, None
 

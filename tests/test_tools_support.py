@@ -16,14 +16,10 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
 import yaml  # noqa: E402
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "tools"
 EXAMPLE_ENTRY = REPO_ROOT / "examples" / "valid-entry.yaml"
-TOOLS = REPO_ROOT / "tools"
 
 #: The cross-implementation anchor from examples/valid-entry.yaml.
 ANCHOR_HASH = "sha256:32d1e6611f47083c885205b4f4ef398ea238c0e7eaa60a3e3d961c49ce5b166a"
@@ -46,8 +42,8 @@ def write_yaml(path: Path, doc: Any) -> Path:
 
 
 def run_tool(name: str, *args: str, python: str | None = None) -> subprocess.CompletedProcess:
-    """Run ``python tools/<name>.py ARGS`` from the repo root."""
-    cmd = [python or sys.executable, str(TOOLS / f"{name}.py"), *args]
+    """Run ``python -m vaws_knowledge <name> ARGS`` from the repo root."""
+    cmd = [python or sys.executable, "-m", "vaws_knowledge", name, *args]
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
 
 
@@ -141,15 +137,15 @@ class EnvironmentTests(unittest.TestCase):
         # Simulate an interpreter without jsonschema by poisoning sys.modules
         # before the tool imports it.
         code = (
-            "import sys, runpy\n"
+            "import sys\n"
             "sys.modules['jsonschema'] = None\n"
-            f"sys.argv = ['validate.py', {str(EXAMPLE_ENTRY)!r}]\n"
-            f"runpy.run_path({str(TOOLS / 'validate.py')!r}, run_name='__main__')\n"
+            "from vaws_knowledge.cli import main\n"
+            f"raise SystemExit(main(['validate', {str(EXAMPLE_ENTRY)!r}]))\n"
         )
         proc = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("jsonschema", proc.stderr)
-        self.assertIn("pip install -r requirements.txt", proc.stderr)
+        self.assertIn("pip install -e .", proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
 
     def test_no_tracked_fixture_contains_a_redaction_hit(self):

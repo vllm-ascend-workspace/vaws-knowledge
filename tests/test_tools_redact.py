@@ -30,7 +30,7 @@ from test_tools_support import (
     write_yaml,
 )
 
-from tools import redact
+from vaws_knowledge import redact
 
 
 def rules_hit(text: str, allow: redact.Allowlist | None = None) -> set[str]:
