@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Publish a verified-only snapshot after schema/integrity and redaction gates.
 
-    python3 sync/snapshot.py --out build/snapshot
+    python3 -m vaws_knowledge.sync.snapshot --out build/snapshot
 
 Uses existing sync/publish.py for the manifest and snapshot digest. Never
 reads or writes corpus/unverified/. An empty verified corpus is an accurately

@@ -2,13 +2,13 @@
 """Upward path: propose a fork's exported entries into this repo.
 
     # preview only (nothing written)
-    python3 sync/propose.py --export fork-export.yaml
+    python3 -m vaws_knowledge.sync.propose --export fork-export.yaml
 
     # write the resulting corpus files into a checkout, no git
-    python3 sync/propose.py --export fork-export.yaml --apply
+    python3 -m vaws_knowledge.sync.propose --export fork-export.yaml --apply
 
     # branch + commit + push + `gh pr create`, against a fresh origin/main
-    python3 sync/propose.py --export fork-export.yaml --open-pr
+    python3 -m vaws_knowledge.sync.propose --export fork-export.yaml --open-pr
 
 Behaviour is decided entirely by sync/plan.py; this module renders a plan into
 file changes and (optionally) a pull request:

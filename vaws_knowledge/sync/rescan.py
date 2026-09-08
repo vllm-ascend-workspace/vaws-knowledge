@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bulk redaction re-scan after the ruleset tightens.
 
-    python3 sync/rescan.py --profile r2 --out rescan-r2.json [--corpus corpus/]
+    python3 -m vaws_knowledge.sync.rescan --profile r2 --out rescan-r2.json [--corpus corpus/]
 
 `provenance.redaction_profile` records which ruleset cleared each entry at
 export time. When the ruleset moves to r<N+1>, every entry recorded under an

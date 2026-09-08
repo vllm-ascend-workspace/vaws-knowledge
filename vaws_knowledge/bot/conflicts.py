@@ -43,7 +43,7 @@ that is, or is proposed to be, ``verified`` block the gate.
 
 Usage::
 
-    python3 bot/conflicts.py corpus/ examples/ [--json out.json] [--asserted pairs.json]
+    python3 -m vaws_knowledge.bot.conflicts corpus/ examples/ [--json out.json] [--asserted pairs.json]
                                                [--as-of YYYY-MM-DD]
 """
 

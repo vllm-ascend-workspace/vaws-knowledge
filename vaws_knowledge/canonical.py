@@ -251,14 +251,40 @@ def _entries_of(doc: Any) -> list[Any]:
     return []
 
 
+def _entry_from_stdin() -> Mapping[str, Any]:
+    """One entry on stdin, for ``--hash-cmd "vaws-knowledge canonical"``."""
+    text = sys.stdin.read()
+    if not text.strip():
+        raise ToolError("canonical: no entry on stdin")
+    stripped = text.lstrip()
+    if stripped[:1] in "{[":
+        data = json.loads(stripped)
+    else:
+        from vaws_knowledge._common import require_yaml  # noqa: PLC0415
+
+        data = require_yaml().safe_load(text)
+    if isinstance(data, Mapping) and "entries" in data:
+        entries = _entries_of(data)
+        if len(entries) != 1:
+            raise ToolError("canonical: stdin document must contain exactly one entry")
+        return entries[0]
+    if isinstance(data, Mapping):
+        return data
+    raise ToolError("canonical: stdin is not an entry")
+
+
 def main(argv: list[str]) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="canonical.py",
+        prog="vaws-knowledge canonical",
         description="Compute content_hash for entries in knowledge documents.",
     )
-    parser.add_argument("paths", nargs="+", help="YAML/JSON files or directories")
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        help="YAML/JSON files or directories; omit or pass - to read one entry from stdin",
+    )
     parser.add_argument(
         "--payload",
         action="store_true",
@@ -266,7 +292,15 @@ def main(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Import lazily: tools.validate imports this module at load time.
+    if not args.paths or args.paths == ["-"]:
+        entry = _entry_from_stdin()
+        if args.payload:
+            print(canonical_json(entry))
+        else:
+            print(content_hash(entry))
+        return EXIT_OK
+
+    # Import lazily: validate imports this module at load time.
     from vaws_knowledge import validate  # noqa: PLC0415
 
     loaded: list[tuple[Path, Any]] = []

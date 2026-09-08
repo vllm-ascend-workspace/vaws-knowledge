@@ -24,7 +24,7 @@ behaviour and the absence of removal constructs in the source.
 ## plan.py — what would happen
 
 ```bash
-python3 sync/plan.py --export fork-export.yaml [--json] [--skip-gates]
+python3 -m vaws_knowledge.sync.plan --export fork-export.yaml [--json] [--skip-gates]
 ```
 
 One line per entry, action + reason:
@@ -44,9 +44,9 @@ summary+symptom+root_cause+resolution text ratio ≥ 0.90; fingerprint Jaccard
 ## propose.py — the upward path
 
 ```bash
-python3 sync/propose.py --export fork-export.yaml            # preview
-python3 sync/propose.py --export fork-export.yaml --apply    # write into ./corpus
-python3 sync/propose.py --export fork-export.yaml --open-pr  # PR against origin/main
+python3 -m vaws_knowledge.sync.propose --export fork-export.yaml            # preview
+python3 -m vaws_knowledge.sync.propose --export fork-export.yaml --apply    # write into ./corpus
+python3 -m vaws_knowledge.sync.propose --export fork-export.yaml --open-pr  # PR against origin/main
 ```
 
 - Per entry, never per file: touched documents are re-emitted with the entry
@@ -66,8 +66,8 @@ python3 sync/propose.py --export fork-export.yaml --open-pr  # PR against origin
 ## collect.py — central public collection
 
 ```bash
-python3 sync/collect.py --mode preview --stash /tmp/vaws-collect --json coverage.json
-python3 sync/collect.py --mode propose --from-exports /tmp/vaws-collect/exports/deduped
+python3 -m vaws_knowledge.sync.collect --mode preview --stash /tmp/vaws-collect --json coverage.json
+python3 -m vaws_knowledge.sync.collect --mode propose --from-exports /tmp/vaws-collect/exports/deduped
 ```
 
 Resolves scaffold parent id `1196723340`, lists accessible public forks with
@@ -81,7 +81,7 @@ Preview never writes. Conflicts are reported, not last-writer-merged.
 ## snapshot.py — gated verified publish
 
 ```bash
-python3 sync/snapshot.py --out build/snapshot
+python3 -m vaws_knowledge.sync.snapshot --out build/snapshot
 ```
 
 Runs `tools/validate.py` and `tools/redact.py --check` on `corpus/verified/`
@@ -90,7 +90,7 @@ then `publish.py`. Refuses to emit `corpus/unverified/`.
 ## publish.py — the downward path
 
 ```bash
-python3 sync/publish.py --out build/snapshot [--revision <sha>] [--generated-at <iso8601>]
+python3 -m vaws_knowledge.sync.publish --out build/snapshot [--revision <sha>] [--generated-at <iso8601>]
 ```
 
 Produces `<out>/verified/<kind>.yaml` (canonical key order, entries sorted by
@@ -107,7 +107,7 @@ Refuses to publish if `corpus/verified/` holds an entry with status
 ## rescan.py — after the ruleset tightens
 
 ```bash
-python3 sync/rescan.py --profile r2 --out rescan-r2.json [--include-findings]
+python3 -m vaws_knowledge.sync.rescan --profile r2 --out rescan-r2.json [--include-findings]
 ```
 
 Every entry whose `provenance.redaction_profile` is numerically below the

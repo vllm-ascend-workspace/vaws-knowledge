@@ -21,10 +21,10 @@ would be exactly the divergence this kit exists to catch.
 CLI contract (the same contract `conformance/runner.py` expects of any
 implementation):
 
-    printf '...entry yaml...' | python3 conformance/reference.py
+    printf '...entry yaml...' | python3 -m vaws_knowledge.conformance.reference
     -> sha256:<64 hex chars>
 
-    python3 conformance/reference.py --payload < entry.yaml
+    python3 -m vaws_knowledge.conformance.reference --payload < entry.yaml
     -> the canonical JSON payload string, no trailing newline
 
 Input shapes are selected with --format (default: a single entry as YAML).

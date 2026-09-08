@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dry-run planner: what would a sync of this export do, per entry?
 
-    python3 sync/plan.py --export fork-export.yaml [--corpus corpus/] [--json]
+    python3 -m vaws_knowledge.sync.plan --export fork-export.yaml [--corpus corpus/] [--json]
 
 Prints one line per entry with an action and a reason. Changes nothing.
 Actions (docs/federation.md, "Idempotency"):

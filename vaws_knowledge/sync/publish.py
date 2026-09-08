@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Downward path: produce the read-only `verified` snapshot forks pull.
 
-    python3 sync/publish.py --out build/snapshot [--corpus corpus/]
+    python3 -m vaws_knowledge.sync.publish --out build/snapshot [--corpus corpus/]
                             [--revision <sha>] [--generated-at <iso8601>]
 
 The snapshot is a directory:

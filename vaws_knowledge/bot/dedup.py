@@ -23,7 +23,7 @@ never a duplicate pair: they are different kinds of claim.
 
 Usage::
 
-    python3 bot/dedup.py corpus/ examples/ [--json out.json] [--fail-on exact|near|never]
+    python3 -m vaws_knowledge.bot.dedup corpus/ examples/ [--json out.json] [--fail-on exact|near|never]
 """
 
 from __future__ import annotations

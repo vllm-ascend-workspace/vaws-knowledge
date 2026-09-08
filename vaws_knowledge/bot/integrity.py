@@ -21,7 +21,7 @@ What this module checks (nothing here recomputes a hash — that is
 
 Usage::
 
-    python3 bot/integrity.py corpus/ examples/ [--json out.json]
+    python3 -m vaws_knowledge.bot.integrity corpus/ examples/ [--json out.json]
 """
 
 from __future__ import annotations

@@ -89,37 +89,37 @@ Examples:
 ```bash
 # this repository: drive the real tools/server/sync APIs in a subprocess.
 # Do not point --hash-cmd at conformance/reference.py and call that a pass.
-python3 conformance/runner.py \
+vaws-knowledge conformance \
   --hash-cmd "python3 tests/fixtures/conformance/impl_tools.py" \
   --payload-cmd "python3 tests/fixtures/conformance/impl_tools.py --payload"
-python3 conformance/runner.py \
+vaws-knowledge conformance \
   --hash-cmd "python3 tests/fixtures/conformance/impl_server.py"
-python3 conformance/runner.py \
+vaws-knowledge conformance \
   --hash-cmd "python3 tests/fixtures/conformance/impl_sync.py"
 
 # schema / redaction: tools/validate.py and tools/redact.py take a file
 # path and return a structured result; they are not gate commands. The
 # adapter below maps a *completed* ValidationResult / findings list onto
 # one token and prints no token if the tool never returns that result:
-python3 conformance/runner.py \
+vaws-knowledge conformance \
   --schema-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py schema" \
   --redaction-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py redaction"
 
 # conflicts is a cross-entry gate, so the adapter wraps bot/conflicts.py
 # rather than a per-document validator:
-python3 conformance/runner.py \
+vaws-knowledge conformance \
   --conflicts-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py conflicts"
 
 # a fork's own client, in any language — the client must print accept or
 # reject; do not wrap an exit-only validator without an adapter
-python3 conformance/runner.py \
+vaws-knowledge conformance \
   --hash-cmd "./my-fork-client hash --stdin" \
   --schema-cmd "./my-fork-client validate --stdin" \
   --export-cmd "./my-fork-client export --stdin"
 
 # what is in the kit, and one vector at a time while debugging
-python3 conformance/runner.py --list
-python3 conformance/runner.py --hash-cmd "..." --only fingerprints
+vaws-knowledge conformance --list
+vaws-knowledge conformance --hash-cmd "..." --only fingerprints
 ```
 
 The adapter recipe (`tests/fixtures/conformance/gate_tools_adapter.py`) is
@@ -156,7 +156,7 @@ five canonicalization steps went wrong.
 Check the kit itself before trusting a verdict:
 
 ```bash
-python3 conformance/selfcheck.py
+python3 -m vaws_knowledge.conformance.selfcheck
 python3 -m unittest discover -s tests
 ```
 
@@ -329,7 +329,7 @@ blanket-regenerating hashes.
 
 `gate_vectors/` — 21 vectors: 7 redaction refusals + 1 clean control,
 6 schema refusals + 2 valid controls, 1 conflicts refusal + 2 non-conflict
-controls, 3 export idempotence. Run `python3 conformance/runner.py --list` for
+controls, 3 export idempotence. Run `vaws-knowledge conformance --list` for
 the live list.
 
 `conflicts` is the one gate class whose vectors carry more than one entry,
@@ -369,10 +369,10 @@ on demand is exactly how a wrong vector becomes the standard. Instead:
 1. Write the vector's header (why this case exists), `id` matching the file
    name, `title`, `spec`, and the `entry` (or `document`).
 2. Produce the expected values and read them:
-   `python3 conformance/reference.py --payload < your-entry.yaml`.
+   `python3 -m vaws_knowledge.conformance.reference --payload < your-entry.yaml`.
 3. Paste them in as `expected_payload` (a `|-` block scalar) and
    `expected_content_hash`.
-4. Run `python3 conformance/selfcheck.py` and
+4. Run `python3 -m vaws_knowledge.conformance.selfcheck` and
    `python3 -m unittest discover -s tests`. The self-check will refuse a
    vector whose hash and payload disagree, whose input does not canonicalize to
    its payload, or that breaks its invariance group. Never blanket-regenerate

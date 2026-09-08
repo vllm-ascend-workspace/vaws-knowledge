@@ -11,8 +11,8 @@ is a visible unavailable result with zero provider calls.
 
 Usage::
 
-    python3 bot/advisory_review.py --stash /tmp/vaws-advisory --json advisory.json
-    python3 bot/advisory_review.py --publish-comment --artifact-dir advisory-report
+    python3 -m vaws_knowledge.bot.advisory_review --stash /tmp/vaws-advisory --json advisory.json
+    python3 -m vaws_knowledge.bot.advisory_review --publish-comment --artifact-dir advisory-report
 """
 
 from __future__ import annotations

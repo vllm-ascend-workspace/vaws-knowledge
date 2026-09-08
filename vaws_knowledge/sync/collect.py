@@ -10,8 +10,8 @@ It never writes to a contributing fork, never clones a fork, never imports
 fetched bytes, and never treats a GitHub blob as contributor identity or
 technical truth.
 
-    python3 sync/collect.py --mode preview --stash /tmp/vaws-collect --json coverage.json
-    python3 sync/collect.py --mode propose --from-exports /tmp/vaws-collect/handoff/success/<token>
+    python3 -m vaws_knowledge.sync.collect --mode preview --stash /tmp/vaws-collect --json coverage.json
+    python3 -m vaws_knowledge.sync.collect --mode propose --from-exports /tmp/vaws-collect/handoff/success/<token>
 
 Preview never calls git/gh write APIs. Propose reuses sync/plan.py and
 sync/propose.py (no --skip-gates / --drop-undeclared / --allow-duplicate-candidates).

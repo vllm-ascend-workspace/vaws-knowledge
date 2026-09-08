@@ -15,7 +15,7 @@ verdicts, invent verification, or publish.
 
 Usage::
 
-    python3 bot/triage_grok.py --source-repo owner/repo --source-ref <commit> \\
+    python3 -m vaws_knowledge.bot.triage_grok --source-repo owner/repo --source-ref <commit> \\
         [--json advisory.json] [--asserted-out asserted.json] corpus/ examples/
 """
 

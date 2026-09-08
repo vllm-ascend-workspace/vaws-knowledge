@@ -10,10 +10,10 @@ alone is not ownership.
 Usage::
 
     # run the gates and render
-    python3 bot/report.py --mode pr corpus/ examples/ --markdown review.md --json review.json
+    python3 -m vaws_knowledge.bot.report --mode pr corpus/ examples/ --markdown review.md --json review.json
 
     # render from a saved results file
-    python3 bot/report.py --from-json review.json --markdown review.md
+    python3 -m vaws_knowledge.bot.report --from-json review.json --markdown review.md
 
 Exit status: 0 when the overall result is pass, 1 when any blocking gate did
 not pass, 2 on bot misuse (bad arguments, missing dependency).

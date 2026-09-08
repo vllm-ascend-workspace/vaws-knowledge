@@ -20,7 +20,7 @@ Reasons a proposal is raised:
 
 Usage::
 
-    python3 bot/staleness.py corpus/ [--as-of YYYY-MM-DD] [--json out.json]
+    python3 -m vaws_knowledge.bot.staleness corpus/ [--as-of YYYY-MM-DD] [--json out.json]
                                      [--fail-on-proposals]
 """
 

@@ -41,10 +41,10 @@ The contract is therefore a CLI one:
 
 Usage:
 
-    python3 conformance/runner.py --hash-cmd "python3 tools/canonical.py"
-    python3 conformance/runner.py --hash-cmd "..." --payload-cmd "... --payload"
-    python3 conformance/runner.py --schema-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py schema"
-    python3 conformance/runner.py --list
+    vaws-knowledge conformance --hash-cmd "vaws-knowledge canonical"
+    vaws-knowledge conformance --hash-cmd "..." --payload-cmd "... --payload"
+    vaws-knowledge conformance --schema-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py schema"
+    vaws-knowledge conformance --list
 
 Exit status: 0 if everything run passed, 1 if any vector failed, 2 for a usage
 or vector-loading problem. Vector classes with no command are skipped and
@@ -565,7 +565,7 @@ def main(argv=None) -> int:
     if not args.hash_cmd and not any(gate_commands.values()):
         _die(
             "nothing to run. Give at least one implementation command, e.g.\n"
-            "  --hash-cmd \"python3 tools/canonical.py\"\n"
+            "  --hash-cmd \"vaws-knowledge canonical\"\n"
             "  --schema-cmd \"python3 tests/fixtures/conformance/"
             "gate_tools_adapter.py schema\"\n"
             "Run --list to see the vector inventory, or --help for the contract."

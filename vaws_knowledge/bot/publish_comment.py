@@ -16,7 +16,7 @@ install pull-request dependencies or execute artifact files.
 
 Usage::
 
-    python3 bot/publish_comment.py --artifact-dir review-report
+    python3 -m vaws_knowledge.bot.publish_comment --artifact-dir review-report
 """
 
 from __future__ import annotations
