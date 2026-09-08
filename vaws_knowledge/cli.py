@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
         prog="vaws-knowledge",
-        description="Engine CLI for the vaws-knowledge commons. Corpus is a separate git checkout.",
+        description="Engine CLI for the vaws-knowledge commons. The corpus ships in the wheel.",
     )
     parser.add_argument(
         "command",

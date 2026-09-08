@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vaws-knowledge"
-version = "0.1.1"
+version = "0.1.2"
 description = "Federated, evidence-gated knowledge engine for vLLM-Ascend"
 readme = "README.md"
 license = "MIT"
@@ -27,3 +27,6 @@ Repository = "https://github.com/vllm-ascend-workspace/vaws-knowledge"
 
 [tool.hatch.build.targets.wheel]
 packages = ["vaws_knowledge"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"corpus" = "vaws_knowledge/data/corpus"
