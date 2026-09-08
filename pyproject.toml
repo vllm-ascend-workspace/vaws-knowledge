@@ -27,9 +27,3 @@ Repository = "https://github.com/vllm-ascend-workspace/vaws-knowledge"
 
 [tool.hatch.build.targets.wheel]
 packages = ["vaws_knowledge"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"vaws_knowledge/schemas" = "vaws_knowledge/schemas"
-"vaws_knowledge/conformance/vectors" = "vaws_knowledge/conformance/vectors"
-"vaws_knowledge/conformance/gate_vectors" = "vaws_knowledge/conformance/gate_vectors"
-"vaws_knowledge/bot/policy.yaml" = "vaws_knowledge/bot/policy.yaml"
