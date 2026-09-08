@@ -80,22 +80,24 @@ class DetectionTests(unittest.TestCase):
         for text in clean:
             self.assertEqual(rules_hit(text), set(), text)
         self.assertEqual(rules_hit("gpu-node-01"), set())
-        # Formerly matched only because an unbounded middle group could
-        # consume _000_cann_9_0_0_ before the year. No fixture requires
-        # that hit; the slot token itself is still caught as remote_000.
-        self.assertNotIn(
-            "hostname-numbered",
-            rules_hit("snapshot remote_000_cann_9_0_0_2026-06-02"),
-        )
 
     def test_hostname_numbered_still_matches_prefix_plus_digits(self):
-        for text in ("node-01", "worker3", "remote_131", "remote-131", "k8s-3", "master01"):
+        for text in (
+            "node-01",
+            "worker3",
+            "remote_131",
+            "remote-131",
+            "k8s-3",
+            "master01",
+            "remote_131_cann_9",
+            "snapshot remote_000_cann_9_0_0_2026-06-02",
+        ):
             self.assertIn("hostname-numbered", rules_hit(text), text)
 
     def test_internal_machine_identifiers(self):
         # r2: the token shapes that carried a machine slot in the hardware
         # measurement source files. The numbers are synthetic (000).
-        self.assertIn("hostname-numbered", rules_hit("snapshot remote_000"))
+        self.assertIn("hostname-numbered", rules_hit("snapshot remote_000_cann_9_0_0_2026-06-02"))
         self.assertIn("internal-machine-identifier", rules_hit("Single-card 910B4 on remote 000, NPU 4"))
         self.assertIn("internal-machine-identifier", rules_hit("source microbenchmark_000_npu4_2026-06-03"))
         findings = redact.scan_text("source microbenchmark_000_npu4_2026-06-03")

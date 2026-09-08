@@ -72,10 +72,12 @@ from vaws_knowledge._common import (  # noqa: E402
 #: ``remote`` to the numbered-host prefixes. Entries cleared under r1 must be
 #: re-scanned (sync/rescan.py --profile r2).
 #: r2 (correction): ``hostname-numbered`` no longer allows unbounded words
-#: between the prefix and the digits. Engineering prose such as
-#: ``worker-pool-size-32`` and candidate ids such as
-#: ``<owner>-<slug>-<hex>`` are not reported. This is a relaxation, not a
-#: tightening; entries already cleared under r2 do not need a re-scan.
+#: between the prefix and the digits, so prose such as ``worker-pool-size-32``
+#: and candidate ids such as ``<owner>-<slug>-<hex>`` are not reported. The
+#: trailing boundary is ``(?![a-z0-9])`` so a slot token may continue with
+#: ``_`` or ``-`` (``remote_000_cann_...`` still hits ``remote_000``). This
+#: is a relaxation, not a tightening; entries already cleared under r2 do
+#: not need a re-scan.
 REDACTION_PROFILE = "r2"
 
 
@@ -335,7 +337,7 @@ RULES: tuple[Rule, ...] = (
         hint="describe the machine role instead of naming it",
         pattern=re.compile(
             r"(?<![\w.-])(?:" + _HOST_PREFIXES + r")[-_]?\d{1,4}"
-            r"(?:[a-z][a-z0-9]*)?(?![\w])",
+            r"(?:[a-z][a-z0-9]*)?(?![a-z0-9])",
             re.IGNORECASE,
         ),
     ),
