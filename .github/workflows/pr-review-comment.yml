@@ -2,9 +2,9 @@ name: Review comment
 
 # Trusted publisher for the review-gate artifact. workflow_run always
 # executes this file from the default branch, never from the pull request.
-# It must not check out the PR head, must not install PR dependencies, and
-# must not execute artifact files. Cross-run artifact download needs
-# actions:read; posting the comment needs pull-requests:write.
+# It must not check out the PR head. It installs the trusted checkout
+# package and must not execute artifact files. Cross-run artifact download
+# needs actions:read; posting the comment needs pull-requests:write.
 
 on:
   workflow_run:
@@ -28,6 +28,15 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the trusted checkout package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
       - uses: actions/download-artifact@v4
         with:
           name: review-report
@@ -41,4 +50,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
-        run: python3 bot/publish_comment.py --artifact-dir review-report
+        run: python3 -m vaws_knowledge.bot.publish_comment --artifact-dir review-report

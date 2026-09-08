@@ -17,9 +17,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "s
 import synctest  # noqa: E402
 from synctest import _common, propose_mod  # noqa: E402
 
-sys.path.insert(0, str(synctest.SYNC_DIR))
-import collect as collect_mod  # noqa: E402
 import yaml  # noqa: E402
+from vaws_knowledge.sync import collect as collect_mod
 
 PARENT_ID = 1196723340
 PARENT_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -158,7 +157,7 @@ class CollectControls(synctest.SyncTestCase):
         kwargs.setdefault("parent_id", PARENT_ID)
         kwargs.setdefault("stash", self.stash)
         kwargs.setdefault("repo", synctest.REPO)
-        kwargs.setdefault("tools_dir", synctest.REPO / "tools")
+        kwargs.setdefault("tools_dir", None)
         kwargs.setdefault("api", self.api)
         kwargs.setdefault("open_pr", self._open_pr)
         kwargs.setdefault("bounds", collect_mod.Bounds())
@@ -281,7 +280,7 @@ class CollectControls(synctest.SyncTestCase):
             parent_id=PARENT_ID,
             stash=mismatch_stash,
             repo=synctest.REPO,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             api=bad,
             open_pr=self._open_pr,
         )
@@ -459,7 +458,7 @@ class CollectControls(synctest.SyncTestCase):
             parent_id=PARENT_ID,
             stash=self.stash,
             repo=synctest.REPO,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             api=api2,
             open_pr=self._open_pr,
         )
@@ -526,7 +525,12 @@ class CollectControls(synctest.SyncTestCase):
         (fault / "jsonschema.py").write_text('raise RuntimeError("assembled-document validator crash")\n')
 
         def runner(cmd, **kw):
-            if any("/exports/assembled/" in str(x) for x in cmd) and any(str(x).endswith("/validate.py") for x in cmd):
+            assembled = any("/exports/assembled/" in str(x) for x in cmd)
+            validate_script = any(str(x).endswith("/validate.py") for x in cmd)
+            validate_module = (
+                len(cmd) >= 4 and list(cmd[1:4]) == ["-m", "vaws_knowledge", "validate"]
+            )
+            if assembled and (validate_script or validate_module):
                 env = dict(os.environ)
                 env["PYTHONPATH"] = str(fault)
                 return subprocess.run(cmd, **kw, env=env, text=True, capture_output=True)
@@ -600,7 +604,7 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
         first = collect_mod.propose_exports(
             [export],
             repo=self.repo,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             mode="propose",
             runner=self.runner,
             open_pr=lambda *a, **k: propose_mod.open_pull_request(*a, **{**k, "runner": self.runner}),
@@ -610,7 +614,7 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
         second = collect_mod.propose_exports(
             [export],
             repo=self.repo,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             mode="propose",
             runner=self.runner,
             open_pr=lambda *a, **k: propose_mod.open_pull_request(*a, **{**k, "runner": self.runner}),
@@ -623,7 +627,7 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
         result = collect_mod.propose_exports(
             [export],
             repo=self.repo,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             mode="preview",
             runner=self.runner,
         )
@@ -638,7 +642,7 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
         result = collect_mod.propose_exports(
             [export],
             repo=self.repo,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             mode="propose",
             runner=self.runner,
             open_pr=lambda *a, **k: propose_mod.open_pull_request(*a, **{**k, "runner": self.runner}),
@@ -702,7 +706,7 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
         result = collect_mod.propose_exports(
             [export],
             repo=self.repo,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             mode="propose",
             runner=self.runner,
             open_pr=lambda *a, **k: propose_mod.open_pull_request(*a, **{**k, "runner": self.runner}),
@@ -719,7 +723,7 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
         result = collect_mod.propose_exports(
             [export],
             repo=self.repo,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             mode="propose",
             runner=self.runner,
             open_pr=lambda *a, **k: propose_mod.open_pull_request(*a, **{**k, "runner": self.runner}),
@@ -743,7 +747,7 @@ class CollectProposeIdempotency(synctest.SyncTestCase):
         result = collect_mod.propose_exports(
             [export],
             repo=self.repo,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             mode="propose",
             runner=runner,
         )

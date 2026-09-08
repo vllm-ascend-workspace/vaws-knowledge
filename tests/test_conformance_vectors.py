@@ -13,9 +13,11 @@ docs/federation.md, or to a gate behaviour a conforming client must get right.
 import pathlib
 import unittest
 
-REPO = pathlib.Path(__file__).resolve().parent.parent
-VECTORS = REPO / "conformance" / "vectors"
-GATE_VECTORS = REPO / "conformance" / "gate_vectors"
+import vaws_knowledge.conformance as _conformance_pkg
+
+KIT = pathlib.Path(_conformance_pkg.__file__).resolve().parent
+VECTORS = KIT / "vectors"
+GATE_VECTORS = KIT / "gate_vectors"
 
 try:
     import yaml

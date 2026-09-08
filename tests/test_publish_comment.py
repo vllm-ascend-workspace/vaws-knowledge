@@ -22,10 +22,7 @@ import unittest
 from typing import Any, Optional
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from bot.publish_comment import (  # noqa: E402
+from vaws_knowledge.bot.publish_comment import (  # noqa: E402
     BOT_LOGIN,
     EXPECTED_WORKFLOW_NAME,
     FAIL_PERMITS,
@@ -36,7 +33,7 @@ from bot.publish_comment import (  # noqa: E402
     parse_binding,
     publish,
 )
-from bot.report import MARKER, render_markdown  # noqa: E402
+from vaws_knowledge.bot.report import MARKER, render_markdown  # noqa: E402
 
 FIXTURES = REPO / "tests" / "fixtures" / "bot"
 ORIGINAL_SHELL = FIXTURES / "original-comment-step.sh"
@@ -455,7 +452,9 @@ class PublisherHelper(unittest.TestCase):
         self.assertNotEqual(SPOOFED_MD.read_text(encoding="utf-8"), body)
 
     def test_pass_permits_constant_is_the_gates_string(self):
-        text = (REPO / "bot" / "gates.py").read_text(encoding="utf-8")
+        import vaws_knowledge.bot.gates as gates_mod
+
+        text = pathlib.Path(gates_mod.__file__).read_text(encoding="utf-8")
         self.assertIn(PASS_PERMITS, text)
         self.assertIn(FAIL_PERMITS, text)
         self.assertIn("unverified", PASS_PERMITS)

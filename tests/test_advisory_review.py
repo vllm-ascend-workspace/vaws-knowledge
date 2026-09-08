@@ -11,18 +11,15 @@ import unittest
 from typing import Any, Optional
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from bot.advisory_review import (  # noqa: E402
+from vaws_knowledge.bot.advisory_review import (  # noqa: E402
     ADVISORY_MARKER,
     load_advisory_artifact,
     publish_advisory_comment,
     render_advisory_markdown,
     run_trusted_advisory,
 )
-from bot.publish_comment import GitHubError, Refuse  # noqa: E402
-from bot.report import MARKER as REVIEW_MARKER  # noqa: E402
+from vaws_knowledge.bot.publish_comment import GitHubError, Refuse  # noqa: E402
+from vaws_knowledge.bot.report import MARKER as REVIEW_MARKER  # noqa: E402
 from tests.test_bot_triage_grok import FAKE_ENV, FakeTransport, _load_response  # noqa: E402
 from tests.test_publish_comment import (  # noqa: E402
     OWNER_REPO,
@@ -36,10 +33,7 @@ from tests.test_publish_comment import (  # noqa: E402
     make_pull,
 )
 
-SYNC_DIR = REPO / "sync"
-if str(SYNC_DIR) not in sys.path:
-    sys.path.insert(0, str(SYNC_DIR))
-import collect as collect_mod  # noqa: E402
+from vaws_knowledge.sync import collect as collect_mod
 import yaml  # noqa: E402
 
 EXAMPLE = REPO / "examples" / "valid-entry.yaml"

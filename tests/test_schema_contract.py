@@ -8,7 +8,7 @@ exactly one property and asserts the document stops validating.
 If a case here starts failing, the contract was loosened. That is a decision to
 make deliberately, in a PR that says so — not a test to update.
 
-Requires jsonschema (see requirements.txt).
+Requires jsonschema (a package dependency).
 """
 
 import copy
@@ -16,8 +16,10 @@ import json
 import pathlib
 import unittest
 
+from vaws_knowledge._common import SCHEMA_PATH as PACKAGED_SCHEMA
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
-SCHEMA_PATH = REPO / "schemas" / "knowledge-v2.schema.json"
+SCHEMA_PATH = pathlib.Path(PACKAGED_SCHEMA)
 FIXTURE_PATH = REPO / "examples" / "valid-entry.yaml"
 
 try:
@@ -30,7 +32,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise unittest.SkipTest(
         "jsonschema is required for the contract suite. "
-        "Install it with: python3 -m pip install -r requirements.txt"
+        "Install it with: python3 -m pip install -e ."
     ) from exc
 
 

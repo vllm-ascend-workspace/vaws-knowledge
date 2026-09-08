@@ -19,8 +19,8 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "server"))
 
 import support  # noqa: E402
-from server.layers import SERVICE_API_VERSION  # noqa: E402
-from server.mcp_server import (  # noqa: E402
+from vaws_knowledge import package_version
+from vaws_knowledge.server.mcp_server import (  # noqa: E402
     METHOD_NOT_FOUND,
     PARSE_ERROR,
     KnowledgeService,
@@ -92,10 +92,9 @@ class Framing(unittest.TestCase):
 
 
 class Handshake(unittest.TestCase):
-    def test_initialize_advertises_the_service_api_version_and_layers(self):
+    def test_initialize_advertises_the_package_version_and_layers(self):
         result = handle_message(service(), {"jsonrpc": "2.0", "id": 1, "method": "initialize"})["result"]
-        self.assertEqual(SERVICE_API_VERSION, result["service_api_version"])
-        self.assertEqual(SERVICE_API_VERSION, result["serverInfo"]["service_api_version"])
+        self.assertEqual(package_version(), result["serverInfo"]["version"])
         info = result["serviceInfo"]
         self.assertEqual(["shared", "project", "candidate"], info["layers_available"])
         self.assertEqual(["candidate"], info["writable_layers"])
@@ -139,7 +138,7 @@ class Tools(unittest.TestCase):
         )
         self.assertFalse(result["isError"])
         payload = result["structuredContent"]
-        self.assertEqual(SERVICE_API_VERSION, payload["service_api_version"])
+        self.assertEqual(package_version(), payload["version"])
         self.assertEqual("unknown", payload["absent_fact_semantics"])
         self.assertIn(support.SHARED_SOC_A, [r["uuid"] for r in payload["results"]])
         # The text block must carry the same payload for text-only clients.

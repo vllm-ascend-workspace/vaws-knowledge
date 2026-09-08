@@ -17,8 +17,8 @@ from test_tools_support import (
     write_yaml,
 )
 
-from tools import canonical, export, redact, validate
-from tools._common import load_schema
+from vaws_knowledge import canonical, export, redact, validate
+from vaws_knowledge._common import load_schema
 
 CANDIDATE = FIXTURES / "export" / "candidate.yaml"
 CANDIDATE_UNDECLARED = FIXTURES / "export" / "candidate-with-undeclared-fields.yaml"

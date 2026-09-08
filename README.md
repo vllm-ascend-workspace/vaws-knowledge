@@ -100,7 +100,7 @@ because public git history cannot be recalled.
 
 The schema is the egress whitelist: `additionalProperties: false` everywhere, so
 a field that is not declared cannot leave a fork. Widening any object in
-`schemas/` is a privacy decision.
+`vaws_knowledge/schemas/` is a privacy decision.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for what must never be submitted.
 
@@ -130,22 +130,66 @@ candidate PRs here; it never writes to a fork. See
 
 See [docs/federation.md](docs/federation.md).
 
+## Install and run the engine
+
+The engine is the `vaws-knowledge` Python package. The corpus stays a git
+checkout and is **not** inside the wheel. There is no hosted service: each
+user starts a local MCP server against their own corpus checkout.
+
+```bash
+uvx --from git+https://github.com/vllm-ascend-workspace/vaws-knowledge@main \
+  vaws-knowledge server --corpus /path/to/vaws-knowledge
+```
+
+`--corpus` (or `VAWS_KNOWLEDGE_CORPUS`) is the corpus root: a directory that
+contains `verified/`, or a full checkout that contains `corpus/verified/`.
+
+`.mcp.json` example:
+
+```json
+{
+  "mcpServers": {
+    "vaws-knowledge": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/vllm-ascend-workspace/vaws-knowledge@main",
+        "vaws-knowledge",
+        "server",
+        "--corpus",
+        "/path/to/vaws-knowledge"
+      ]
+    }
+  }
+}
+```
+
+Replace `@main` with a commit or tag when you want a pinned engine. The
+same CLI also exposes `validate`, `redact`, `export`, `canonical`, `query`
+and `conformance`. `python -m vaws_knowledge` is equivalent to
+`vaws-knowledge`.
+
+Library imports for other tools:
+
+```python
+from vaws_knowledge import canonical, validate, redact, export
+```
+
 ## Layout
 
 ```
-schemas/     knowledge-v2 contract (also the egress whitelist)
+vaws_knowledge/   installable engine (canonical, validate, redact, export,
+                  MCP server, review bot, sync, conformance kit, schemas)
 corpus/
-  verified/    shared layer — review-gated
-  unverified/  bot-passed, not yet confirmed
-tools/       source-side redaction, export gate, validator
-bot/         review pipeline: dedup, conflict detection, report rendering
-server/      knowledge MCP engine — three-layer mounting, source labelling
-examples/    reference entries used as CI fixtures
+  verified/         shared layer — review-gated
+  unverified/       bot-passed, not yet confirmed
+examples/           reference entries used as CI fixtures
 docs/
+tests/
 ```
 
 ## Licensing
 
-Code (`tools/`, `bot/`, `server/`) is MIT. The corpus (`corpus/`, `examples/`)
+Code (`vaws_knowledge/`) is MIT. The corpus (`corpus/`, `examples/`)
 is CC BY 4.0 — see [LICENSE-CORPUS](LICENSE-CORPUS). Contributors submit only
 technical facts they are free to publish.

@@ -1,6 +1,0 @@
-# Dependencies of bot/ only. The root requirements.txt belongs to tools/ and
-# server/; do not fold these into it.
-#
-# The bot deliberately needs no JSON Schema implementation: schema conformance
-# is gated by shelling out to tools/validate.py, not by re-validating here.
-PyYAML>=6.0

@@ -24,18 +24,16 @@ import tempfile
 import unittest
 from unittest import mock
 
+import vaws_knowledge.conformance as _conformance_pkg
+from vaws_knowledge.conformance import reference, selfcheck
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
-KIT = REPO / "conformance"
+KIT = pathlib.Path(_conformance_pkg.__file__).resolve().parent
 
 try:
     import yaml
 except ImportError as exc:  # pragma: no cover
     raise unittest.SkipTest(f"PyYAML is required by the conformance kit: {exc}") from exc
-
-sys.path.insert(0, str(KIT))
-
-import reference  # noqa: E402
-import selfcheck  # noqa: E402
 
 
 def run_selfcheck():
@@ -299,8 +297,10 @@ class GateVectorsAgainstTheRealSchema(unittest.TestCase):
                 "python3 -m pip install jsonschema to check gate vectors "
                 "against schemas/knowledge-v2.schema.json"
             )
-        if not (REPO / "schemas" / "knowledge-v2.schema.json").is_file():
-            self.skipTest("schemas/knowledge-v2.schema.json is not in this checkout")
+        from vaws_knowledge._common import SCHEMA_PATH
+
+        if not pathlib.Path(SCHEMA_PATH).is_file():
+            self.skipTest("packaged knowledge-v2.schema.json is not available")
 
     def test_each_gate_vector_has_exactly_the_defect_it_declares(self):
         buffer = io.StringIO()

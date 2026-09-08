@@ -515,18 +515,29 @@ patterns from #10, and forbid `range` on the exact-match-only dimensions named i
 Until that lands, implementations keep using `layer` for the review zone and take
 the trust layer from the mount, which is what they already do.
 
+### 28. Unpublished: no service_api version negotiation
+
+Decision 26 added `service-api.json`, `supports: [1, 2]`,
+`v1_result_population`, and a `bodies` filter whose documented purpose was
+to reproduce v1 query results after `measurement` landed. The project has
+not been published. There is no v1 client to protect, and the extra
+version channel is unused cost.
+
+**Resolution:** there is no `service-api.json` and no `service_api_version`
+field. The installed package version (`importlib.metadata.version("vaws-knowledge")`,
+currently `0.1.0`) is the contract version. `measurement` is part of that
+contract. `bodies` remains an ordinary query filter, not a compatibility
+switch.
+
+**Keeping a dual-version handshake was rejected** because nothing has been
+released. Compatibility shims would only exist to simulate a client that
+does not exist.
+
 ---
 
 ## Follow-ups
 
-- The root `requirements.txt` needs `packaging` for the PEP 440 dimensions.
-  Not added here to avoid conflicting with an open pull request that touches
-  dependency files. Until it is present, an implementation must report
-  `undecidable` for those dimensions rather than substituting another ordering —
-  `docs/version-ordering.md` requires that, so the gap degrades safely.
+- `packaging` is a declared dependency of the `vaws-knowledge` package.
 - `conformance/` must carry vectors for every row of the version-ordering table,
   including the undecidable cases, so a new implementation cannot pass while
   disagreeing about ordering.
-- The `README.md` layout section describes `tools/`, `bot/` and `server/` in the
-  present tense. That was aspirational when written; as their pull requests land
-  it becomes accurate, and it should be re-read against reality once they do.

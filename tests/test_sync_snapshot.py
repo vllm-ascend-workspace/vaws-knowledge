@@ -12,8 +12,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "s
 import synctest  # noqa: E402
 from synctest import _common  # noqa: E402
 
-sys.path.insert(0, str(synctest.SYNC_DIR))
-import snapshot as snapshot_mod  # noqa: E402
+from vaws_knowledge.sync import snapshot as snapshot_mod
 
 
 class SnapshotWrapper(synctest.SyncTestCase):
@@ -22,7 +21,7 @@ class SnapshotWrapper(synctest.SyncTestCase):
         kwargs.setdefault("generated_at", "2026-09-10T00:00:00+00:00")
         return snapshot_mod.run_verified_snapshot(
             corpus_dir=self.corpus_dir,
-            tools_dir=synctest.REPO / "tools",
+            tools_dir=None,
             out=out,
             **kwargs,
         )

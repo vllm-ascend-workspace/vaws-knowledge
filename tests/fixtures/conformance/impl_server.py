@@ -12,10 +12,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from server import capture  # noqa: E402
+from vaws_knowledge.server import capture  # noqa: E402
 
 
 def _load(text: str):

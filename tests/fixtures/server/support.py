@@ -15,10 +15,7 @@ from typing import Any, Mapping
 FIXTURES = pathlib.Path(__file__).resolve().parent
 REPO = FIXTURES.parent.parent.parent
 
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from server.layers import ServiceConfig, load_config  # noqa: E402
+from vaws_knowledge.server.layers import ServiceConfig, load_config
 
 #: The reader whose build the shared SoC-A entries were established on.
 READER_SOC_A: dict[str, str] = {

@@ -11,11 +11,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
-from sync import _common  # noqa: E402
-from sync._common import SyncError  # noqa: E402
+from vaws_knowledge.sync import _common  # noqa: E402
+from vaws_knowledge.sync._common import SyncError  # noqa: E402
 
 
 def _load(text: str):

@@ -26,13 +26,13 @@ import subprocess
 import sys
 import unittest
 
-REPO = pathlib.Path(__file__).resolve().parent.parent
-RUNNER = REPO / "conformance" / "runner.py"
-REFERENCE = REPO / "conformance" / "reference.py"
-FIXTURES = REPO / "tests" / "fixtures" / "conformance"
+import vaws_knowledge.conformance as _conformance_pkg
+from vaws_knowledge.conformance import runner as conformance_runner
 
-sys.path.insert(0, str(REPO / "conformance"))
-import runner as conformance_runner  # noqa: E402
+REPO = pathlib.Path(__file__).resolve().parent.parent
+KIT = pathlib.Path(_conformance_pkg.__file__).resolve().parent
+REFERENCE = KIT / "reference.py"
+FIXTURES = REPO / "tests" / "fixtures" / "conformance"
 
 try:
     import yaml  # noqa: F401
@@ -44,7 +44,7 @@ PY = sys.executable
 
 def run_runner(*args, timeout=180):
     return subprocess.run(
-        [PY, str(RUNNER), *args],
+        [PY, "-m", "vaws_knowledge", "conformance", *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -83,9 +83,9 @@ class HashVectors(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertNotIn("FAIL", result.stdout)
         source = (FIXTURES / "impl_tools.py").read_text()
-        self.assertIn("from tools import canonical", source)
+        self.assertIn("from vaws_knowledge import canonical", source)
         self.assertNotIn("import reference", source)
-        self.assertNotIn("from conformance", source)
+        self.assertNotIn("from vaws_knowledge.conformance", source)
 
     def test_server_fallback_adapter_passes_every_vector(self):
         result = run_runner("--hash-cmd", impl("impl_server.py"))
@@ -234,8 +234,10 @@ class GateVectors(unittest.TestCase):
                 "jsonschema is not installed; install it with "
                 "python3 -m pip install jsonschema to run the schema gate vectors"
             )
-        if not (REPO / "schemas" / "knowledge-v2.schema.json").is_file():
-            self.skipTest("schemas/knowledge-v2.schema.json is not in this checkout")
+        from vaws_knowledge._common import SCHEMA_PATH
+
+        if not pathlib.Path(SCHEMA_PATH).is_file():
+            self.skipTest("packaged knowledge-v2.schema.json is not available")
         result = run_runner("--schema-cmd", impl("gate_schema_jsonschema.py"))
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual(
@@ -495,8 +497,10 @@ class RealToolAdapter(unittest.TestCase):
                 "jsonschema is not installed; install it with "
                 "python3 -m pip install jsonschema to run the schema adapter"
             )
-        if not (REPO / "tools" / "validate.py").is_file():
-            self.skipTest("tools/validate.py is not in this checkout")
+        try:
+            import vaws_knowledge.validate  # noqa: F401
+        except ImportError:
+            self.skipTest("vaws_knowledge.validate is not importable")
         result = run_runner(
             "--schema-cmd",
             impl("gate_tools_adapter.py", "schema"),
@@ -511,8 +515,10 @@ class RealToolAdapter(unittest.TestCase):
         )
 
     def test_redaction_adapter_accepts_clean_and_rejects_ipv4(self):
-        if not (REPO / "tools" / "redact.py").is_file():
-            self.skipTest("tools/redact.py is not in this checkout")
+        try:
+            import vaws_knowledge.redact  # noqa: F401
+        except ImportError:
+            self.skipTest("vaws_knowledge.redact is not importable")
         result = run_runner(
             "--redaction-cmd",
             impl("gate_tools_adapter.py", "redaction"),
@@ -528,8 +534,10 @@ class RealToolAdapter(unittest.TestCase):
     def test_conflicts_adapter_runs_the_real_bot_gate(self):
         # bot/conflicts.py, not a regex: the contradicting pair must be found
         # by the same code that runs on a pull request.
-        if not (REPO / "bot" / "conflicts.py").is_file():
-            self.skipTest("bot/conflicts.py is not in this checkout")
+        try:
+            import vaws_knowledge.bot.conflicts  # noqa: F401
+        except ImportError:
+            self.skipTest("vaws_knowledge.bot.conflicts is not importable")
         result = run_runner(
             "--conflicts-cmd",
             impl("gate_tools_adapter.py", "conflicts"),
@@ -553,8 +561,10 @@ class RealToolAdapter(unittest.TestCase):
         # prove tools/export.py is idempotent, which is the claim that matters
         # for the corpus - and the measurement vector is there because a
         # numeric string is the part most likely to move under a round trip.
-        if not (REPO / "tools" / "export.py").is_file():
-            self.skipTest("tools/export.py is not in this checkout")
+        try:
+            import vaws_knowledge.export  # noqa: F401
+        except ImportError:
+            self.skipTest("vaws_knowledge.export is not importable")
         try:
             import jsonschema  # noqa: F401
         except ImportError:
@@ -577,8 +587,10 @@ class RealToolAdapter(unittest.TestCase):
         # The adapter must invoke the real tools/validate.py API. Shadowing
         # jsonschema with a module that raises on import crashes that API
         # before ValidationResult exists. That is not a semantic reject.
-        if not (REPO / "tools" / "validate.py").is_file():
-            self.skipTest("tools/validate.py is not in this checkout")
+        try:
+            import vaws_knowledge.validate  # noqa: F401
+        except ImportError:
+            self.skipTest("vaws_knowledge.validate is not importable")
         fault = FIXTURES / "fault_jsonschema"
         cmd = (
             "env PYTHONPATH="

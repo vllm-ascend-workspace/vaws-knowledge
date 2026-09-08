@@ -16,7 +16,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "server"))
 
 import support  # noqa: E402
-from server.layers import (  # noqa: E402
+from vaws_knowledge.server.layers import (  # noqa: E402
     DEFAULT_STATUSES,
     LAYERS,
     ConfigError,

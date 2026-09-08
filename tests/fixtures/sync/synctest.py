@@ -19,7 +19,6 @@ import unittest
 
 FIXTURES = pathlib.Path(__file__).resolve().parent
 REPO = FIXTURES.parent.parent.parent
-SYNC_DIR = REPO / "sync"
 CORPUS_BASE = FIXTURES / "corpus_base"
 TOOLS_PASS = FIXTURES / "tools_pass"
 TOOLS_MARKER = FIXTURES / "tools_marker"
@@ -33,19 +32,19 @@ UUID_UNVERIFIED = "5d2f8e1a-3c4b-4d6e-8f9a-1b2c3d4e5f6a"  # unverified, r1, has 
 UUID_CURRENT = "7e4a1b9c-2d3e-4f50-a1b2-c3d4e5f6a7b8"  # unverified, already r2
 UUID_EXPORT_NEW = "9c1e2d3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f"  # only in exports/fork-export.yaml
 
-if str(SYNC_DIR) not in sys.path:
-    sys.path.insert(0, str(SYNC_DIR))
-
 try:
     import yaml  # noqa: F401
 except ImportError as exc:  # pragma: no cover
     raise unittest.SkipTest(f"PyYAML is required for the sync suite: {exc}") from exc
 
-import _common  # noqa: E402
-import plan as plan_mod  # noqa: E402
-import propose as propose_mod  # noqa: E402
-import publish as publish_mod  # noqa: E402
-import rescan as rescan_mod  # noqa: E402
+import vaws_knowledge.sync as _sync_pkg
+from vaws_knowledge.sync import _common
+from vaws_knowledge.sync import plan as plan_mod
+from vaws_knowledge.sync import propose as propose_mod
+from vaws_knowledge.sync import publish as publish_mod
+from vaws_knowledge.sync import rescan as rescan_mod
+
+SYNC_DIR = pathlib.Path(_sync_pkg.__file__).resolve().parent
 
 
 def fresh_uuid(seed: str) -> str:

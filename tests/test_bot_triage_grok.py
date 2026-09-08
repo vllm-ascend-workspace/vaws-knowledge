@@ -18,14 +18,11 @@ from typing import Any, Optional
 from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
-
 import yaml  # noqa: E402
 
-from bot import conflicts, gates, triage_grok  # noqa: E402
-from bot.triage_grok import HttpRequest, HttpResponse, TransportFailure  # noqa: E402
-from tools import canonical  # noqa: E402
+from vaws_knowledge.bot import conflicts, gates, triage_grok  # noqa: E402
+from vaws_knowledge.bot.triage_grok import HttpRequest, HttpResponse, TransportFailure  # noqa: E402
+from vaws_knowledge import canonical  # noqa: E402
 
 FIXTURES = REPO / "tests" / "fixtures" / "bot" / "triage" / "responses"
 HASH_MISMATCH = REPO / "tests" / "fixtures" / "tools" / "invalid" / "hash-mismatch.yaml"
