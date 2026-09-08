@@ -71,6 +71,13 @@ from vaws_knowledge._common import (  # noqa: E402
 #: machine slot beside a device index, "microbenchmark_131_npu4_...") and adds
 #: ``remote`` to the numbered-host prefixes. Entries cleared under r1 must be
 #: re-scanned (sync/rescan.py --profile r2).
+#: r2 (correction): ``hostname-numbered`` no longer allows unbounded words
+#: between the prefix and the digits, so prose such as ``worker-pool-size-32``
+#: and candidate ids such as ``<owner>-<slug>-<hex>`` are not reported. The
+#: trailing boundary is ``(?![a-z0-9])`` so a slot token may continue with
+#: ``_`` or ``-`` (``remote_000_cann_...`` still hits ``remote_000``). This
+#: is a relaxation, not a tightening; entries already cleared under r2 do
+#: not need a re-scan.
 REDACTION_PROFILE = "r2"
 
 
@@ -329,8 +336,8 @@ RULES: tuple[Rule, ...] = (
         description="numbered host name (node-01, worker3, ...)",
         hint="describe the machine role instead of naming it",
         pattern=re.compile(
-            r"(?<![\w.-])(?:" + _HOST_PREFIXES + r")[-_]?(?:[a-z0-9]+[-_])*\d{1,4}"
-            r"(?:[a-z][a-z0-9]*)?(?![\w])",
+            r"(?<![\w.-])(?:" + _HOST_PREFIXES + r")[-_]?\d{1,4}"
+            r"(?:[a-z][a-z0-9]*)?(?![a-z0-9])",
             re.IGNORECASE,
         ),
     ),

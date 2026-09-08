@@ -69,6 +69,31 @@ class DetectionTests(unittest.TestCase):
         self.assertIn("hostname-numbered", rules_hit("ran on node-01 and worker3"))
         self.assertIn("hostname-assignment", rules_hit("host: " + "npu" + "-" + "rack2"))
 
+    def test_hostname_numbered_does_not_match_prefix_word_number_prose(self):
+        clean = (
+            "worker-pool-size-32",
+            "compute-bound-step-3",
+            "master-branch-2026",
+            "node-count-8",
+            "remote-code-parity-sync-27a5373f7a",
+        )
+        for text in clean:
+            self.assertEqual(rules_hit(text), set(), text)
+        self.assertEqual(rules_hit("gpu-node-01"), set())
+
+    def test_hostname_numbered_still_matches_prefix_plus_digits(self):
+        for text in (
+            "node-01",
+            "worker3",
+            "remote_131",
+            "remote-131",
+            "k8s-3",
+            "master01",
+            "remote_131_cann_9",
+            "snapshot remote_000_cann_9_0_0_2026-06-02",
+        ):
+            self.assertIn("hostname-numbered", rules_hit(text), text)
+
     def test_internal_machine_identifiers(self):
         # r2: the token shapes that carried a machine slot in the hardware
         # measurement source files. The numbers are synthetic (000).
