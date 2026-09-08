@@ -132,9 +132,10 @@ See [docs/federation.md](docs/federation.md).
 
 ## Install and run the engine
 
-The engine is the `vaws-knowledge` Python package. The corpus stays a git
-checkout and is **not** inside the wheel. There is no hosted service: each
-user starts a local MCP server against their own corpus checkout.
+The engine is the `vaws-knowledge` Python package. The corpus ships in the
+wheel; consumers read it via `vaws_knowledge.corpus`. There is no hosted
+service: each user starts a local MCP server against their own corpus
+checkout (or the packaged tree).
 
 ```bash
 uvx --from git+https://github.com/vllm-ascend-workspace/vaws-knowledge@main \
