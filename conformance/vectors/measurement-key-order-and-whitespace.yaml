@@ -1,0 +1,118 @@
+# Canonicalization vector: the measurement body under key-order and
+# whitespace variation.
+#
+id: measurement-key-order-and-whitespace
+title: Key order and outer whitespace do not change a measurement hash
+spec: docs/federation.md - Canonicalization, steps 3 and 4
+invariance_group: measurement-body
+notes: The same claim as measurement-body-payload-key, written with every mapping's keys in a different order, with
+  CRLF inside the method description and with outer whitespace around two strings. Steps 3 and 4 exist so that a
+  YAML round trip through another tool cannot manufacture a revision; if this vector's hash ever differs from its
+  group partner's, an implementation is either reflowing prose or trusting mapping order.
+entry:
+  uuid: b1f0c4d2-6e57-4a19-9c3d-08f5e2a71b64
+  slug: ascend000-example-platform-config-peaks
+  content_hash: sha256:0b8758c6544e9eaed88c711a56350b8b2bfc048bcc2e851f6dd851da70fe4950
+  status: unverified
+  confidence: low
+  scope:
+    component:
+      any: true
+      basis: A hardware capability constant; no software subsystem owns it.
+    execution_mode:
+      any: true
+      basis: Nothing is executed, so graph capture and eager dispatch are alike irrelevant.
+    topology:
+      any: true
+      basis: A per-device declaration; it says nothing about how many are used together.
+    model:
+      any: true
+      basis: A peak throughput of the silicon; no weights are loaded.
+    vllm_ascend:
+      any: true
+      basis: A hardware capability declared by the vendor; no plugin code establishes it.
+    vllm:
+      any: true
+      basis: A hardware capability declared by the vendor; no vLLM code establishes it.
+    torch_npu:
+      any: true
+      basis: Declared by the toolkit, not by the plugin, which is not involved.
+    torch:
+      any: true
+      basis: Declared by the toolkit, not by a framework; torch is not on this path.
+    python_abi:
+      any: true
+      basis: A vendor constant parsed out of text; no compiled extension participates.
+    driver:
+      any: true
+      basis: Read from a file on disk; no device is opened and no driver call is made.
+    cann:
+      values:
+      - 0.0.EXAMPLE
+    soc:
+      values:
+      - Ascend000
+  provenance:
+    contributor: anonymous
+    origin_repo: vllm-ascend-workspace/vaws-knowledge
+    submitted_at: '2026-09-08'
+    redaction_profile: r2
+  lifecycle:
+    first_seen: '2026-09-08'
+    updated_at: '2026-09-08'
+    superseded_by: null
+    resolved_by: null
+  measurement:
+    quantities:
+    - name: fp16_dense_matmul_peak
+      basis: theoretical
+      value: '2.70336'
+      unit: tflops
+      qualifier: dense matmul, cube 16x16x16
+    - name: ai_core_count
+      basis: declared
+      value: '1'
+      unit: count
+    notes:
+    - A theoretical peak is the correct MFU denominator and is not what an operator achieves.
+    method:
+      source:
+        kind: vendor_file
+        ref: cann-0.0.EXAMPLE:platform_config:Ascend000.ini
+        note: Example toolkit release platform_config snapshot.
+      parameters:
+      - name: cube_shape_m_n_k
+        value: 16x16x16
+      - name: npu_arch
+        value: '0000'
+      description: 'Read out of the platform_config .ini shipped with the example toolkit release. The peak follows
+        from the declared cube shape and clock; no operator was executed. Reproduce by parsing the same file from
+        any installation of that release.   '
+      type: vendor_platform_config
+    subject:
+      compiler_target: dav-x000
+      core_version: AIC-X-000
+      architecture: davinci-example
+      family: Ascend000
+      aliases:
+      - 000-EXAMPLE
+      id: Ascend000
+    summary: "  Ascend000 declares a 2.70336 TFLOPS fp16 dense matmul peak in the example platform_config\r\n"
+expected_payload: '{"measurement":{"method":{"description":"Read out of the platform_config .ini shipped with the
+  example toolkit release. The peak follows from the declared cube shape and clock; no operator was executed. Reproduce
+  by parsing the same file from any installation of that release.","parameters":[{"name":"cube_shape_m_n_k","value":"16x16x16"},{"name":"npu_arch","value":"0000"}],"source":{"kind":"vendor_file","note":"Example
+  toolkit release platform_config snapshot.","ref":"cann-0.0.EXAMPLE:platform_config:Ascend000.ini"},"type":"vendor_platform_config"},"notes":["A
+  theoretical peak is the correct MFU denominator and is not what an operator achieves."],"quantities":[{"basis":"theoretical","name":"fp16_dense_matmul_peak","qualifier":"dense
+  matmul, cube 16x16x16","unit":"tflops","value":"2.70336"},{"basis":"declared","name":"ai_core_count","unit":"count","value":"1"}],"subject":{"aliases":["000-EXAMPLE"],"architecture":"davinci-example","compiler_target":"dav-x000","core_version":"AIC-X-000","family":"Ascend000","id":"Ascend000"},"summary":"Ascend000
+  declares a 2.70336 TFLOPS fp16 dense matmul peak in the example platform_config"},"scope":{"cann":{"values":["0.0.EXAMPLE"]},"component":{"any":true,"basis":"A
+  hardware capability constant; no software subsystem owns it."},"driver":{"any":true,"basis":"Read from a file
+  on disk; no device is opened and no driver call is made."},"execution_mode":{"any":true,"basis":"Nothing is executed,
+  so graph capture and eager dispatch are alike irrelevant."},"model":{"any":true,"basis":"A peak throughput of
+  the silicon; no weights are loaded."},"python_abi":{"any":true,"basis":"A vendor constant parsed out of text;
+  no compiled extension participates."},"soc":{"values":["Ascend000"]},"topology":{"any":true,"basis":"A per-device
+  declaration; it says nothing about how many are used together."},"torch":{"any":true,"basis":"Declared by the
+  toolkit, not by a framework; torch is not on this path."},"torch_npu":{"any":true,"basis":"Declared by the toolkit,
+  not by the plugin, which is not involved."},"vllm":{"any":true,"basis":"A hardware capability declared by the
+  vendor; no vLLM code establishes it."},"vllm_ascend":{"any":true,"basis":"A hardware capability declared by the
+  vendor; no plugin code establishes it."}}}'
+expected_content_hash: sha256:0b8758c6544e9eaed88c711a56350b8b2bfc048bcc2e851f6dd851da70fe4950

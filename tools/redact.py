@@ -68,7 +68,13 @@ from tools._common import (  # noqa: E402
 )
 
 #: Version of the ruleset declared in this file. Bump when a rule tightens.
-REDACTION_PROFILE = "r1"
+#:
+#: r2: adds ``internal-machine-identifier`` (a machine word followed by a
+#: slot number, "remote 131" / "remote_131", and run identifiers that embed a
+#: machine slot beside a device index, "microbenchmark_131_npu4_...") and adds
+#: ``remote`` to the numbered-host prefixes. Entries cleared under r1 must be
+#: re-scanned (sync/rescan.py --profile r2).
+REDACTION_PROFILE = "r2"
 
 
 # --------------------------------------------------------------------------- #
@@ -126,8 +132,13 @@ _PLACEHOLDER_START = r"(?![<$\{\*%])"  # <host>, $USER, {name}, *, %USERNAME%
 
 _HOST_PREFIXES = (
     "node|host|server|srv|worker|master|machine|ecs|vm|pod|box|k8s|rack|blade|"
-    "compute|bastion|jump|login|cluster"
+    "compute|bastion|jump|login|cluster|remote"
 )
+# Machine words that, followed by a bare number *with a space*, name a machine
+# in prose ("on remote 131", "machine 7"). Deliberately narrower than
+# _HOST_PREFIXES: "node 4" and "host 2" are also how people write rank and
+# node *indices*, which are load-bearing method detail and must survive.
+_MACHINE_WORDS = "remote|machine|box|server|bastion|workstation"
 _INTERNAL_TLDS = "local|localdomain|internal|intranet|lan|corp|home|priv|private|localnet"
 
 RULES: tuple[Rule, ...] = (
@@ -323,6 +334,22 @@ RULES: tuple[Rule, ...] = (
         pattern=re.compile(
             r"(?<![\w.-])(?:" + _HOST_PREFIXES + r")[-_]?(?:[a-z0-9]+[-_])*\d{1,4}"
             r"(?:[a-z][a-z0-9]*)?(?![\w])",
+            re.IGNORECASE,
+        ),
+    ),
+    Rule(
+        id="internal-machine-identifier",
+        description="internal machine slot identifier (remote 131, remote_131, "
+        "<run>_131_npu4_...)",
+        hint="drop the machine identity and keep the method: device model, device "
+        "index, software versions, workload shape",
+        pattern=re.compile(
+            # "remote 131" / "machine 7": a machine word, one space, a slot number.
+            r"(?:(?<![\w.-])(?:" + _MACHINE_WORDS + r") \d{1,4}(?![\w])"
+            # "microbenchmark_131_npu4_2026-06-03": a run identifier in which a
+            # bare number sits directly beside a device index. The number is
+            # the machine slot; "npu4" is the device and is *not* reported.
+            r"|(?<=_)\d{1,4}(?=_npu\d))",
             re.IGNORECASE,
         ),
     ),

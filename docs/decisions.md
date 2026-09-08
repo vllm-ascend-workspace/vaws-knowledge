@@ -276,6 +276,220 @@ the prose and tools follow the code, and the gap between them is where a real
 address eventually slips through. This should not have been settled by whichever
 gate shipped first.
 
+### 22. A hardware measurement is an entry with no symptom
+
+`README.md` says an entry is "a claim about a specific coordinate in a specific
+environment, carrying a followable reference to the run that established it". A
+measured FP16 peak of 2.70 TFLOPS for `Ascend031` is exactly that: a value, a
+coordinate, and a run that produced it. The schema disagreed. The body was
+`rule`, whose `summary`, `symptom`, `root_cause` and `resolution` are all
+required — mirrored in `RULE_BODY_FIELDS` in `bot/corpus.py` and in
+`PAYLOAD_KEYS` in `conformance/reference.py`. A measurement has no symptom and
+nothing to resolve.
+
+So the two rules that collide are the README's definition of an entry and the
+schema's definition of a body. The consequence was not abstract: hardware facts
+stayed outside the commons, duplicated inside a single consumer as
+`hardware_theoretical_peaks_cann9_0_0.json` (63 rows) and
+`hardware_peak_measurements.json` — the duplication the repository split existed
+to end.
+
+**Resolution:** a second payload variant inside the same entry envelope. Every
+field that makes an entry trustworthy is unchanged and still required — `uuid`,
+`content_hash`, `scope` over all twelve dimensions, `provenance`, `lifecycle`,
+`confidence`, `status`, `slug`, `layer`. Only the body differs, and the schema
+enforces exactly one of `rule` and `measurement` per entry via `oneOf`, so
+"neither" and "both" are unrepresentable rather than merely discouraged. The
+`measurement` body carries the subject (SoC id, aliases, family), the method
+that established the claim (`vendor_platform_config` or `microbenchmark`, with
+its parameters and a source reference), and a list of quantities, each with a
+`name`, a `basis`, a `value`, a `unit` and an optional `qualifier`.
+
+**A second repository was rejected.** It reproduces the duplication one level
+up. The coordinate, the redaction profile, the canonicalization, the review
+zones, the promotion rules, the conflict semantics and the query surface would
+all have to be re-implemented and then kept in step by hand; the first
+divergence between the two copies would be silent. Nothing about a measurement
+needs a different envelope — it needs a different body.
+
+**Forcing measurements into rule shape was rejected.** It is available and
+cheap: put "FP16 peak is 2.70 TFLOPS" in `summary`, leave `symptom` as "n/a".
+The cost is that `symptom` stops meaning anything. Every gate that reads the
+rule body — dedup's prose similarity above all — would then be comparing filler,
+and the fields whose whole purpose is to be reviewed as claims would be carrying
+placeholders. A schema that permits "n/a" in a required field has a required
+field in name only.
+
+### 23. Entry granularity for measurements: per subject, not per quantity
+
+63 theoretical rows carry roughly five quantities each. The rule that entry
+granularity is a free choice collides with the rule that dedup and conflict
+granularity *follow* entry granularity: whatever an entry is, that is the unit a
+conflict can be reported about, the unit that gets one `content_hash`, one
+`provenance` and one `lifecycle`, and the unit a reviewer promotes or retires.
+
+**Resolution:** one entry per subject per method — 63 theoretical entries, one
+per SoC, each bundling that SoC's quantities, plus one sustained entry for the
+one measured subject. This matches the shape of the fact: all of one SoC's peaks
+came from one `platform_config` snapshot at one CANN version, so they share one
+provenance and one evidence reference, and a correction to that snapshot is one
+revision rather than five.
+
+The consequence for conflicts is that a contradiction is detected *inside* a
+pair of entries, not between them: `bot/conflicts.py` compares two measurement
+entries about the same subject at overlapping coordinates and reports every
+quantity whose `(name, basis)` identity matches while its value or unit differs.
+Bundling therefore does not weaken conflict detection, it only means one blocking
+finding can name several quantities. It does mean two contributors who each
+measure a different subset of one SoC's quantities produce two entries that must
+be merged by review rather than automatically, which is the honest outcome:
+they are two different runs.
+
+**One entry per quantity was rejected.** It yields well over 300 entries whose
+`scope`, `provenance` and evidence reference are identical, differing only in a
+name and a number. Dedup would have to be taught that near-identical entries are
+expected rather than suspicious, which is precisely the signal dedup exists to
+raise. And a re-snapshot of one SoC becomes five revisions that can land
+partially, leaving a coordinate where two of five peaks came from one CANN
+version and three from another.
+
+**One entry per source file was also rejected.** A single entry carrying all 63
+SoCs would give the whole vendor table one `content_hash`, so correcting one
+SoC's peak invalidates the hash covering the other 62, and no conflict could
+ever be attributed to a subject.
+
+### 24. Which zone vendor-declared and self-measured numbers land in
+
+`CONTRIBUTING.md` requires that `verified/` carry a reference someone can follow
+and a confirmation from someone other than the submitter. Against that stands
+the intuition that these are not opinions: the theoretical peaks are the
+vendor's own `platform_config` values, and the sustained numbers came off real
+silicon with a stated method. Both rules are about trust, and they point in
+opposite directions.
+
+**Resolution:** `corpus/unverified/`, `status: unverified`, `confidence: low`,
+and no `verified_against` block. Three reasons, in decreasing order of force.
+The confirmation does not exist — one contributor submitted all 64 entries and
+nobody else has re-derived any of them. The reference is not followable by a
+third party: the run identifiers had to be scrubbed of an internal machine
+identity to be publishable at all (see #25), so what remains is a method
+description, which is enough to *re-measure* and not enough to *audit*. And a
+vendor declaration is a claim about a part number, not an observation of a
+machine: `platform_config` is a configuration file, it can be wrong, and reading
+it correctly is not the same as confirming it.
+
+Being off real hardware is not the criterion for `verified/` and must not become
+one. The criterion is that someone other than the submitter followed the
+evidence and agreed. Promotion is available the moment that happens, and the
+`notes` on the sustained entry state exactly which unrecorded stack dimensions
+would have to be pinned first.
+
+### 25. Keeping `content_hash` stable while the payload gained a variant
+
+`conformance/reference.py` fixed the hashed payload as `PAYLOAD_KEYS = ("rule",
+"scope")`. Two rules collide: the new body must participate in the hash — a
+`content_hash` that cannot see the number is worthless, since 2.70 could become
+27.0 without moving it — and no existing entry's hash may move, because those
+hashes are cited in `examples/valid-entry.yaml`, in the conformance anchor, and
+in every fork's snapshot.
+
+**Resolution:** the payload is `{scope, <body>}`, where the body key is
+whichever of `rule` and `measurement` the entry actually has. For a rule entry
+that produces byte-for-byte the same payload as before, so the hash is
+unchanged by construction rather than by luck. Canonicalization itself did not
+change at all: the same four steps apply to the new body's strings, at any
+depth, and `sync/_common.py`, `tools/canonical.py` and `server/capture.py` all
+resolve the body key the same way.
+
+The proof is mechanical and was run both ways: every hash in `examples/`,
+`conformance/vectors/` and `tests/fixtures/` recomputes to its recorded value
+after the change, and `tests/test_conformance_vectors.py` now asserts that the
+measurement vector's payload is keyed by `measurement` with no `rule` key
+anywhere in it, so a future refactor that introduces a wrapper key fails a test
+instead of silently rewriting every hash in the commons.
+
+One consequence had to be accepted deliberately. JSON number formatting is not
+portable — a float that Python renders `2.70336` may be rendered `2.7033600000`
+elsewhere — and a hash that depends on it would be unreproducible across
+languages, which is the one thing the conformance kit exists to prevent. So
+every measurement `value` is a **string** carrying a numeric pattern, exactly as
+version bounds already are, and `tools/validate.py` rejects a YAML float there
+by naming the float. Consumers parse; the commons stores digits.
+
+**A wrapper key was rejected.** Nesting both variants under a single `body` key
+is tidier and rewrites the `content_hash` of every entry that exists, including
+the conformance anchor — a migration whose only benefit is aesthetic.
+
+**Leaving the measurement out of the hashed payload was rejected** for the
+reason above: it would make the integrity gate blind to the only part of a
+measurement entry anybody cares about.
+
+### 26. Is a new body variant a breaking change for consumers?
+
+Additively adding an optional field is compatible; removing a required one is
+not. A new body variant is neither, and reading it as "additive, therefore
+ignorable" is wrong. A v1 consumer does not encounter an entry with an extra
+field it can skip. It encounters an entry with **no `rule` key at all**, and the
+straightforward v1 client — `entry["rule"]["summary"]` — raises. Even the
+careful one that uses `.get("rule", {})` silently treats a measurement entry as
+an empty rule and may then report it as a duplicate of every other one.
+
+**Resolution:** `service_api_version` is 2, with `supports: [1, 2]`.
+`service-api.json` now declares `bodies: ["rule", "measurement"]` and, in
+`v1_result_population`, the exact argument that reproduces v1 behaviour:
+`knowledge_query` gained a `bodies` filter, so a v1 consumer passes
+`bodies: ["rule"]` and sees precisely the corpus it saw before. Query results
+carry a `body` discriminator, and the rule-only fields are `null` rather than
+absent on a measurement result, so a consumer that does look can tell the
+difference between "not a rule" and "a rule with a missing field".
+
+**Arguing compatibility was rejected** because it would put the cost on the
+side that cannot pay it. A consumer cannot detect this change: nothing in a v1
+response tells it that the corpus now contains a shape it does not model. The
+version number is the only channel that reaches it before it reads bad data.
+Bumping when the answer is arguable costs one number; not bumping costs a silent
+misread in somebody else's analyzer.
+
+### 27. "Unresolved dimension" turned out to have no representation
+
+The brief for the measurement migration said that dimensions which cannot be
+established must be "recorded as unresolved with a `needs` string, exactly as
+existing entries do". Two rules collide here, and one of them does not exist:
+`scope` admits exactly three constraint forms — `any` + `basis`, `values`, and
+`range` — with `additionalProperties: false` on each, so a `needs` key is
+schema-invalid. There is also no existing corpus entry to copy: before this
+change `corpus/` contained only `.gitkeep` files. `needs` is a field in the
+*scaffold's* local `.agents/knowledge/` v2 files, not in this contract.
+
+**Resolution:** an unestablished dimension is `range: {min: null, max: null}`,
+and the justification goes in the body, which is what the schema's own
+description of `range` already asks for ("a claim about untested territory
+[that] should be justified in the rule body"). The sustained entry's `notes` name
+the four dimensions that were not recorded and say what re-measuring would fix.
+Nothing was invented to fill a dimension.
+
+This exposed a real defect, which is fixed here rather than left for the
+migration to work around: `server/query.py` resolved a both-sides-null range to
+`covered`, so an unestablished dimension matched *every* query and untested
+territory was reported as confirmed applicability. It now resolves to
+`undecidable`, which is the pre-existing first-class result from #1 for exactly
+this situation.
+
+`bot/conflicts.py` reads the same shape the opposite way — it treats a
+both-sides-null range as overlapping, and says so in the relation's `reason`.
+That is deliberate, not an inconsistency left in by accident: each module is
+conservative in its own direction. A query must not report untested territory
+as applicable, and a conflict gate must not let a pair escape review by
+declining to bound a dimension. Both readings refuse to give the entry credit
+for the dimension it never established.
+
+**Adding a fourth constraint form was rejected**, for now. It is the better
+long-term answer — "not established, and here is what would establish it" is a
+distinct state from "unbounded on both sides" and deserves to be
+machine-readable — but it changes the `constraint` definition that every
+implementation and every stored entry depends on. It belongs in the batched
+breaking change below, next to `layer` → `review_zone`, not in a migration.
+
 ---
 
 ## Deferred to one batched change

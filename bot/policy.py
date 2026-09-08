@@ -35,6 +35,10 @@ DEFAULTS: dict[str, Any] = {
         "same_phenomenon_threshold": 0.45,
         "divergent_explanation_max": 0.35,
     },
+    "measurements": {
+        "near_threshold": 0.5,
+        "contradiction_blocks_before_promotion": True,
+    },
     "integrity": {"bot_handles": []},
 }
 
@@ -96,6 +100,7 @@ def _validate(policy: Mapping[str, Any]) -> None:
     for section, keys in (
         ("duplicates", ("near_threshold", "field_match_threshold")),
         ("conflicts", ("same_phenomenon_threshold", "divergent_explanation_max")),
+        ("measurements", ("near_threshold",)),
     ):
         for key in keys:
             value = policy[section].get(key)
@@ -104,5 +109,9 @@ def _validate(policy: Mapping[str, Any]) -> None:
     shingle = policy["duplicates"].get("shingle_size")
     if not isinstance(shingle, int) or shingle < 1:
         raise PolicyError("duplicates.shingle_size must be a positive integer")
+    if not isinstance(policy["measurements"].get("contradiction_blocks_before_promotion"), bool):
+        raise PolicyError(
+            "measurements.contradiction_blocks_before_promotion must be true or false"
+        )
     if not isinstance(policy["integrity"].get("bot_handles"), list):
         raise PolicyError("integrity.bot_handles must be a list")

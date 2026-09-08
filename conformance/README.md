@@ -36,7 +36,7 @@ test; they may not exist in the checkout where the kit runs.
 
 ## Running it against your own client
 
-Your implementation is supplied as a **command**. Four commands are
+Your implementation is supplied as a **command**. Six commands are
 recognised; give the ones you have.
 
 | Flag | Reads on stdin | Must print on stdout |
@@ -45,6 +45,7 @@ recognised; give the ones you have.
 | `--payload-cmd` | one entry | the canonical JSON payload (optional, for diffs) |
 | `--redaction-cmd` | one document | one verdict token: `accept` or `reject` |
 | `--schema-cmd` | one document | one verdict token: `accept` or `reject` |
+| `--conflicts-cmd` | one document, **two or more entries** | one verdict token: `accept` or `reject` |
 | `--export-cmd` | one document | the exported bytes |
 
 Details:
@@ -104,6 +105,11 @@ python3 conformance/runner.py \
   --schema-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py schema" \
   --redaction-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py redaction"
 
+# conflicts is a cross-entry gate, so the adapter wraps bot/conflicts.py
+# rather than a per-document validator:
+python3 conformance/runner.py \
+  --conflicts-cmd "python3 tests/fixtures/conformance/gate_tools_adapter.py conflicts"
+
 # a fork's own client, in any language — the client must print accept or
 # reject; do not wrap an exit-only validator without an adapter
 python3 conformance/runner.py \
@@ -161,8 +167,10 @@ python3 -m unittest discover -s tests
 - your implementation computes the same `content_hash` as everyone else for the
   entries in `vectors/`, so a re-export of an unchanged entry will be a no-op
   in sync rather than a spurious revision;
-- your gates refuse the five redaction shapes and the four schema cases in
+- your gates refuse the six redaction shapes and the six schema cases in
   `gate_vectors/`, and still accept a clean document;
+- your conflicts gate refuses a pair that claims two values for one quantity at
+  one coordinate, and accepts the two pairs that only look like it;
 - your exporter is byte-stable across two runs on the same input.
 
 **It does not establish any of the following.**
@@ -172,12 +180,16 @@ python3 -m unittest discover -s tests
   `gate_vectors/` is synthetic, and the entries are deliberately nonsense as
   knowledge. Truth is what `verification.evidence` and a non-submitter
   confirmation are for; see `docs/lifecycle.md`.
-- **That your redaction is safe.** The kit contains five shapes. A real
+- **That your redaction is safe.** The kit contains six shapes. A real
   ruleset (`provenance.redaction_profile`) covers far more, the categories in
   `CONTRIBUTING.md` are prose rather than a specification, and public git
   history cannot be recalled. Passing `redaction-*` means your gate is not
   obviously broken, not that your fork is clean.
-- **That your schema validation is complete.** Four cases here;
+- **That your conflict detection is complete.** Three vectors here, all about
+  measurements, where a contradiction is an exact comparison. Contradictions
+  between two rule bodies are a judgement about prose and are not decidable by
+  a vector; `bot/conflicts.py` routes those to review instead.
+- **That your schema validation is complete.** Six cases here;
   `tests/test_schema_contract.py` proves the schema itself far more thoroughly,
   and neither is a substitute for validating against
   `schemas/knowledge-v2.schema.json` directly.
@@ -286,7 +298,7 @@ implementation.
 
 ## Vector inventory
 
-`vectors/` — canonicalization, 17 vectors. Group `anchor-scope-rule` is three
+`vectors/` — canonicalization, 19 vectors. Group `anchor-scope-rule` is three
 inputs that must all produce the recorded hash of `examples/valid-entry.yaml`.
 The original 11 expected hashes are unchanged: those entries contain no
 character the old Unicode-aware reading and the ratified ASCII reading
@@ -312,16 +324,24 @@ blanket-regenerating hashes.
 | `nested-scope-line-trailing-whitespace` | the same rule inside nested scope basis and values |
 | `fingerprint-byte-order` | fingerprints sort byte-wise over UTF-8 |
 | `no-unicode-normalization` | NFD sequences are not NFC-composed |
+| `measurement-body-payload-key` | the payload is keyed by the body the entry has, so a `measurement` entry hashes `{"measurement":…,"scope":…}` and no rule entry's hash moved when the variant was added |
+| `measurement-key-order-and-whitespace` | steps 1, 3 and 4 apply to the new body identically: same hash under scrambled keys, CRLF, and edge whitespace in a method description |
 
-`gate_vectors/` — 14 vectors: 6 redaction refusals + 1 clean control,
-4 schema refusals + 1 valid control, 2 export idempotence. Run
-`python3 conformance/runner.py --list` for the live list.
+`gate_vectors/` — 21 vectors: 7 redaction refusals + 1 clean control,
+6 schema refusals + 2 valid controls, 1 conflicts refusal + 2 non-conflict
+controls, 3 export idempotence. Run `python3 conformance/runner.py --list` for
+the live list.
+
+`conflicts` is the one gate class whose vectors carry more than one entry,
+because a contradiction is not a property of a document — it is a property of a
+pair. A conforming client is handed the whole document and must decide.
 
 | Vector | What it requires |
 |---|---|
 | `redaction-ipv4` | refuse an IPv4 address (RFC 2544 range; uncontested) |
 | `redaction-ipv4-documentation-range` | refuse an IPv4 address from RFC 5737 too (contested — see ambiguity 11) |
 | `redaction-internal-hostname` | refuse an internal-looking hostname |
+| `redaction-internal-machine-identifier` | refuse an internal machine identity (`remote 000`, and a machine slot embedded in a run id) **while keeping the method** — NPU index, `torch_npu` version, matmul shape and timing API all survive, because they are what makes a measured number checkable. Separate from the hostname vector on purpose: this token shape has no domain suffix, so a gate that looks for one finds nothing |
 | `redaction-absolute-user-path` | refuse a path revealing a user account |
 | `redaction-email` | refuse an e-mail address, including in `provenance` |
 | `redaction-credential` | refuse a credential-shaped string in an evidence note |
@@ -331,7 +351,14 @@ blanket-regenerating hashes.
 | `schema-prose-as-evidence` | refuse prose in place of an evidence reference |
 | `schema-verified-without-confirmation` | refuse `verified` that nobody confirmed |
 | `schema-valid-control` | **accept** the agreed example document |
+| `schema-measurement-quantity-without-unit` | refuse a quantity with a value and no `unit` |
+| `schema-measurement-verified-without-confirmation` | refuse `verified` that nobody confirmed, in the new body too — the promotion rule is a property of the envelope, not of the rule body |
+| `schema-measurement-valid-control` | **accept** a well-formed `measurement` entry |
+| `conflicts-measurement-contradicting-value` | refuse two entries claiming a different value for the same quantity, subject and coordinate. The pair differs *only* in the value, so a client cannot reach the right verdict by comparing prose |
+| `conflicts-theoretical-and-sustained-control` | **accept** a theoretical peak and a sustained measurement of the same subject: same quantity name, different `basis`, different value, not a contradiction. Keying on the name alone fails this |
+| `conflicts-measurement-disjoint-coordinate-control` | **accept** the same quantity at a different value on a disjoint coordinate. Ignoring the coordinate fails this |
 | `export-idempotent-unchanged-entry` | two exports of one entry are byte-identical |
+| `export-idempotent-measurement-entry` | the same, on a `measurement` body — an exporter that round-trips `"2.70336"` through a float manufactures a revision |
 | `export-idempotent-scrambled-key-order` | idempotence survives a reordered input |
 
 ## Adding or changing a vector

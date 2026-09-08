@@ -1158,7 +1158,7 @@ def prepare_exports(
     return export_paths, observations
 
 
-_HASHED_ENTRY_FIELDS = frozenset({"uuid", "content_hash", "scope", "rule"})
+_HASHED_ENTRY_FIELDS = frozenset({"uuid", "content_hash", "scope", "rule", "measurement"})
 
 
 def _non_hash_metadata(entry: Mapping[str, Any] | None, kind: str) -> str:

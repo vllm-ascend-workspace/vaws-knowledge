@@ -114,8 +114,32 @@ class Plan:
 
 
 def _rule_text(entry: dict) -> str:
+    """Comparable text for the entry's body.
+
+    A rule is compared on its prose. A measurement has no prose worth
+    comparing — two platform_config snapshots of different SoCs read almost
+    identically — so it is compared on subject and quantity identity instead.
+    Feeding measurement prose to a text-similarity ratio would report the whole
+    hardware catalogue as duplicates of itself.
+    """
+    if "measurement" in entry and "rule" not in entry:
+        return _measurement_key_text(entry)
     rule = entry.get("rule") or {}
     parts = [str(rule.get(k, "")) for k in ("summary", "symptom", "root_cause", "resolution")]
+    return re.sub(r"\s+", " ", " ".join(parts)).strip().lower()
+
+
+def _measurement_key_text(entry: dict) -> str:
+    measurement = entry.get("measurement") or {}
+    subject = measurement.get("subject") or {}
+    method = measurement.get("method") or {}
+    quantities = measurement.get("quantities") or []
+    parts = [str(subject.get("id", "")), str(method.get("type", ""))]
+    parts += sorted(
+        f"{q.get('name', '')}/{q.get('basis', '')}/{q.get('unit', '')}={q.get('value', '')}"
+        for q in quantities
+        if isinstance(q, dict)
+    )
     return re.sub(r"\s+", " ", " ".join(parts)).strip().lower()
 
 
@@ -135,10 +159,18 @@ def similarity(a: dict, b: dict) -> dict:
     text_ratio = matcher.ratio() if matcher.quick_ratio() >= TEXT_RATIO_THRESHOLD else 0.0
     fa, fb = _fingerprints(a), _fingerprints(b)
     jaccard = len(fa & fb) / len(fa | fb) if (fa and fb) else 0.0
-    exact_rule = canonical_json({"rule": a.get("rule"), "scope": {}}) == canonical_json(
-        {"rule": b.get("rule"), "scope": {}}
-    )
+    exact_rule = _body_only_json(a) == _body_only_json(b)
     return {"text_ratio": round(text_ratio, 3), "fingerprint_jaccard": round(jaccard, 3), "exact_rule": exact_rule}
+
+
+def _body_only_json(entry: dict) -> str:
+    """Canonical JSON of the body alone, with the coordinate blanked out.
+
+    Two entries with different bodies (one rule, one measurement) can never be
+    byte-identical here, because the payload key is the body's own name.
+    """
+    body = "measurement" if ("measurement" in entry and "rule" not in entry) else "rule"
+    return canonical_json({body: entry.get(body), "scope": {}})
 
 
 def is_near_duplicate(measures: dict) -> bool:
@@ -207,7 +239,15 @@ def shape_revision(current: dict, incoming: dict, day: str) -> tuple[dict, list[
     entry = copy.deepcopy(current)
     notes = []
     entry["scope"] = copy.deepcopy(incoming["scope"])
-    entry["rule"] = copy.deepcopy(incoming["rule"])
+    # The body is fork-owned and replaced wholesale. A revision may also switch
+    # variant (a measurement that was mistakenly filed as a rule), so the old
+    # body key is dropped rather than left behind next to the new one.
+    entry.pop("rule", None)
+    entry.pop("measurement", None)
+    if "rule" in incoming:
+        entry["rule"] = copy.deepcopy(incoming["rule"])
+    if "measurement" in incoming:
+        entry["measurement"] = copy.deepcopy(incoming["measurement"])
     entry["slug"] = incoming.get("slug", entry.get("slug"))
     entry["content_hash"] = content_hash(entry)
     if "provenance" in incoming:

@@ -59,6 +59,13 @@ SCOPE_DIMENSIONS: tuple[str, ...] = (
 
 RULE_BODY_FIELDS: tuple[str, ...] = ("summary", "symptom", "root_cause", "resolution")
 
+#: The two entry body variants. An entry has exactly one: ``rule`` for a
+#: failure rule, ``measurement`` for a measured or vendor-declared quantity.
+#: Everything else about an entry - identity, coordinate, provenance,
+#: lifecycle, review state - is shared, so the gates stay one pipeline and
+#: only the body-specific comparisons branch.
+BODY_KEYS: tuple[str, ...] = ("rule", "measurement")
+
 YAML_SUFFIXES = (".yaml", ".yml")
 
 
@@ -104,6 +111,58 @@ class EntryRef:
         return _mapping(self.entry.get("rule"))
 
     @property
+    def measurement(self) -> Mapping[str, Any]:
+        return _mapping(self.entry.get("measurement"))
+
+    @property
+    def body(self) -> str:
+        """``rule`` / ``measurement`` / ``none`` / ``both``.
+
+        Reported rather than raised: loading is tolerant so that a malformed
+        entry can still be pointed at by path. ``bot/integrity.py`` turns
+        ``none`` and ``both`` into findings.
+        """
+        present = [key for key in BODY_KEYS if key in self.entry]
+        if len(present) == 1:
+            return present[0]
+        return "both" if present else "none"
+
+    @property
+    def is_measurement(self) -> bool:
+        return self.body == "measurement"
+
+    @property
+    def subject_id(self) -> str:
+        """Identity of what a measurement is about; empty for a rule entry."""
+        return _string(_mapping(self.measurement.get("subject")).get("id")).strip()
+
+    @property
+    def method_type(self) -> str:
+        return _string(_mapping(self.measurement.get("method")).get("type")).strip()
+
+    def quantities(self) -> dict[tuple[str, str], tuple[str, str]]:
+        """``{(name, basis): (value, unit)}`` for a measurement entry.
+
+        ``(name, basis)`` is the quantity identity and ``(value, unit)`` is the
+        claim. Keying on ``basis`` as well as ``name`` is deliberate: a
+        theoretical peak and a sustained fraction of it are different claims
+        about the same physical thing, so they must never be compared as
+        though one contradicted the other.
+        """
+        raw = self.measurement.get("quantities")
+        if not isinstance(raw, list):
+            return {}
+        out: dict[tuple[str, str], tuple[str, str]] = {}
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            key = (_string(item.get("name")).strip(), _string(item.get("basis")).strip())
+            if not key[0]:
+                continue
+            out[key] = (_string(item.get("value")).strip(), _string(item.get("unit")).strip())
+        return out
+
+    @property
     def lifecycle(self) -> Mapping[str, Any]:
         return _mapping(self.entry.get("lifecycle"))
 
@@ -142,8 +201,35 @@ class EntryRef:
         return self.path.startswith("corpus/unverified/")
 
     def rule_body(self) -> str:
+        """The prose a text-similarity comparison may read.
+
+        Empty for a measurement entry, and deliberately so. A measurement's
+        summary and method description are near-identical across an entire
+        vendor catalogue — sixty-three platform_config rows differ only in a
+        SoC name and some numbers — so scoring them as prose would report the
+        whole catalogue as duplicates of itself. Measurements are compared on
+        subject, quantity identity and coordinate instead; see
+        ``measurement_body_key`` and ``bot/dedup.py``.
+        """
+        if self.is_measurement:
+            return ""
         parts = [_string(self.rule.get(f)) for f in RULE_BODY_FIELDS]
         return "\n".join(p for p in parts if p)
+
+    def measurement_body_key(self) -> tuple:
+        """Structural identity of a measurement claim, for exact comparison.
+
+        Subject, method type and the full sorted quantity set. Two entries
+        with the same key at the same coordinate are the same claim; two with
+        the same subject but a different value for a shared quantity are a
+        contradiction.
+        """
+        return (
+            self.subject_id.lower(),
+            self.method_type,
+            tuple(sorted((name, basis, value, unit)
+                         for (name, basis), (value, unit) in self.quantities().items())),
+        )
 
     def describe(self) -> dict[str, str]:
         """Compact, deterministic pointer used in every gate's JSON output."""

@@ -26,6 +26,16 @@ The contract is therefore a CLI one:
                     malformed stdout is a protocol failure (FAIL), not
                     reject.
 
+                    Three gate classes use this contract: `redaction`,
+                    `schema` and `conflicts`. The conflicts gate is fed a
+                    document containing more than one entry and must reject
+                    when two of them contradict each other: two measurements
+                    of the same quantity about the same subject at
+                    overlapping coordinates that claim different values.
+                    Unlike the other two it is a *cross-entry* gate, which is
+                    why the vector document holds several entries and why an
+                    implementation cannot answer it one entry at a time.
+
   export command    reads one document on stdin, writes the exported bytes on
                     stdout. Run twice per vector and compared byte for byte.
 
@@ -468,6 +478,10 @@ def run_gate_vectors(vectors, report, commands, fmt, timeout):
             mismatch.append(
                 f"      declared violation: {vector['violation'].get('rule')}"
             )
+        if vector.get("contradiction"):
+            mismatch.append(
+                f"      declared contradiction: {vector['contradiction'].get('rule')}"
+            )
         err_line = bounded_stderr(result.stderr)
         if err_line:
             mismatch.append(f"      stderr: {err_line}")
@@ -490,6 +504,10 @@ def build_parser():
     )
     parser.add_argument("--redaction-cmd", help="command that accepts/rejects a document")
     parser.add_argument("--schema-cmd", help="command that accepts/rejects a document")
+    parser.add_argument(
+        "--conflicts-cmd",
+        help="command that accepts/rejects a multi-entry document on contradiction",
+    )
     parser.add_argument("--export-cmd", help="command that exports a document to stdout")
     parser.add_argument(
         "--input-format",
@@ -541,6 +559,7 @@ def main(argv=None) -> int:
     gate_commands = {
         "redaction": args.redaction_cmd,
         "schema": args.schema_cmd,
+        "conflicts": args.conflicts_cmd,
         "export": args.export_cmd,
     }
     if not args.hash_cmd and not any(gate_commands.values()):

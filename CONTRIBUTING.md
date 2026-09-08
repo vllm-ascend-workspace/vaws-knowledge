@@ -7,6 +7,13 @@ leaves your fork it must pass the source-side redaction gate
 (`tools/redact.py`), and it must not contain:
 
 - IP addresses, hostnames, container names, MAC addresses
+- internal machine identities — the name or slot number a team uses for a
+  specific box, whether it looks like a hostname or not (`remote 131`,
+  `remote_131`, or `131` embedded in a run identifier). **Scrub the machine,
+  keep the method:** "single-card 910B4, NPU index 4, torch_npu 2.10.0,
+  8192×8192 dense matmul timed with `torch.npu.Event`" is what makes a measured
+  number checkable and must survive redaction. What must not survive is *which*
+  box it was
 - absolute paths that reveal a user or org (`/home/<user>/…`, `/Users/…`, internal mounts)
 - usernames, e-mail addresses, employee or ticket identifiers
 - credentials of any kind, including partial tokens
@@ -43,8 +50,18 @@ Required for every entry:
   `range`) or explicitly claim independence (`any` + `basis`). An `any` claim
   without a stated basis is rejected, because unexamined independence claims are
   the usual root cause of contradictory knowledge across forks.
-- **A root cause, not a symptom.** `rule.root_cause` must explain the mechanism.
-  "Restarting fixed it" is not a root cause.
+- **Exactly one body.** A `rule` (a failure and its mechanism) or a
+  `measurement` (a quantity about a subject). Never both, never neither.
+- **A root cause, not a symptom.** In a `rule` body, `root_cause` must explain
+  the mechanism. "Restarting fixed it" is not a root cause.
+- **A method, not just a number.** In a `measurement` body, `method` must say
+  how the value was established — `vendor_platform_config` with the snapshot it
+  came from, or `microbenchmark` with the parameters somebody would need to
+  repeat it. A quantity needs a `name`, a `basis` (`declared`, `theoretical`,
+  `measured` or `sustained`), a `value` and a `unit`; a value without a unit is rejected by
+  the schema, because tflops and tops are not interchangeable. Write values as
+  **strings** (`value: "2.70336"`): a YAML float is rejected, for the same
+  reason a float version bound is.
 - **Followable evidence.** `verification.evidence` takes references —
   `run_manifest`, `pull_request`, `commit`, `ci_run`, `issue`. Prose is not
   evidence. If the run that established this is not referenceable, submit as

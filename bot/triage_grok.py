@@ -514,8 +514,19 @@ def _select_entries(
     max_completion_tokens: int,
     model: str,
 ) -> tuple[list[EntryRef], list[dict[str, str]], Optional[str]]:
-    ordered = sorted((e for e in entries if e.uuid), key=lambda e: (e.uuid, e.location))
+    # Measurement bodies never reach the model: a contradiction between two
+    # measured quantities is decided exactly in bot/conflicts.py, and there is
+    # no prose for a language model to triage. They are listed as omitted so
+    # the artifact stays honest about what was and was not looked at.
+    ordered = sorted(
+        (e for e in entries if e.uuid and not e.is_measurement),
+        key=lambda e: (e.uuid, e.location),
+    )
     omitted: list[dict[str, str]] = [_pointer(e, "missing uuid") for e in entries if not e.uuid]
+    omitted.extend(
+        _pointer(e, "measurement_body")
+        for e in sorted((e for e in entries if e.uuid and e.is_measurement), key=lambda e: (e.uuid, e.location))
+    )
     overflow = ordered[max_entries:]
     chosen = list(ordered[:max_entries])
     omitted.extend(_pointer(e, "entry_limit") for e in overflow)

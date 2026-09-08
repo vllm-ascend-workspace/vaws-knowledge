@@ -68,7 +68,7 @@ DEFAULT_CONTRIBUTOR = "anonymous"
 _DOC_ORDER = ("schema_version", "kind", "layer", "updated_at", "entries")
 _ENTRY_ORDER = (
     "uuid", "slug", "content_hash", "status", "confidence", "scope",
-    "provenance", "verification", "lifecycle", "conflicts", "rule",
+    "provenance", "verification", "lifecycle", "conflicts", "rule", "measurement",
 )
 _ORDER_BY_KEY = {
     "scope": validate.SCOPE_DIMENSIONS,
@@ -77,6 +77,12 @@ _ORDER_BY_KEY = {
     "verified_against": validate.CONCRETE_ENV_FIELDS,
     "lifecycle": ("first_seen", "updated_at", "supersedes", "superseded_by", "resolved_by"),
     "rule": ("summary", "symptom", "root_cause", "resolution", "avoidance", "fingerprints"),
+    "measurement": ("summary", "subject", "method", "quantities", "notes"),
+    "measurement.subject": ("id", "aliases", "family", "architecture", "core_version", "compiler_target"),
+    "measurement.method": ("type", "description", "parameters", "source"),
+    "measurement.method.parameters[]": ("name", "value"),
+    "measurement.method.source": ("kind", "ref", "note"),
+    "measurement.quantities[]": ("name", "basis", "value", "unit", "qualifier"),
     "range": ("min", "max"),
 }
 _CONSTRAINT_ORDER = ("any", "basis", "values", "range")
@@ -230,7 +236,31 @@ def order_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
         e["conflicts"] = [_ordered(x, _CONFLICT_ORDER) if isinstance(x, Mapping) else x for x in e["conflicts"]]
     if isinstance(e.get("rule"), Mapping):
         e["rule"] = _ordered(e["rule"], _ORDER_BY_KEY["rule"])
+    if isinstance(e.get("measurement"), Mapping):
+        e["measurement"] = _ordered_measurement(e["measurement"])
     return _ordered(e, _ENTRY_ORDER)
+
+
+def _ordered_measurement(m: Mapping[str, Any]) -> dict[str, Any]:
+    m = _ordered(m, _ORDER_BY_KEY["measurement"])
+    if isinstance(m.get("subject"), Mapping):
+        m["subject"] = _ordered(m["subject"], _ORDER_BY_KEY["measurement.subject"])
+    if isinstance(m.get("method"), Mapping):
+        method = _ordered(m["method"], _ORDER_BY_KEY["measurement.method"])
+        if isinstance(method.get("parameters"), list):
+            method["parameters"] = [
+                _ordered(p, _ORDER_BY_KEY["measurement.method.parameters[]"]) if isinstance(p, Mapping) else p
+                for p in method["parameters"]
+            ]
+        if isinstance(method.get("source"), Mapping):
+            method["source"] = _ordered(method["source"], _ORDER_BY_KEY["measurement.method.source"])
+        m["method"] = method
+    if isinstance(m.get("quantities"), list):
+        m["quantities"] = [
+            _ordered(q, _ORDER_BY_KEY["measurement.quantities[]"]) if isinstance(q, Mapping) else q
+            for q in m["quantities"]
+        ]
+    return m
 
 
 # --------------------------------------------------------------------------- #

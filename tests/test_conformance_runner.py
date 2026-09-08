@@ -191,6 +191,29 @@ class GateVectors(unittest.TestCase):
         self.assertEqual("FAIL", status_of(result.stdout, "redaction-clean-control"))
         self.assertIn("expected verdict accept, got reject", result.stdout)
 
+    def test_a_gate_that_accepts_everything_fails_the_conflicts_rejection_vector(self):
+        # The conflicts class is the first gate class whose vectors carry more
+        # than one entry, so it is worth proving the runner drives it at all.
+        result = run_runner("--conflicts-cmd", impl("gate_accept_all.py"))
+        self.assertEqual(1, result.returncode)
+        self.assertEqual(
+            "FAIL", status_of(result.stdout, "conflicts-measurement-contradicting-value")
+        )
+        self.assertEqual(
+            "PASS", status_of(result.stdout, "conflicts-theoretical-and-sustained-control")
+        )
+
+    def test_a_gate_that_refuses_everything_fails_the_conflicts_controls(self):
+        result = run_runner("--conflicts-cmd", impl("gate_reject_all.py"))
+        self.assertEqual(1, result.returncode)
+        self.assertEqual(
+            "FAIL", status_of(result.stdout, "conflicts-theoretical-and-sustained-control")
+        )
+        self.assertEqual(
+            "FAIL",
+            status_of(result.stdout, "conflicts-measurement-disjoint-coordinate-control"),
+        )
+
     def test_a_stable_exporter_passes_the_idempotence_vectors(self):
         result = run_runner("--export-cmd", impl("export_stable.py"))
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -501,6 +524,54 @@ class RealToolAdapter(unittest.TestCase):
             "PASS", status_of(result.stdout, "redaction-clean-control")
         )
         self.assertEqual("PASS", status_of(result.stdout, "redaction-ipv4"))
+
+    def test_conflicts_adapter_runs_the_real_bot_gate(self):
+        # bot/conflicts.py, not a regex: the contradicting pair must be found
+        # by the same code that runs on a pull request.
+        if not (REPO / "bot" / "conflicts.py").is_file():
+            self.skipTest("bot/conflicts.py is not in this checkout")
+        result = run_runner(
+            "--conflicts-cmd",
+            impl("gate_tools_adapter.py", "conflicts"),
+            "--only",
+            "conflicts-",
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            "PASS", status_of(result.stdout, "conflicts-measurement-contradicting-value")
+        )
+        self.assertEqual(
+            "PASS", status_of(result.stdout, "conflicts-theoretical-and-sustained-control")
+        )
+        self.assertEqual(
+            "PASS",
+            status_of(result.stdout, "conflicts-measurement-disjoint-coordinate-control"),
+        )
+
+    def test_export_adapter_runs_the_real_exporter(self):
+        # export_stable.py proves the runner compares two runs. It does not
+        # prove tools/export.py is idempotent, which is the claim that matters
+        # for the corpus - and the measurement vector is there because a
+        # numeric string is the part most likely to move under a round trip.
+        if not (REPO / "tools" / "export.py").is_file():
+            self.skipTest("tools/export.py is not in this checkout")
+        try:
+            import jsonschema  # noqa: F401
+        except ImportError:
+            self.skipTest("jsonschema is not installed; the exporter needs it")
+        result = run_runner(
+            "--export-cmd",
+            impl("gate_tools_adapter.py", "export"),
+            "--only",
+            "export-",
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            "PASS", status_of(result.stdout, "export-idempotent-measurement-entry")
+        )
+        self.assertEqual(
+            "PASS", status_of(result.stdout, "export-idempotent-unchanged-entry")
+        )
 
     def test_validator_crash_does_not_pass_a_negative_vector(self):
         # The adapter must invoke the real tools/validate.py API. Shadowing

@@ -42,7 +42,14 @@ from typing import Any, BinaryIO, Mapping
 
 from . import layers as layers_mod
 from .capture import CaptureRefused, CaptureRejected, capture
-from .layers import LAYERS, SERVICE_API_VERSION, ConfigError, ServiceConfig, load_config
+from .layers import (
+    LAYERS,
+    SERVICE_API_VERSION,
+    SUPPORTED_SERVICE_API_VERSIONS,
+    ConfigError,
+    ServiceConfig,
+    load_config,
+)
 from .query import READER_DIMENSIONS, SCOPE_DIMENSIONS, explain, query
 
 SERVER_NAME = "vaws-knowledge"
@@ -192,6 +199,15 @@ TOOLS: list[dict[str, Any]] = [
                     ),
                 },
                 "kind": {"type": "string"},
+                "bodies": {
+                    "type": "array",
+                    "items": {"enum": ["rule", "measurement"]},
+                    "description": (
+                        "Payload variants to return. Default: both. A caller written "
+                        "against service API 1 (every result a failure rule) passes "
+                        '["rule"] to reproduce that result population exactly.'
+                    ),
+                },
                 "limit": {"type": "integer", "default": 20, "minimum": 1},
             },
             "additionalProperties": False,
@@ -331,6 +347,7 @@ class KnowledgeService:
             include_unverified=bool(args.get("include_unverified", False)),
             include_non_matching=bool(args.get("include_non_matching", False)),
             kind=args.get("kind"),
+            bodies=args.get("bodies"),
             limit=int(args.get("limit", 20) or 20),
             today=self.today,
         )
@@ -470,7 +487,11 @@ def handle_message(service: KnowledgeService, message: Mapping[str, Any]) -> dic
                 "capabilities": {
                     "tools": {"listChanged": False},
                     "experimental": {
-                        "vaws-knowledge": {"service_api_version": int(float(SERVICE_API_VERSION))},
+                        "vaws-knowledge": {
+                            "service_api_version": int(float(SERVICE_API_VERSION)),
+                            "supports": list(SUPPORTED_SERVICE_API_VERSIONS),
+                            "bodies": ["rule", "measurement"],
+                        },
                     },
                 },
                 "serverInfo": {

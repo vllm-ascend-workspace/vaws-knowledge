@@ -230,10 +230,20 @@ def _duplicates_gate(loaded: LoadResult, policy: Mapping[str, Any]) -> GateResul
             f"near {rec['score']:.4f}: `{rec['a']['uuid']}` ↔ `{rec['b']['uuid']}` "
             f"(matched: {', '.join(rec['matched_fields']) or 'none'})"
         )
+    for rec in data.get("contradicting", []):
+        details.append(
+            f"not a duplicate: `{rec['a']['uuid']}` ↔ `{rec['b']['uuid']}` — the same "
+            f"quantity is claimed with a different value "
+            f"({', '.join(rec['disagreeing_quantities'])}); the coordinate-conflicts "
+            "gate owns this pair. Do not merge."
+        )
     if details:
         details.append("Humans decide; merge with `lifecycle.supersedes`. The bot never merges.")
     exact, near = data["counts"]["exact"], data["counts"]["near"]
+    contradicting = data["counts"].get("contradicting", 0)
     summary = f"{exact} exact, {near} near (threshold {data['near_threshold']})"
+    if contradicting:
+        summary += f", {contradicting} contradicting (reported by the conflicts gate)"
     if exact:
         return GateResult("duplicates", "Exact and near duplicates", FAIL, True, summary, details, data)
     if near:

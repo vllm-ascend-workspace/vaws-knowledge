@@ -1,4 +1,4 @@
-"""tools/redact.py — ruleset r1, scanner and allowlist."""
+"""tools/redact.py — ruleset r2, scanner and allowlist."""
 
 from __future__ import annotations
 
@@ -40,9 +40,9 @@ def rules_hit(text: str, allow: redact.Allowlist | None = None) -> set[str]:
 class ProfileTests(unittest.TestCase):
     def test_profile_is_declared_once_and_matches_schema_pattern(self):
         self.assertRegex(redact.REDACTION_PROFILE, r"^r[0-9]+$")
-        self.assertEqual(redact.REDACTION_PROFILE, "r1")
+        self.assertEqual(redact.REDACTION_PROFILE, "r2")
         proc = run_tool("redact", "--profile")
-        self.assertEqual(proc.stdout.strip(), "r1")
+        self.assertEqual(proc.stdout.strip(), "r2")
 
     def test_rule_ids_unique(self):
         self.assertEqual(len(redact.RULE_IDS), len(set(redact.RULE_IDS)))
@@ -68,6 +68,25 @@ class DetectionTests(unittest.TestCase):
         self.assertIn("hostname-internal-domain", rules_hit("on " + synthetic_hostname()))
         self.assertIn("hostname-numbered", rules_hit("ran on node-01 and worker3"))
         self.assertIn("hostname-assignment", rules_hit("host: " + "npu" + "-" + "rack2"))
+
+    def test_internal_machine_identifiers(self):
+        # r2: the token shapes that carried a machine slot in the hardware
+        # measurement source files. The numbers are synthetic (000).
+        self.assertIn("hostname-numbered", rules_hit("snapshot remote_000_cann_9_0_0_2026-06-02"))
+        self.assertIn("internal-machine-identifier", rules_hit("Single-card 910B4 on remote 000, NPU 4"))
+        self.assertIn("internal-machine-identifier", rules_hit("source microbenchmark_000_npu4_2026-06-03"))
+        findings = redact.scan_text("source microbenchmark_000_npu4_2026-06-03")
+        self.assertEqual([f.value for f in findings], ["000"], "the device index is method, not identity")
+
+    def test_method_detail_survives_machine_identifier_rule(self):
+        # What makes a measurement checkable must not be reported: device
+        # model, device index, software versions, workload shape, timing API.
+        clean = (
+            "single-card 910B4, NPU index 4, torch_npu 2.10.0, 8192x8192 dense matmul "
+            "timed with torch.npu.Event; vendor platform_config snapshot, CANN 9.0.0; "
+            "node 4 of 8; ascend-microbenchmark:2026-06-03/npu4; remote control"
+        )
+        self.assertEqual(rules_hit(clean), set())
 
     def test_user_paths(self):
         self.assertIn("user-path", rules_hit("see " + synthetic_user_path()))
@@ -215,7 +234,7 @@ class CliTests(unittest.TestCase):
             proc = run_tool("redact", "--check", "--format", "json", str(path))
         self.assertEqual(proc.returncode, 1)
         payload = json.loads(proc.stdout)
-        self.assertEqual(payload["redaction_profile"], "r1")
+        self.assertEqual(payload["redaction_profile"], "r2")
         self.assertEqual({f["rule"] for f in payload["findings"]}, {"ipv4-address", "user-path"})
 
     def test_clean_input_check_passes(self):

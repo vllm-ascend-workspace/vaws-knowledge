@@ -1,0 +1,217 @@
+# SYNTHETIC BAD VALUES - THIS FILE EXISTS TO BE REJECTED.
+#
+# Every address, hostname, path, e-mail and credential-shaped string in
+# conformance/gate_vectors/ is invented for the purpose of being refused by a
+# conforming gate. None of it came from a real machine, a real account or a
+# real deployment. The addresses are RFC 5737 documentation ranges, the
+# hostnames end in .invalid (RFC 2606), and the credentials are the string
+# EXAMPLE repeated. A bulk redaction scan of this repository should treat this
+# directory as expected-fail fixtures, not as a leak.
+#
+# Two measurements of one quantity that disagree.
+#
+id: conflicts-measurement-contradicting-value
+gate: conflicts
+expected_verdict: reject
+title: Two different values for one quantity at one coordinate are a conflict
+spec: README.md - Conflict resolution; docs/review-pipeline.md - Coordinate conflicts
+contradiction:
+  rule: same subject, same quantity identity, overlapping coordinate, different value
+  subject: Ascend000
+  quantity: fp16_dense_matmul_peak
+  basis: theoretical
+  values:
+  - '2.70336'
+  - '2.5'
+  location: document.entries[*].measurement.quantities[0].value
+notes: 'This is the vector that keeps measurement dedup honest. The two entries are word-for-word identical apart
+  from one number, so a gate that compares prose sees a duplicate and a gate that compares subject+quantity+coordinate
+  sees a contradiction. Only the second is correct: collapsing them would silently drop one of two irreconcilable
+  numbers, and a consumer would then compute a roofline against whichever survived.
+
+  It is also why the gate must not stop at ''same claim, different wording''. Every quantity name, basis, unit and
+  qualifier here agrees. The coordinates overlap on every dimension. There is nothing left to distinguish the two
+  claims except the value, which means either one report is wrong or the coordinate does not model whatever separates
+  them - and both of those are human decisions, which is why the gate reports and blocks rather than choosing.'
+document:
+  schema_version: 2
+  kind: hardware-measurements
+  layer: unverified
+  updated_at: '2026-09-08'
+  entries:
+  - uuid: d4e81a37-9c02-4b6d-91f8-5a7c30e2b418
+    slug: ascend000-example-fp16-peak-first-report
+    content_hash: sha256:0b8758c6544e9eaed88c711a56350b8b2bfc048bcc2e851f6dd851da70fe4950
+    status: unverified
+    confidence: low
+    scope:
+      soc:
+        values:
+        - Ascend000
+      cann:
+        values:
+        - 0.0.EXAMPLE
+      driver:
+        any: true
+        basis: Read from a file on disk; no device is opened and no driver call is made.
+      python_abi:
+        any: true
+        basis: A vendor constant parsed out of text; no compiled extension participates.
+      torch:
+        any: true
+        basis: Declared by the toolkit, not by a framework; torch is not on this path.
+      torch_npu:
+        any: true
+        basis: Declared by the toolkit, not by the plugin, which is not involved.
+      vllm:
+        any: true
+        basis: A hardware capability declared by the vendor; no vLLM code establishes it.
+      vllm_ascend:
+        any: true
+        basis: A hardware capability declared by the vendor; no plugin code establishes it.
+      model:
+        any: true
+        basis: A peak throughput of the silicon; no weights are loaded.
+      topology:
+        any: true
+        basis: A per-device declaration; it says nothing about how many are used together.
+      execution_mode:
+        any: true
+        basis: Nothing is executed, so graph capture and eager dispatch are alike irrelevant.
+      component:
+        any: true
+        basis: A hardware capability constant; no software subsystem owns it.
+    provenance:
+      contributor: anonymous
+      origin_repo: vllm-ascend-workspace/vaws-knowledge
+      submitted_at: '2026-09-08'
+      redaction_profile: r2
+    lifecycle:
+      first_seen: '2026-09-08'
+      updated_at: '2026-09-08'
+      superseded_by: null
+      resolved_by: null
+    measurement:
+      summary: Ascend000 declares a 2.70336 TFLOPS fp16 dense matmul peak in the example platform_config
+      subject:
+        id: Ascend000
+        aliases:
+        - 000-EXAMPLE
+        family: Ascend000
+        architecture: davinci-example
+        core_version: AIC-X-000
+        compiler_target: dav-x000
+      method:
+        type: vendor_platform_config
+        description: Read out of the platform_config .ini shipped with the example toolkit release. The peak follows
+          from the declared cube shape and clock; no operator was executed. Reproduce by parsing the same file from
+          any installation of that release.
+        parameters:
+        - name: cube_shape_m_n_k
+          value: 16x16x16
+        - name: npu_arch
+          value: '0000'
+        source:
+          kind: vendor_file
+          ref: cann-0.0.EXAMPLE:platform_config:Ascend000.ini
+          note: Example toolkit release platform_config snapshot.
+      quantities:
+      - name: fp16_dense_matmul_peak
+        basis: theoretical
+        value: '2.70336'
+        unit: tflops
+        qualifier: dense matmul, cube 16x16x16
+      - name: ai_core_count
+        basis: declared
+        value: '1'
+        unit: count
+      notes:
+      - A theoretical peak is the correct MFU denominator and is not what an operator achieves.
+  - uuid: e69b2c05-47a8-4d31-8f60-1b93ca57d0e2
+    slug: ascend000-example-fp16-peak-second-report
+    content_hash: sha256:150a9d5965b69fcc3b6b7201b5098aa972251eb94da10baa963ac31725ede7a5
+    status: unverified
+    confidence: low
+    scope:
+      soc:
+        values:
+        - Ascend000
+      cann:
+        values:
+        - 0.0.EXAMPLE
+      driver:
+        any: true
+        basis: Read from a file on disk; no device is opened and no driver call is made.
+      python_abi:
+        any: true
+        basis: A vendor constant parsed out of text; no compiled extension participates.
+      torch:
+        any: true
+        basis: Declared by the toolkit, not by a framework; torch is not on this path.
+      torch_npu:
+        any: true
+        basis: Declared by the toolkit, not by the plugin, which is not involved.
+      vllm:
+        any: true
+        basis: A hardware capability declared by the vendor; no vLLM code establishes it.
+      vllm_ascend:
+        any: true
+        basis: A hardware capability declared by the vendor; no plugin code establishes it.
+      model:
+        any: true
+        basis: A peak throughput of the silicon; no weights are loaded.
+      topology:
+        any: true
+        basis: A per-device declaration; it says nothing about how many are used together.
+      execution_mode:
+        any: true
+        basis: Nothing is executed, so graph capture and eager dispatch are alike irrelevant.
+      component:
+        any: true
+        basis: A hardware capability constant; no software subsystem owns it.
+    provenance:
+      contributor: anonymous
+      origin_repo: vllm-ascend-workspace/vaws-knowledge
+      submitted_at: '2026-09-08'
+      redaction_profile: r2
+    lifecycle:
+      first_seen: '2026-09-08'
+      updated_at: '2026-09-08'
+      superseded_by: null
+      resolved_by: null
+    measurement:
+      summary: Ascend000 declares a 2.5 TFLOPS fp16 dense matmul peak in the example platform_config
+      subject:
+        id: Ascend000
+        aliases:
+        - 000-EXAMPLE
+        family: Ascend000
+        architecture: davinci-example
+        core_version: AIC-X-000
+        compiler_target: dav-x000
+      method:
+        type: vendor_platform_config
+        description: Read out of the platform_config .ini shipped with the example toolkit release. The peak follows
+          from the declared cube shape and clock; no operator was executed. Reproduce by parsing the same file from
+          any installation of that release.
+        parameters:
+        - name: cube_shape_m_n_k
+          value: 16x16x16
+        - name: npu_arch
+          value: '0000'
+        source:
+          kind: vendor_file
+          ref: cann-0.0.EXAMPLE:platform_config:Ascend000.ini
+          note: A second read of the same release, reported by another contributor.
+      quantities:
+      - name: fp16_dense_matmul_peak
+        basis: theoretical
+        value: '2.5'
+        unit: tflops
+        qualifier: dense matmul, cube 16x16x16
+      - name: ai_core_count
+        basis: declared
+        value: '1'
+        unit: count
+      notes:
+      - A theoretical peak is the correct MFU denominator and is not what an operator achieves.

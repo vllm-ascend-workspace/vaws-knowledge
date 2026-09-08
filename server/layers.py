@@ -32,7 +32,15 @@ except ImportError:  # pragma: no cover - exercised only on a bare interpreter
     yaml = None  # type: ignore
 
 #: Bumped when the tool surface changes in a way callers can observe.
-SERVICE_API_VERSION = "1.0"
+#:
+#: 2.0: the default result population of ``knowledge_query`` may contain
+#: ``measurement`` bodies (results with ``body == "measurement"``, a
+#: ``measurement`` block, and null ``symptom``/``root_cause``/``resolution``).
+#: Every 1.0 field is still present; the 1.0 population is reproduced with
+#: ``bodies: ["rule"]``. ``service-api.json`` therefore advertises
+#: ``supports: [1, 2]``.
+SERVICE_API_VERSION = "2.0"
+SUPPORTED_SERVICE_API_VERSIONS: tuple[int, ...] = (1, 2)
 
 #: Ordered by trust, most trusted first. Also the tie-break order for
 #: duplicate uuids: a reviewed shared entry shadows a local copy of itself.
