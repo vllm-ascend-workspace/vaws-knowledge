@@ -467,7 +467,12 @@ def handle_message(service: KnowledgeService, message: Mapping[str, Any]) -> dic
             request_id,
             {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "experimental": {
+                        "vaws-knowledge": {"service_api_version": int(float(SERVICE_API_VERSION))},
+                    },
+                },
                 "serverInfo": {
                     "name": SERVER_NAME,
                     "version": SERVER_VERSION,
