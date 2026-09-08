@@ -68,7 +68,7 @@ class RedactionGateTests(unittest.TestCase):
             path = write_yaml(tmp / "cand.yaml", cand)
             proc = run_tool("export", str(path), "--kind", "known-failure-signatures", "--origin-repo", ORIGIN)
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("redaction (r1)", proc.stderr)
+        self.assertIn("redaction (r2)", proc.stderr)
         self.assertIn("[ipv4-address]", proc.stderr)
         self.assertIn("entries[0].rule.resolution", proc.stderr)
         self.assertEqual(proc.stdout, "")

@@ -28,7 +28,7 @@ involved in that step.
 | `redaction` | yes | no leak under the **current** ruleset, not the one that cleared the export |
 | `integrity` | yes | `uuid` uniqueness and identifier shape across the corpus |
 | `duplicates` | yes | exact and near duplicates reported — never merged |
-| `conflicts` | yes | coordinate diffs and undeclared dimensions recorded on both entries |
+| `conflicts` | yes | coordinate diffs and undeclared dimensions recorded on both entries; for measurements, quantities claimed at two different values |
 | `staleness` | pull request: no · audit: yes | entries past the re-verification horizon |
 
 `load` runs first because every later gate is meaningless on documents that did
@@ -105,12 +105,39 @@ revision is on the default branch, live scheduling cannot be demonstrated by
 this repository's tests. A green local suite does not mean GitHub ran the
 publisher.
 
+## The same two gates read a measurement pair differently
+
+`duplicates` and `conflicts` both look at every pair, and for measurement
+bodies they must reach opposite conclusions about the same pair rather than
+both firing. The comparison is not prose similarity: it is the subject, the
+quantity identity `(name, basis)`, the value, the unit and the coordinate.
+
+- Same subject, same coordinate, same quantity identities, same values →
+  `duplicates` reports it and a human decides whether to merge.
+- Same subject, overlapping coordinate, a shared quantity identity claimed at a
+  **different value or unit** → `conflicts` owns it and blocks. `duplicates`
+  scores it zero and says so explicitly, because telling a reviewer that an
+  irreconcilable pair is a duplicate invites them to merge it and drop one of
+  the two numbers.
+- Different subject → neither. Sixty-three SoCs all declare an
+  `fp16_dense_matmul_peak/theoretical` and all disagree about its value; that
+  is the catalogue working. A gate that read those as contradictions would
+  report roughly 1,900 findings for 63 rows and bury the pair that matters.
+- Different `basis` → neither. A theoretical peak and a sustained fraction of
+  it are different claims about the same silicon.
+
 ## Where a triage step plugs in, and what it may not do
 
 Conflict detection needs to notice that two entries are *about the same
 phenomenon* and *say opposite things*, which is a judgement about text. A
 language-model triage step can help there, and `bot/conflicts.py` accepts
 asserted pairs from one.
+
+It is only needed for rule bodies. A measurement contradiction is an exact
+comparison of two values, so `bot/triage_grok.py` omits measurement entries
+from what it sends to a model and records `measurement_body` as the reason.
+Asking a model to adjudicate arithmetic would add a way to be wrong about
+something already decidable.
 
 The boundary is deliberate and narrow. An assertion says only "these two look
 contradictory". Everything that follows — the coordinate diff, the derived

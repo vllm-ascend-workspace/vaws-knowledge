@@ -26,6 +26,10 @@ What it proves:
   * every gate vector declares what is wrong with it, the declared bad value is
     really present, and it is drawn from a reserved documentation range rather
     than from anything real;
+  * a conflicts vector really contains the contradiction it declares: at least
+    two entries, and both claimed values present on the named quantity;
+  * every entry in every gate vector document carries a current
+    ``content_hash``, not only the first one;
   * the kit imports nothing from tools/, bot/, server/ or sync/.
 
 Exit status: 0 if consistent, 1 if not, 2 if it could not run at all.
@@ -58,8 +62,15 @@ BANNER = "# SYNTHETIC BAD VALUES - THIS FILE EXISTS TO BE REJECTED."
 GATE_VERDICTS = {
     "redaction": {"accept", "reject"},
     "schema": {"accept", "reject"},
+    "conflicts": {"accept", "reject"},
     "export": {"byte-identical"},
 }
+
+#: An entry carries exactly one body. The payload hashes `scope` plus that
+#: body under the body's own key, so a payload's top-level keys are one of
+#: these pairs and nothing else.
+PAYLOAD_KEY_SETS = (["rule", "scope"], ["measurement", "scope"])
+BODY_KEYS = ("rule", "measurement")
 
 # Shapes a conforming redaction gate must recognise. Deliberately loose: the
 # kit checks that the vector really contains something of this shape, not that
@@ -70,6 +81,13 @@ OFFENDING_SHAPES = {
     "user_path": re.compile(r"(?:/home/|/Users/)[^/\s]+/"),
     "email": re.compile(r"[^\s@]+@[^\s@]+\.[a-z]{2,}", re.I),
     "credential": re.compile(r"(?i)\b(?:bearer|token|password|secret|api[_-]?key)\b"),
+    # A machine named by a slot number rather than by its role: "remote 131",
+    # "remote_131", or a run identifier that embeds the slot beside a device
+    # index. There is no RFC reserving a fleet numbering, so the reserved
+    # convention for this class is the all-zero slot; see gate_vectors/README.md.
+    "machine_identifier": re.compile(
+        r"(?i)\b(?:remote|machine|box|server|bastion|workstation)[ _-]?\d{1,4}\b"
+    ),
 }
 
 # Values a fixture is allowed to use. Anything outside this is treated as
@@ -194,9 +212,10 @@ def check_hash_vectors(problems: Problems) -> list:
             reparsed = None
         if reparsed is not None:
             problems.check(
-                sorted(reparsed) == ["rule", "scope"],
+                sorted(reparsed) in PAYLOAD_KEY_SETS,
                 where,
-                f"payload top-level keys must be rule and scope, got {sorted(reparsed)}",
+                "payload top-level keys must be scope plus exactly one body "
+                f"({' or '.join(str(k) for k in PAYLOAD_KEY_SETS)}), got {sorted(reparsed)}",
             )
             reserialized = json.dumps(
                 reparsed, sort_keys=True, ensure_ascii=False, separators=(",", ":")
@@ -334,9 +353,9 @@ def check_anchor(problems: Problems, vectors: list):
     where = "vectors/anchor-valid-entry.yaml"
     problems.check(
         entry.get("scope") == anchor["entry"].get("scope")
-        and entry.get("rule") == anchor["entry"].get("rule"),
+        and all(entry.get(key) == anchor["entry"].get(key) for key in BODY_KEYS),
         where,
-        "the anchor vector's scope+rule no longer match examples/valid-entry.yaml",
+        "the anchor vector's scope+body no longer match examples/valid-entry.yaml",
     )
     problems.check(
         str(entry.get("content_hash")) == str(anchor["expected_content_hash"]).strip(),
@@ -359,6 +378,11 @@ def _is_reserved(offending_class: str, value: str) -> bool:
         return "example" in value.lower()
     if offending_class == "credential":
         return "EXAMPLE" in value or "example" in value
+    if offending_class == "machine_identifier":
+        # Slot 0 does not exist in any numbering that starts at 1, and 000 is
+        # not how a real inventory writes it. It is the equivalent of .invalid
+        # for a machine name: unmistakably a fixture.
+        return bool(re.search(r"(?<!\d)0{1,4}(?!\d)", value))
     return False
 
 
@@ -460,6 +484,55 @@ def check_gate_vectors(problems: Problems) -> list:
                 "a schema rejection vector must name the rule it violates",
             )
 
+        if gate == "conflicts":
+            entries = vector["document"].get("entries") or []
+            problems.check(
+                len(entries) >= 2,
+                where,
+                "a conflicts vector needs at least two entries; a single entry "
+                "cannot contradict anything and the vector would test nothing",
+            )
+            if vector["expected_verdict"] == "reject":
+                contradiction = vector.get("contradiction")
+                if problems.check(
+                    isinstance(contradiction, dict),
+                    where,
+                    "a conflicts rejection vector must declare what contradicts what",
+                ):
+                    for key in ("rule", "subject", "quantity", "values"):
+                        problems.check(
+                            key in contradiction,
+                            where,
+                            f"contradiction.{key} is missing",
+                        )
+                    values = contradiction.get("values")
+                    problems.check(
+                        isinstance(values, list) and len(set(map(str, values))) == len(values or [])
+                        and len(values or []) >= 2,
+                        where,
+                        "contradiction.values must list at least two *different* "
+                        "claimed values, or there is no contradiction to detect",
+                    )
+                    declared = {str(v) for v in (values or [])}
+                    found = set()
+                    for entry_ in entries:
+                        body = entry_.get("measurement")
+                        if not isinstance(body, dict):
+                            continue
+                        for quantity in body.get("quantities") or []:
+                            if not isinstance(quantity, dict):
+                                continue
+                            if quantity.get("name") == contradiction.get("quantity"):
+                                found.add(str(quantity.get("value")))
+                    problems.check(
+                        declared <= found,
+                        where,
+                        f"the declared contradicting values {sorted(declared)} are not "
+                        f"all present on quantity {contradiction.get('quantity')!r} in "
+                        f"the document (found {sorted(found)}), so the vector tests "
+                        "something other than what it says",
+                    )
+
         if gate == "export":
             problems.check(
                 int(vector.get("runs", 0)) >= 2,
@@ -467,13 +540,19 @@ def check_gate_vectors(problems: Problems) -> list:
                 "an export idempotence vector must declare at least 2 runs",
             )
 
-        entry = (vector["document"].get("entries") or [{}])[0]
-        if "rule" in entry and "scope" in entry:
+        # Every entry, not only the first. A cross-entry gate vector carries
+        # several, and a stale hash on the second one is exactly as misleading
+        # as a stale hash on the first.
+        for index, entry in enumerate(vector["document"].get("entries") or []):
+            if not isinstance(entry, dict) or "scope" not in entry:
+                continue
+            if sum(1 for key in BODY_KEYS if key in entry) != 1:
+                continue
             computed = reference.content_hash(entry)
             problems.check(
                 str(entry.get("content_hash")) == computed,
                 where,
-                f"the document's content_hash is stale: canonicalization gives "
+                f"entries[{index}].content_hash is stale: canonicalization gives "
                 f"{computed}",
             )
 

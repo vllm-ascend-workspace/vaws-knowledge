@@ -260,6 +260,24 @@ def evaluate_dimension(dimension: str, constraint: Any, reader_value: Any) -> Di
     rng = constraint.get("range")
     if isinstance(rng, Mapping):
         low, high = rng.get("min"), rng.get("max")
+        if low is None and high is None:
+            # Unbounded on both sides is not a bound: nobody established
+            # anything about this dimension. Reporting `covered` here would
+            # tell the reader their value was *observed* to fit, which is the
+            # inverse of the doctrine that an absent fact means unknown. It is
+            # the honest encoding of an unresolved dimension, so it is
+            # reported as unknown rather than as a match.
+            return DimensionVerdict(
+                dimension,
+                UNDECIDABLE,
+                rendered,
+                reader,
+                detail=(
+                    "the entry bounds this dimension on neither side, so it is "
+                    "untested territory: nothing about this dimension was "
+                    "established and applicability on it is unknown"
+                ),
+            )
         for bound, label in ((low, "min"), (high, "max")):
             if bound is None:
                 continue
@@ -412,6 +430,54 @@ class TextMatch:
     matched_terms: list[str] = field(default_factory=list)
 
 
+BODY_KEYS = ("rule", "measurement")
+
+
+def entry_body(entry: Mapping[str, Any]) -> str:
+    """``"rule"`` or ``"measurement"``; ``"rule"`` for anything malformed.
+
+    Exactly one body is guaranteed by the schema. Malformed entries are still
+    reported (rather than dropped) so a broken file is visible, and treating
+    them as rules keeps every v1 field populated with whatever is there.
+    """
+    if isinstance(entry.get("measurement"), Mapping) and not isinstance(entry.get("rule"), Mapping):
+        return "measurement"
+    return "rule"
+
+
+def searchable_view(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    """A rule-shaped view of whichever body the entry carries.
+
+    Text search is defined over the rule fields (weights in ``_FIELD_WEIGHTS``)
+    and over ``fingerprints`` as exact-ish tokens. A measurement has no
+    symptom, but it has a subject with aliases and named quantities, and a
+    reader who asks for ``"910B4 fp16 peak"`` should find it. The subject id,
+    its aliases and the quantity names therefore play the fingerprint role;
+    the summary and the method description play the prose role.
+    """
+    if entry_body(entry) == "rule":
+        return entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+    m = entry["measurement"]
+    subject = m.get("subject") if isinstance(m.get("subject"), Mapping) else {}
+    method = m.get("method") if isinstance(m.get("method"), Mapping) else {}
+    quantities = m.get("quantities") if isinstance(m.get("quantities"), list) else []
+    tokens: list[str] = []
+    if subject.get("id"):
+        tokens.append(str(subject["id"]))
+    tokens.extend(str(a) for a in (subject.get("aliases") or []) if isinstance(a, str))
+    for q in quantities:
+        if isinstance(q, Mapping):
+            if q.get("name"):
+                tokens.append(str(q["name"]))
+            if q.get("name") and q.get("basis"):
+                tokens.append(f"{q['name']} {q['basis']}")
+    return {
+        "summary": m.get("summary"),
+        "resolution": method.get("description"),
+        "fingerprints": tokens,
+    }
+
+
 def score_text(rule: Mapping[str, Any], slug: str, query: str | None, fingerprint: str | None) -> TextMatch:
     match = TextMatch()
     fingerprints = _fingerprints(rule)
@@ -507,7 +573,14 @@ class Result:
         verification = (
             entry.get("verification") if isinstance(entry.get("verification"), Mapping) else {}
         )
+        body = entry_body(entry)
         rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+        measurement = entry.get("measurement") if isinstance(entry.get("measurement"), Mapping) else {}
+        # ``summary`` is the one prose field both bodies share. The three
+        # rule-only fields stay in the payload (a v1 caller indexes them) and
+        # are null for a measurement, which is the v1-visible signal that this
+        # result is not a failure rule; ``body`` is the v2 signal.
+        summary = rule.get("summary") if body == "rule" else measurement.get("summary")
 
         out: dict[str, Any] = {
             "uuid": entry.get("uuid"),
@@ -517,7 +590,8 @@ class Result:
             "status": entry.get("status"),
             "confidence": entry.get("confidence"),
             "content_hash": entry.get("content_hash"),
-            "summary": rule.get("summary"),
+            "body": body,
+            "summary": summary,
             "symptom": rule.get("symptom"),
             "root_cause": rule.get("root_cause"),
             "resolution": rule.get("resolution"),
@@ -551,6 +625,12 @@ class Result:
             "warnings": list(self.warnings),
             "notes": list(self.notes),
         }
+        if body == "measurement":
+            out["measurement"] = {
+                "subject": measurement.get("subject"),
+                "method": measurement.get("method"),
+                "quantities": measurement.get("quantities"),
+            }
         if self.shadowed:
             out["also_present_in"] = self.shadowed
         if entry.get("conflicts"):
@@ -633,6 +713,7 @@ def query(
     include_unverified: bool = False,
     include_non_matching: bool = False,
     kind: str | None = None,
+    bodies: Sequence[str] | None = None,
     limit: int = 20,
     today: _dt.date | None = None,
     load: LoadReport | None = None,
@@ -642,9 +723,17 @@ def query(
     Defaults follow docs/lifecycle.md: `verified`, `stale` (with a warning)
     and `resolved` (with its fix reference) come back; `unverified` requires
     ``include_unverified=True``; `deprecated` and superseded entries are out.
+
+    ``bodies`` restricts the payload variants returned. The default is every
+    body the service knows (``rule`` and ``measurement``). A caller written
+    against service API 1, where every result was a failure rule, reproduces
+    that result population exactly with ``bodies=["rule"]``.
     """
 
     today = today or _dt.date.today()
+    wanted_bodies = [b for b in (bodies or BODY_KEYS) if b in BODY_KEYS]
+    if bodies is not None and not wanted_bodies:
+        wanted_bodies = list(BODY_KEYS)
     wanted_layers = [name for name in (layers or LAYERS) if name in LAYER_PRECEDENCE]
     default_layers = layers is None
     if default_layers:
@@ -693,7 +782,7 @@ def query(
         shadowed.setdefault(uid, []).append(record)
 
     results: list[Result] = []
-    filtered_out = {"status": 0, "coordinate": 0, "kind": 0, "superseded": 0, "text": 0}
+    filtered_out = {"status": 0, "coordinate": 0, "kind": 0, "body": 0, "superseded": 0, "text": 0}
 
     for uid, loaded in best.items():
         entry = loaded.entry
@@ -701,6 +790,9 @@ def query(
 
         if kind and loaded.kind != kind:
             filtered_out["kind"] += 1
+            continue
+        if entry_body(entry) not in wanted_bodies:
+            filtered_out["body"] += 1
             continue
         if status not in wanted_statuses:
             filtered_out["status"] += 1
@@ -718,8 +810,7 @@ def query(
             filtered_out["coordinate"] += 1
             continue
 
-        rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
-        text_match = score_text(rule, str(entry.get("slug") or ""), text, fingerprint)
+        text_match = score_text(searchable_view(entry), str(entry.get("slug") or ""), text, fingerprint)
         if (text or fingerprint) and text_match.score <= 0:
             filtered_out["text"] += 1
             continue
@@ -831,6 +922,7 @@ def query(
             "include_unverified": include_unverified,
             "include_non_matching": include_non_matching,
             "kind": kind,
+            "bodies": wanted_bodies,
             "limit": limit,
         },
         ignored_coordinate_keys=ignored,

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Map tools/validate.py or tools/redact.py onto the gate verdict contract.
+"""Map tools/validate.py, tools/redact.py, tools/export.py or
+bot/conflicts.py onto the gate verdict contract.
 
 The real tools take a file path, not stdin, and they print findings rather
 than `accept`/`reject`. This adapter is the documented recipe: write stdin
@@ -87,13 +88,103 @@ def run_redaction(path: Path) -> int:
     return EXIT_OK
 
 
+def run_conflicts(path: Path) -> int:
+    """Reject when the corpus-wide conflict gate reports a blocking conflict.
+
+    Unlike the other two this is a cross-entry gate: it is handed a whole
+    document and answers about pairs inside it, so it goes through
+    ``bot.corpus.load_paths`` rather than looking at one entry.
+    """
+    try:
+        from bot.conflicts import find_conflicts, today_utc
+        from bot.corpus import DependencyError, load_paths, repo_root
+        from bot.policy import PolicyError, load_policy
+    except Exception as exc:
+        return _incomplete(f"adapter: cannot import the conflicts gate: {exc}")
+
+    try:
+        policy = load_policy(None)
+        loaded = load_paths([str(path)], repo_root())
+        report = find_conflicts(loaded, policy, today_utc(), [])
+    except (DependencyError, PolicyError, ValueError, OSError) as exc:
+        return _incomplete(f"adapter: conflicts gate did not complete: {exc}")
+    except Exception as exc:
+        return _incomplete(f"adapter: conflicts gate did not complete: {exc}")
+
+    if loaded.errors:
+        return _incomplete(
+            "adapter: conflicts gate could not load the document: "
+            + "; ".join(f"{e.path}: {e.message}" for e in loaded.errors)
+        )
+    if not isinstance(report, dict) or "counts" not in report:
+        return _incomplete("adapter: conflicts gate returned no report")
+
+    for record in report.get("conflicts", []):
+        sys.stderr.write(
+            f"conflict {record['a']['uuid']} vs {record['b']['uuid']}: "
+            f"{record.get('blocking_reason', '')}\n"
+        )
+    if report["counts"]["blocking"]:
+        print("reject")
+        return EXIT_FINDINGS
+    print("accept")
+    return EXIT_OK
+
+
+def run_export(path: Path) -> int:
+    """Write the real exporter's bytes to stdout, for the idempotence vectors.
+
+    Not a verdict gate: the runner runs this twice and compares the two byte
+    strings. It drives ``tools/export.py`` rather than a stub so that the
+    property under test is the exporter's own determinism - including the key
+    ordering of the ``measurement`` body, which a stub would never touch.
+
+    ``submitted_at`` is pinned to the document's own ``updated_at`` instead of
+    today. Otherwise the exporter stamps the wall clock, and two runs that
+    straddle midnight UTC would differ for a reason that has nothing to do
+    with the exporter being deterministic.
+    """
+    try:
+        import yaml
+
+        from tools import export
+        from tools._common import ToolError
+    except Exception as exc:
+        return _incomplete(f"adapter: cannot import exporter: {exc}")
+
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        stamp = None
+        if isinstance(document, dict):
+            stamp = document.get("updated_at")
+        built = export.build_document(
+            [str(path)],
+            submitted_at=str(stamp) if stamp else "2026-01-01",
+            today=str(stamp) if stamp else "2026-01-01",
+            report=lambda message: None,
+        )
+        rendered = export.serialize(built)
+    except export.ExportRefused as exc:
+        return _incomplete(f"adapter: exporter refused the document: {exc}")
+    except ToolError as exc:
+        return _incomplete(f"adapter: exporter did not complete: {exc}")
+    except Exception as exc:
+        return _incomplete(f"adapter: exporter did not complete: {exc}")
+
+    if not isinstance(rendered, str) or not rendered:
+        return _incomplete("adapter: exporter produced no bytes")
+    sys.stdout.write(rendered)
+    return EXIT_OK
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
         "tool",
-        choices=("schema", "redaction", "validate", "redact"),
+        choices=("schema", "redaction", "conflicts", "export", "validate", "redact"),
         help="schema/validate wraps tools.validate; redaction/redact wraps "
-        "tools.redact.scan_file",
+        "tools.redact.scan_file; conflicts wraps bot.conflicts.find_conflicts; "
+        "export wraps tools.export.build_document + serialize",
     )
     args = parser.parse_args(argv)
 
@@ -107,6 +198,10 @@ def main(argv=None) -> int:
             tmp_path = Path(handle.name)
         if args.tool in ("schema", "validate"):
             return run_schema(tmp_path)
+        if args.tool == "conflicts":
+            return run_conflicts(tmp_path)
+        if args.tool == "export":
+            return run_export(tmp_path)
         return run_redaction(tmp_path)
     except OSError as exc:
         return _incomplete(f"adapter could not use temporary input: {exc}")

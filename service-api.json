@@ -1,1 +1,1 @@
-{"schema_version": 1, "name": "vaws-knowledge", "service_api_version": 1, "supports": [1]}
+{"schema_version": 1, "name": "vaws-knowledge", "service_api_version": 2, "supports": [1, 2], "bodies": ["rule", "measurement"], "v1_result_population": {"knowledge_query": {"bodies": ["rule"]}}}

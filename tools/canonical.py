@@ -13,7 +13,11 @@ The steps, restated from the contract so that a deviation is visible in review:
    require the stored ``content_hash`` to already match, so a stale derived
    hash can still be recomputed. Low-level helpers still refuse to stringify
    types; they are not a public validation shortcut.
-1. Take only ``scope`` and ``rule``. Nothing else.
+1. Take only ``scope`` and the entry's body. The body is ``rule`` for a failure
+   rule and ``measurement`` for a measured or vendor-declared quantity; an
+   entry has exactly one. The payload key is the body's own name, so a rule
+   entry hashes byte-for-byte as it always did and adding the second variant
+   moved no existing hash.
 2. ``rule.fingerprints``: lowercase ASCII letters only, strip leading and
    trailing ASCII whitespace, collapse internal runs of ASCII whitespace to
    one ``U+0020``, drop duplicates and empties, sort byte-wise over UTF-8.
@@ -57,6 +61,13 @@ from tools._common import (  # noqa: E402
 )
 
 HASH_PREFIX = "sha256:"
+
+#: The two entry body variants, in the order a payload key is looked for.
+#: docs/federation.md step 1 takes ``scope`` plus the body; the payload key is
+#: the body's own name, which is what keeps every pre-existing rule hash
+#: unchanged.
+BODY_KEYS = ("rule", "measurement")
+
 ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 _ASCII_WS_RUN = re.compile(r"[ \t\n\r\x0b\x0c]+")
@@ -156,25 +167,50 @@ def _normalize_tree(value: Any) -> Any:
     return value
 
 
+def body_key(entry: Mapping[str, Any]) -> str | None:
+    """Name of the entry's single body key, or ``None`` if it has not got one.
+
+    Exactly one of ``rule`` / ``measurement`` is expected. Two bodies is
+    ambiguous rather than richer, so it is refused here as well as by the
+    schema: hashing both under one revision would let a change to either look
+    like a change to the entry as a whole.
+    """
+    if not isinstance(entry, Mapping):
+        return None
+    present = [key for key in BODY_KEYS if key in entry]
+    return present[0] if len(present) == 1 else None
+
+
 def canonical_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the canonical ``{"rule": ..., "scope": ...}`` payload for ``entry``.
+    """Return the canonical ``{<body>: ..., "scope": ...}`` payload for ``entry``.
 
     ``entry`` is a single entry mapping (one element of a document's
-    ``entries``). Missing ``scope`` or ``rule`` raise ``ToolError`` rather than
+    ``entries``). The body key is ``rule`` or ``measurement``; a missing
+    ``scope``, a missing body or two bodies raise ``ToolError`` rather than
     hashing a partial payload, because a hash over half an entry would collide
     with nothing and silently look like a legitimate revision.
     """
     if not isinstance(entry, Mapping):
         raise ToolError("canonical_payload: entry must be a mapping")
-    missing = [k for k in ("scope", "rule") if k not in entry]
-    if missing:
+    body = body_key(entry)
+    if body is None:
+        present = [key for key in BODY_KEYS if key in entry]
+        if len(present) > 1:
+            raise ToolError(
+                "canonical_payload: entry declares both "
+                + " and ".join(f"'{p}'" for p in present)
+                + "; an entry has exactly one body and content_hash cannot cover two"
+            )
         raise ToolError(
-            "canonical_payload: entry is missing "
-            + ", ".join(f"'{m}'" for m in missing)
-            + "; content_hash is defined over scope + rule only and cannot be "
-            "computed without both"
+            "canonical_payload: entry has no body; content_hash is defined over "
+            "scope + one of " + ", ".join(f"'{k}'" for k in BODY_KEYS)
         )
-    for key in ("scope", "rule"):
+    if "scope" not in entry:
+        raise ToolError(
+            "canonical_payload: entry is missing 'scope'; content_hash is defined "
+            f"over scope + {body} and cannot be computed without both"
+        )
+    for key in ("scope", body):
         if not isinstance(entry[key], Mapping):
             raise ToolError(
                 f"canonical_payload: {key} must be a mapping, got "
@@ -183,13 +219,13 @@ def canonical_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
         err = _payload_type_error(entry[key], key)
         if err:
             raise ToolError("canonical_payload: " + err)
-    rule = _normalize_tree(entry["rule"])
-    if isinstance(rule, dict) and "fingerprints" in rule:
+    body_tree = _normalize_tree(entry[body])
+    if isinstance(body_tree, dict) and "fingerprints" in body_tree:
         # Step 2 applies to the original fingerprint strings, not to the
         # already step-3-normalized copies in the walked tree.
-        rule["fingerprints"] = _normalize_fingerprints(entry["rule"].get("fingerprints"))
+        body_tree["fingerprints"] = _normalize_fingerprints(entry[body].get("fingerprints"))
     scope = _normalize_tree(entry["scope"])
-    return {"rule": rule, "scope": scope}
+    return {body: body_tree, "scope": scope}
 
 
 def canonical_json(entry: Mapping[str, Any]) -> str:

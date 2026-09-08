@@ -32,6 +32,30 @@ compatibility facts are only meaningful relative to a specific submodule
 checkout and would decay the moment they left it, and some facts are simply not
 publishable.
 
+## Two kinds of claim, one entry contract
+
+An entry's body is either a `rule` or a `measurement`, and never both:
+
+| Body | Claims | Example |
+|---|---|---|
+| `rule` | a failure and what to do about it — `summary`, `symptom`, `root_cause`, `resolution`, plus `fingerprints` | a container's hostname is missing from `/etc/hosts`, so gloo init fails |
+| `measurement` | a quantity — a `subject` (SoC and its aliases), the `method` that established it, and `quantities` of `name` + `basis` + `value` + `unit` | `Ascend910B4` sustains 232.33 tflops on an 8192³ fp16 matmul |
+
+Everything else is identical and equally required: `uuid`, `content_hash`, all
+twelve `scope` dimensions, `provenance`, `lifecycle`, `confidence`, `status`,
+`slug`, `layer`. A measurement is gated, de-duplicated, conflict-checked,
+redacted, aged and promoted by exactly the same pipeline as a rule — only the
+comparisons that read the body differ, and for measurements they compare
+subject, quantity identity and coordinate rather than prose. Two entries
+claiming a different value for the same quantity at the same coordinate are a
+**conflict**, not a duplicate, and block promotion.
+
+Measurement values are stored as strings (`"2.70336"`, not `2.70336`) for the
+same reason version bounds are: `content_hash` must be byte-reproducible in
+every language, and float formatting is not. Consumers parse. See
+[docs/decisions.md](docs/decisions.md) §22–27 for why this is a body variant
+rather than a second repository.
+
 ## Applicability coordinate
 
 Every entry declares all twelve dimensions of `scope` — `soc`, `cann`, `driver`,

@@ -57,6 +57,27 @@ conflicts:
   # heuristic but never the coordinate diff.
   divergent_explanation_max: 0.35
 
+measurements:
+  # A measurement body carries no diagnosis prose, and the prose it does carry
+  # is near-identical across a whole vendor catalogue: sixty-three
+  # platform_config rows differ only in a SoC name and some numbers. Scoring
+  # them as text would report the catalogue as duplicates of itself. So
+  # measurement pairs are compared on subject identity, quantity identity
+  # (name + basis) and coordinate instead, and this threshold applies to the
+  # quantity-set agreement of two entries that already share a subject and a
+  # coordinate.
+  near_threshold: 0.5
+
+  # A contradiction is two entries claiming a different value or unit for the
+  # same quantity identity, about the same subject, at overlapping
+  # coordinates. Unlike a contradictory pair of failure rules - where both
+  # sides can still be useful leads and the doctrine is "refine the
+  # coordinate, do not arbitrate" - two different numbers for one quantity
+  # cannot both be consumed: whoever reads the corpus gets one of them and
+  # silently computes with the wrong denominator. So a measurement
+  # contradiction blocks on arrival rather than at promotion.
+  contradiction_blocks_before_promotion: true
+
 integrity:
   # Handles that must never appear in verification.verified_by. Any handle
   # ending in "[bot]" is rejected regardless of this list.

@@ -278,6 +278,136 @@
       }
     },
 
+    "measurement_quantity": {
+      "$comment": "One claimed quantity. `value` is a decimal STRING and never a JSON number, on purpose. content_hash is a byte-level agreement between implementations in several languages, and float serialization is precisely where those disagree: 2.70336 may render as 2.7033600000000001, and a trailing .0 may or may not survive. docs/federation.md step 0 forbids coercing types rather than picking a float format, so the only safe representation of a measured number in a hashed payload is the exact decimal text the measurement produced.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "basis", "value", "unit"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_]{0,63}$",
+          "description": "Stable identifier of the quantity, e.g. fp16_dense_matmul_peak. Together with `basis` this is the quantity identity that duplicate and conflict detection keys on."
+        },
+        "basis": {
+          "enum": ["declared", "theoretical", "measured", "sustained"],
+          "description": "declared: the vendor states it outright (core count, clock). theoretical: derived from declared constants (a peak). measured: observed on hardware by the stated method. sustained: an observed fraction of a theoretical peak. A theoretical and a sustained claim about the same physical thing are different quantities and must never be compared as if they were the same number."
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+        },
+        "unit": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$",
+          "description": "Lowercase unit token. Canonical tokens in use: tflops, tops, gbps, gib, mhz, bytes_per_cycle, count, ratio. Lowercase is enforced so that TFLOPS and tflops cannot become two incomparable units for the same quantity."
+        },
+        "qualifier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What narrows the quantity, e.g. 'dense matmul, cube 16x16x16'. Not part of the quantity identity."
+        }
+      }
+    },
+
+    "measurement_subject": {
+      "$comment": "What the quantity is about. Deliberately a closed set of named fields rather than a free-form attribute map: the schema is the egress whitelist, and a free-form map would let an arbitrary key leave a fork.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical identifier of the hardware the claim is about, e.g. Ascend910B4. Duplicate and conflict detection keys on this together with scope."
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Other names the same hardware is sold or reported under. Aliases are for retrieval; they are not identity."
+        },
+        "family": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "core_version": { "type": "string", "minLength": 1 },
+        "compiler_target": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "measurement_parameter": {
+      "$comment": "A method parameter as a name/value pair rather than a map entry, for the same egress-whitelist reason as measurement_subject: a mapping with free keys would publish keys nobody declared.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_]{0,63}$" },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "measurement_source": {
+      "$comment": "The artifact that produced the number. Unlike verification.evidence this is part of the claim, not part of the review record: swap the artifact and it is a different claim, so it belongs inside the hashed payload.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {
+          "enum": ["vendor_file", "run_manifest", "pull_request", "issue", "commit", "ci_run"]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^\\S+$",
+          "description": "A followable reference with no whitespace: a vendor file path, a manifest id, owner/repo#N, a sha, or a URL. Prose is not a reference."
+        },
+        "note": { "type": "string" }
+      }
+    },
+
+    "measurement": {
+      "$comment": "The second entry body. A measurement claims a quantity about a subject, established by a stated method, at the coordinate in `scope`. It carries no symptom, root cause or resolution because a number has none; forcing one would produce invented prose in the fields review reads most carefully. A quantity the method did not establish is simply absent: absence means unknown, exactly as it does for a query that returns nothing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "subject", "method", "quantities"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One line naming subject and claim. Populated for both body variants so a reader that only knows `rule` still gets a true sentence."
+        },
+        "subject": { "$ref": "#/$defs/measurement_subject" },
+        "method": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "description", "source"],
+          "properties": {
+            "type": {
+              "enum": ["vendor_platform_config", "microbenchmark"],
+              "description": "vendor_platform_config: read out of a vendor-shipped configuration snapshot. microbenchmark: timed on hardware by the described procedure."
+            },
+            "description": {
+              "type": "string",
+              "minLength": 12,
+              "description": "What was done, in enough detail to repeat it. This is load-bearing evidence, not colour: it is what makes the number checkable."
+            },
+            "parameters": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/measurement_parameter" }
+            },
+            "source": { "$ref": "#/$defs/measurement_source" }
+          }
+        },
+        "quantities": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/measurement_quantity" }
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+
     "entry": {
       "type": "object",
       "additionalProperties": false,
@@ -289,8 +419,7 @@
         "confidence",
         "scope",
         "provenance",
-        "lifecycle",
-        "rule"
+        "lifecycle"
       ],
       "properties": {
         "uuid": {
@@ -305,7 +434,7 @@
         "content_hash": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$",
-          "description": "Version identity over the canonicalized scope+rule payload. Makes federated sync idempotent per entry."
+          "description": "Version identity over the canonicalized scope + body payload, where the body is whichever of rule / measurement the entry carries and the payload key is the body's own name. Makes federated sync idempotent per entry."
         },
         "status": {
           "enum": ["verified", "unverified", "stale", "deprecated", "resolved"]
@@ -324,9 +453,17 @@
           "type": "array",
           "items": { "$ref": "#/$defs/conflict" }
         },
-        "rule": { "$ref": "#/$defs/rule" }
+        "rule": { "$ref": "#/$defs/rule" },
+        "measurement": { "$ref": "#/$defs/measurement" }
       },
       "allOf": [
+        {
+          "$comment": "An entry has exactly one body: `rule` for a failure rule, `measurement` for a measured or vendor-declared quantity. Everything that makes an entry trustworthy - identity, coordinate, provenance, lifecycle, review state - is shared; only the body differs. Neither body is not an entry, and both bodies would make content_hash cover two unrelated claims under one revision.",
+          "oneOf": [
+            { "required": ["rule"] },
+            { "required": ["measurement"] }
+          ]
+        },
         {
           "$comment": "verified and stale both assert the claim was once actually established, so both need a full verification record. stale only means it has not been re-verified recently enough.",
           "if": {

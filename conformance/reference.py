@@ -37,8 +37,21 @@ import hashlib
 import json
 import sys
 
-# --- step 1: only scope and rule participate -------------------------------
+# --- step 1: only scope and the entry's body participate --------------------
+#
+# An entry has exactly one body: `rule` for a failure rule, `measurement` for
+# a measured or vendor-declared quantity. The payload is `scope` plus that
+# body, keyed by the body's own name. Two consequences worth stating, because
+# both are load-bearing:
+#
+#   * a rule entry produces the identical payload it always did, so no
+#     recorded content_hash moved when the second variant was added;
+#   * an entry with no body, or with both, is not canonicalizable. It is a
+#     schema violation (the schema's entry oneOf), and step 0 is validate
+#     first, so refusing here rather than guessing is the narrow choice.
+BODY_KEYS = ("rule", "measurement")
 
+#: Kept for readers of the older name: the payload keys for a rule entry.
 PAYLOAD_KEYS = ("rule", "scope")
 
 # Whitespace for steps 2 and 3 is exactly these six ASCII characters.
@@ -121,14 +134,24 @@ def normalize_value(value, *, in_fingerprints: bool = False):
     return value
 
 
+def body_key(entry: dict) -> str:
+    """Name of the entry's single body key. Raises if there is not exactly one."""
+    present = [key for key in BODY_KEYS if key in entry]
+    if len(present) == 1:
+        return present[0]
+    if present:
+        raise ValueError(f"entry declares more than one body: {present}")
+    raise ValueError(f"entry declares none of the body keys {list(BODY_KEYS)}")
+
+
 def canonical_payload(entry: dict) -> dict:
-    """Steps 1-3: the normalized {"rule": ..., "scope": ...} payload."""
-    missing = [key for key in PAYLOAD_KEYS if key not in entry]
-    if missing:
-        raise ValueError(f"entry is missing required payload keys: {missing}")
+    """Steps 1-3: the normalized {<body>: ..., "scope": ...} payload."""
+    body = body_key(entry)
+    if "scope" not in entry:
+        raise ValueError("entry is missing required payload key: 'scope'")
     # Absent optional keys stay absent. Nothing is defaulted in: an entry with
     # no `avoidance` must not hash like an entry with `avoidance: ""`.
-    return {key: normalize_value(entry[key]) for key in PAYLOAD_KEYS}
+    return {key: normalize_value(entry[key]) for key in (body, "scope")}
 
 
 def canonical_json(entry: dict) -> str:

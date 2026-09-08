@@ -36,6 +36,13 @@ PATTERNS = {
     "credential": re.compile(
         r"(?i)(?:bearer\s+\S+|(?:token|password|passwd|secret|api[_-]?key)\s*[=:]\s*\S+)"
     ),
+    # A machine named by a slot number. "npu4" and "NPU index 4" are
+    # deliberately not matched: a device index is method detail that has to
+    # survive redaction, and a gate that scrubs it fails the clean control.
+    "machine_identifier": re.compile(
+        r"(?i)\b(?:remote|machine|box|bastion|workstation)[ _-]?\d{1,4}\b"
+        r"|(?<=_)\d{1,4}(?=_npu\d)"
+    ),
     "hostname": re.compile(
         r"(?i)\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*"
         # No "example" or "test" in this list on purpose: the corpus is full of

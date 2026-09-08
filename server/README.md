@@ -101,6 +101,7 @@ All three tool payloads carry the same envelope: `service_api_version`,
 |---|---|---|---|
 | `text` | string | — | free-text symptom |
 | `fingerprint` | string | — | matched against `rule.fingerprints` |
+| `bodies` | array | `["rule","measurement"]` | restrict to one body variant. A client written against service API 1 should pass `["rule"]`: that reproduces exactly the result set it saw before measurements existed |
 | `reader_coordinate` | object | `{}` | your own build; any of the twelve `scope` dimensions |
 | `layers` | array | `["shared","project"]` | overrides the layer set |
 | `statuses` | array | policy default | replaces the default status set |
@@ -109,9 +110,10 @@ All three tool payloads carry the same envelope: `service_api_version`,
 | `kind` | string | — | restrict to one document family |
 | `limit` | int | `20` | |
 
-Each result carries `layer`, `status`, `confidence`, `content_hash`,
-`provenance.origin_repo`, `evidence`, `verified_by`, `lifecycle`, `staleness`,
-`source`, `warnings`, `notes`, and an `applicability` block:
+Each result carries `body` (`"rule"` or `"measurement"`), `layer`, `status`,
+`confidence`, `content_hash`, `provenance.origin_repo`, `evidence`,
+`verified_by`, `lifecycle`, `staleness`, `source`, `warnings`, `notes`, and an
+`applicability` block:
 
 ```json
 "applicability": {
@@ -196,9 +198,19 @@ success.
 | A tool raises | `isError: true` with `error: "internal_error"` and `answer: "unknown"`. The loop keeps serving. |
 | The whole service is unreachable | The caller sees no `initialize` response at all. Callers must treat that as unknown, not as "no known issues" — there is no in-band way for us to say it. |
 
-`service_api_version` (currently `1.0`) appears in the `initialize` result at
+`service_api_version` (currently `2.0`) appears in the `initialize` result at
 top level, inside `serverInfo`, and in every tool payload, so a caller can
 probe it and degrade without parsing results it does not understand.
+`initialize` also advertises `supported_service_api_versions: [1, 2]` and the
+`bodies` a query can return.
+
+Version 2 exists because the corpus gained the `measurement` body. That is not
+an ignorable addition: a version 1 client encounters an entry with **no `rule`
+key at all**, so `result["summary"]` still works but `entry["rule"]["symptom"]`
+does not. Version 1 behaviour is reachable exactly — pass
+`bodies: ["rule"]` — and rule-only fields come back as `null` rather than
+absent on a measurement result, so a client that does look can tell "not a
+rule" from "a rule missing a field".
 
 ## Framing
 

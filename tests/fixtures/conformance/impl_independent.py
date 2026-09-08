@@ -65,9 +65,18 @@ def walk(node, key=None):
     return plain(node) if isinstance(node, str) else node
 
 
+def body_of(entry):
+    """The single body key. Step 1 hashes scope plus the body, under its own name."""
+    present = [key for key in ("rule", "measurement") if key in entry]
+    if len(present) != 1:
+        raise SystemExit(f"entry must declare exactly one body, found {present}")
+    return present[0]
+
+
 def main():
     entry = yaml.safe_load(sys.stdin.read())
-    payload = {"rule": walk(entry["rule"]), "scope": walk(entry["scope"])}
+    body = body_of(entry)
+    payload = {body: walk(entry[body]), "scope": walk(entry["scope"])}
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     if "--payload" in sys.argv[1:]:
         print(text)

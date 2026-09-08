@@ -160,6 +160,25 @@ def find_numeric_version_fields(doc: Any) -> list[tuple[tuple[Any, ...], Any]]:
             for j, v in enumerate(rule["fingerprints"]):
                 if is_number(v):
                     hits.append((("entries", i, "rule", "fingerprints", j), v))
+        measurement = entry.get("measurement")
+        if isinstance(measurement, Mapping):
+            # A measured value is the one place a number is *tempting* to write
+            # as a YAML float. It hashes; it must be a decimal string so every
+            # language reproduces the same bytes (see docs/decisions.md).
+            if isinstance(measurement.get("quantities"), list):
+                for j, q in enumerate(measurement["quantities"]):
+                    if isinstance(q, Mapping) and is_number(q.get("value")):
+                        hits.append((("entries", i, "measurement", "quantities", j, "value"), q["value"]))
+            method = measurement.get("method")
+            if isinstance(method, Mapping) and isinstance(method.get("parameters"), list):
+                for j, p in enumerate(method["parameters"]):
+                    if isinstance(p, Mapping) and is_number(p.get("value")):
+                        hits.append((("entries", i, "measurement", "method", "parameters", j, "value"), p["value"]))
+            subject = measurement.get("subject")
+            if isinstance(subject, Mapping):
+                for k in ("core_version",):
+                    if is_number(subject.get(k)):
+                        hits.append((("entries", i, "measurement", "subject", k), subject[k]))
     return hits
 
 
@@ -499,14 +518,15 @@ def lifecycle_problems(entry: Mapping[str, Any], file: str, base: str) -> list[P
 
 def hash_problems(entry: Mapping[str, Any], file: str, base: str) -> list[Problem]:
     declared = entry.get("content_hash")
-    if not isinstance(declared, str) or "scope" not in entry or "rule" not in entry:
+    bodies = [k for k in canonical.BODY_KEYS if k in entry]
+    if not isinstance(declared, str) or "scope" not in entry or len(bodies) != 1:
         return []
     try:
         actual = canonical.content_hash(entry)
     except ToolError:
         return []
     if declared != actual:
-        return [Problem(file, f"{base}.content_hash", f"declared {declared} but the canonical scope+rule payload hashes to {actual}; regenerate with tools/canonical.py (or tools/export.py), do not edit by hand")]
+        return [Problem(file, f"{base}.content_hash", f"declared {declared} but the canonical scope+{bodies[0]} payload hashes to {actual}; regenerate with tools/canonical.py (or tools/export.py), do not edit by hand")]
     return []
 
 

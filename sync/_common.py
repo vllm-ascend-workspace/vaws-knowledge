@@ -61,7 +61,12 @@ ENTRY_KEY_ORDER = (
     "lifecycle",
     "conflicts",
     "rule",
+    "measurement",
 )
+#: The two entry body variants. An entry has exactly one; the content_hash
+#: payload key is the body's own name, which is why adding `measurement` moved
+#: no existing rule hash.
+BODY_KEYS = ("rule", "measurement")
 SCOPE_KEY_ORDER = (
     "soc",
     "cann",
@@ -77,6 +82,7 @@ SCOPE_KEY_ORDER = (
     "component",
 )
 RULE_KEY_ORDER = ("summary", "symptom", "root_cause", "resolution", "avoidance", "fingerprints")
+MEASUREMENT_KEY_ORDER = ("summary", "subject", "method", "quantities", "notes")
 
 
 class SyncError(Exception):
@@ -213,22 +219,42 @@ def canonical_fingerprints(items: Iterable[Any]) -> Any:
     return sorted(seen, key=lambda s: s.encode("utf-8"))
 
 
+def body_key(entry: dict) -> str:
+    """Name of the entry's single body key.
+
+    Defaults to ``rule`` when neither is present, which keeps the historical
+    behaviour of hashing a bodyless entry as an empty rule rather than
+    changing what such an input hashes to. Two bodies is refused: the schema
+    forbids it, and hashing both under one revision would make a change to
+    either look like a change to the entry as a whole.
+    """
+    present = [key for key in BODY_KEYS if key in entry]
+    if len(present) > 1:
+        raise SyncError(
+            "entry declares more than one body ("
+            + ", ".join(present)
+            + "); an entry has exactly one of rule / measurement"
+        )
+    return present[0] if present else "rule"
+
+
 def canonical_payload(entry: dict) -> dict:
-    rule_in = entry.get("rule", {})
+    body = body_key(entry)
+    body_in = entry.get(body, {})
     scope_in = entry.get("scope", {})
-    for label, node in (("rule", rule_in), ("scope", scope_in)):
+    for label, node in ((body, body_in), ("scope", scope_in)):
         if isinstance(node, dict):
             err = _payload_type_error(node, label)
             if err:
                 raise SyncError(err)
-    rule = _canon_strings(rule_in)
-    if isinstance(rule, dict) and "fingerprints" in rule:
+    body_out = _canon_strings(body_in)
+    if isinstance(body_out, dict) and "fingerprints" in body_out:
         fps = None
-        if isinstance(entry.get("rule"), dict):
-            fps = entry["rule"].get("fingerprints")
-        rule["fingerprints"] = canonical_fingerprints(fps)
+        if isinstance(entry.get(body), dict):
+            fps = entry[body].get("fingerprints")
+        body_out["fingerprints"] = canonical_fingerprints(fps)
     scope = _canon_strings(scope_in)
-    return {"rule": rule, "scope": scope}
+    return {body: body_out, "scope": scope}
 
 
 def canonical_json(entry: dict) -> str:
@@ -285,6 +311,8 @@ def order_entry(entry: dict) -> dict:
         out["scope"] = _ordered(out["scope"], SCOPE_KEY_ORDER)
     if isinstance(out.get("rule"), dict):
         out["rule"] = _ordered(out["rule"], RULE_KEY_ORDER)
+    if isinstance(out.get("measurement"), dict):
+        out["measurement"] = _ordered(out["measurement"], MEASUREMENT_KEY_ORDER)
     return out
 
 

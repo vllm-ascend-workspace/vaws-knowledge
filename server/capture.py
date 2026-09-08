@@ -59,9 +59,15 @@ ENTRY_FIELDS = {
     "lifecycle",
     "conflicts",
     "rule",
+    "measurement",
 }
 RULE_FIELDS = {"summary", "symptom", "root_cause", "resolution", "avoidance", "fingerprints"}
 RULE_REQUIRED = ("summary", "symptom", "root_cause", "resolution")
+#: The two entry body variants. Exactly one per entry.
+BODY_KEYS = ("rule", "measurement")
+MEASUREMENT_FIELDS = {"summary", "subject", "method", "quantities", "notes"}
+MEASUREMENT_REQUIRED = ("summary", "subject", "method", "quantities")
+MEASUREMENT_BASES = ("declared", "theoretical", "measured", "sustained")
 STATUSES = ("verified", "unverified", "stale", "deprecated", "resolved")
 CONFIDENCES = ("high", "medium", "low")
 EVIDENCE_TYPES = ("run_manifest", "pull_request", "issue", "commit", "ci_run")
@@ -204,27 +210,45 @@ def _normalize_value(value: Any) -> Any:
     return value
 
 
+def body_key(entry: Mapping[str, Any]) -> str:
+    """Name of the entry's single body key.
+
+    Falls back to ``rule`` when neither variant is present, so a bodyless
+    draft hashes exactly as it did before ``measurement`` existed. Two bodies
+    is refused: one revision cannot cover two claims.
+    """
+    present = [key for key in BODY_KEYS if key in entry]
+    if len(present) > 1:
+        raise ValueError(
+            "entry declares more than one body ("
+            + ", ".join(present)
+            + "); an entry has exactly one of rule / measurement"
+        )
+    return present[0] if present else "rule"
+
+
 def canonical_payload(entry: Mapping[str, Any]) -> str:
     """Canonical JSON for an entry, per docs/federation.md steps 1-4."""
 
-    rule_in = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+    body = body_key(entry)
+    body_in = entry.get(body) if isinstance(entry.get(body), Mapping) else {}
     scope_in = entry.get("scope") if isinstance(entry.get("scope"), Mapping) else {}
-    for label, node in (("rule", rule_in), ("scope", scope_in)):
+    for label, node in ((body, body_in), ("scope", scope_in)):
         err = _payload_type_error(node, label)
         if err:
             raise ValueError(err)
 
-    rule: dict[str, Any] = {}
-    for key, value in rule_in.items():
+    body_out: dict[str, Any] = {}
+    for key, value in body_in.items():
         if key == "fingerprints":
-            rule[key] = _normalize_fingerprints(value)
+            body_out[key] = _normalize_fingerprints(value)
         else:
-            rule[key] = _normalize_value(value)
+            body_out[key] = _normalize_value(value)
 
     scope = {k: _normalize_value(v) for k, v in scope_in.items()}
 
     return json.dumps(
-        {"rule": rule, "scope": scope},
+        {body: body_out, "scope": scope},
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -361,6 +385,110 @@ def _check_constraint(dimension: str, constraint: Any, problems: list[str]) -> N
     )
 
 
+_QUANTITY_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
+_QUANTITY_VALUE_RE = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+_UNIT_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+
+def _measurement_problems(measurement: Any) -> list[str]:
+    """Structural check for the measurement body, mirroring the schema.
+
+    Kept in step with ``$defs/measurement`` for the same reason the rule check
+    is: capture must be able to refuse a malformed draft on a machine where
+    ``jsonschema`` is not installed. ``schema_validate`` still runs the real
+    schema when it is.
+    """
+    problems: list[str] = []
+    if not isinstance(measurement, Mapping):
+        return ["measurement must be a mapping"]
+
+    extra = set(measurement) - MEASUREMENT_FIELDS
+    if extra:
+        problems.append("undeclared measurement field(s) " + ", ".join(sorted(extra)))
+    for field_name in MEASUREMENT_REQUIRED:
+        if field_name not in measurement:
+            problems.append(f"measurement.{field_name} is required")
+
+    summary = measurement.get("summary")
+    if summary is not None and (not isinstance(summary, str) or not summary.strip()):
+        problems.append("measurement.summary must be a non-empty string")
+
+    subject = measurement.get("subject")
+    if subject is not None:
+        if not isinstance(subject, Mapping):
+            problems.append("measurement.subject must be a mapping")
+        else:
+            subject_id = subject.get("id")
+            if not isinstance(subject_id, str) or not subject_id.strip():
+                problems.append(
+                    "measurement.subject.id is required and names the hardware the "
+                    "claim is about"
+                )
+
+    method = measurement.get("method")
+    if method is not None:
+        if not isinstance(method, Mapping):
+            problems.append("measurement.method must be a mapping")
+        else:
+            if method.get("type") not in ("vendor_platform_config", "microbenchmark"):
+                problems.append(
+                    "measurement.method.type must be vendor_platform_config or microbenchmark"
+                )
+            description = method.get("description")
+            if not isinstance(description, str) or len(description.strip()) < 12:
+                problems.append(
+                    "measurement.method.description must state what was done in enough "
+                    "detail to repeat it"
+                )
+            source = method.get("source")
+            if not isinstance(source, Mapping):
+                problems.append("measurement.method.source must be a mapping with kind and ref")
+            else:
+                ref = source.get("ref")
+                if not isinstance(ref, str) or not ref.strip() or _ASCII_WS_RE.search(ref):
+                    problems.append(
+                        "measurement.method.source.ref must be a followable reference "
+                        "with no whitespace; prose is not a reference"
+                    )
+
+    quantities = measurement.get("quantities")
+    if quantities is not None:
+        if not isinstance(quantities, list) or not quantities:
+            problems.append("measurement.quantities must be a non-empty list")
+        else:
+            seen: set[tuple[str, str]] = set()
+            for index, quantity in enumerate(quantities):
+                where = f"measurement.quantities[{index}]"
+                if not isinstance(quantity, Mapping):
+                    problems.append(f"{where} must be a mapping")
+                    continue
+                name = quantity.get("name")
+                basis = quantity.get("basis")
+                value = quantity.get("value")
+                unit = quantity.get("unit")
+                if not isinstance(name, str) or not _QUANTITY_NAME_RE.match(name):
+                    problems.append(f"{where}.name must match ^[a-z0-9][a-z0-9_]{{0,63}}$")
+                if basis not in MEASUREMENT_BASES:
+                    problems.append(f"{where}.basis must be one of {list(MEASUREMENT_BASES)}")
+                if not isinstance(value, str) or not _QUANTITY_VALUE_RE.match(value):
+                    problems.append(
+                        f"{where}.value must be a decimal string, not a number: a float "
+                        "renders differently in different languages and content_hash is "
+                        "a byte-level agreement"
+                    )
+                if not isinstance(unit, str) or not _UNIT_RE.match(unit):
+                    problems.append(f"{where}.unit must be a lowercase unit token")
+                if isinstance(name, str) and isinstance(basis, str):
+                    key = (name, basis)
+                    if key in seen:
+                        problems.append(
+                            f"{where}: quantity {name}/{basis} is claimed twice in one "
+                            "entry; an entry may not contradict itself"
+                        )
+                    seen.add(key)
+    return problems
+
+
 def validate_entry(entry: Mapping[str, Any], *, kind: str) -> list[str]:
     """Structural check mirroring schemas/knowledge-v2.schema.json.
 
@@ -399,23 +527,35 @@ def validate_entry(entry: Mapping[str, Any], *, kind: str) -> list[str]:
             "confidently is not evidence"
         )
 
-    rule = entry.get("rule")
-    if not isinstance(rule, Mapping):
-        problems.append("rule must be a mapping")
+    bodies = [key for key in BODY_KEYS if key in entry]
+    if len(bodies) != 1:
+        problems.append(
+            "an entry has exactly one body: 'rule' for a failure rule or "
+            "'measurement' for a measured or vendor-declared quantity; this one "
+            + ("declares both" if bodies else "declares neither")
+        )
+    elif bodies == ["rule"]:
+        rule = entry.get("rule")
+        if not isinstance(rule, Mapping):
+            problems.append("rule must be a mapping")
+        else:
+            for field_name in RULE_REQUIRED:
+                value = rule.get(field_name)
+                if not isinstance(value, str) or not value.strip():
+                    problems.append(
+                        f"rule.{field_name} is required and must be a non-empty string"
+                    )
+            extra = set(rule) - RULE_FIELDS
+            if extra:
+                problems.append("undeclared rule field(s) " + ", ".join(sorted(extra)))
+            fingerprints = rule.get("fingerprints")
+            if fingerprints is not None and (
+                not isinstance(fingerprints, (list, tuple))
+                or any(not isinstance(f, str) or not f for f in fingerprints)
+            ):
+                problems.append("rule.fingerprints must be a list of non-empty strings")
     else:
-        for field_name in RULE_REQUIRED:
-            value = rule.get(field_name)
-            if not isinstance(value, str) or not value.strip():
-                problems.append(f"rule.{field_name} is required and must be a non-empty string")
-        extra = set(rule) - RULE_FIELDS
-        if extra:
-            problems.append("undeclared rule field(s) " + ", ".join(sorted(extra)))
-        fingerprints = rule.get("fingerprints")
-        if fingerprints is not None and (
-            not isinstance(fingerprints, (list, tuple))
-            or any(not isinstance(f, str) or not f for f in fingerprints)
-        ):
-            problems.append("rule.fingerprints must be a list of non-empty strings")
+        problems.extend(_measurement_problems(entry.get("measurement")))
 
     scope = entry.get("scope")
     if not isinstance(scope, Mapping):
@@ -641,7 +781,8 @@ def capture(
 
     warnings: list[str] = []
 
-    for label, node in (("rule", draft.get("rule")), ("scope", draft.get("scope"))):
+    for label in (body_key(draft), "scope"):
+        node = draft.get(label)
         if isinstance(node, Mapping):
             err = _payload_type_error(node, label)
             if err:

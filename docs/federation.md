@@ -24,7 +24,7 @@ Sync keys:
 | Field | Role |
 |---|---|
 | `uuid` | identity — stable across revisions and across forks |
-| `content_hash` | revision — `sha256:` over the canonicalized `scope` + `rule` payload |
+| `content_hash` | revision — `sha256:` over the canonicalized `scope` + body payload, where the body is the entry's `rule` or `measurement` |
 | `provenance.origin_repo` | which fork proposed this revision |
 
 Two date rules that follow from the above and are easy to get wrong:
@@ -47,6 +47,8 @@ Rules:
 - same `uuid` + same `content_hash` → no-op
 - same `uuid` + different `content_hash` → revision proposal, `lifecycle.updated_at` advances, `verification.last_verified_at` does **not**
 - different `uuid` + near-identical `rule` → duplicate candidate, bot reports both; humans decide whether to merge with `lifecycle.supersedes`
+- different `uuid` + same `measurement` subject and coordinate → duplicate candidate on the same terms, compared by subject + quantity identity + coordinate rather than by prose
+- …but if such a pair claims a **different value or unit** for a quantity identity it shares, it is a conflict rather than a duplicate: it is reported by the conflicts gate, blocks promotion, and is never offered as something to merge, because merging it would discard one of two irreconcilable numbers
 - `uuid` unknown here → new entry, lands in `unverified/`
 
 An unstable hash function turns every sync into a revision storm, so
@@ -57,9 +59,12 @@ canonicalization is specified exactly rather than left to an implementation:
    is a float where the schema requires a string, and an implementation that
    quietly stringifies it produces a different hash from one that does not.
    Reject it as invalid instead.
-1. Take only the entry's `scope` and `rule` sub-objects. Nothing else — not
-   `status`, not dates, not provenance. Re-verifying or re-reviewing an entry
-   must not change its revision.
+1. Take only the entry's `scope` sub-object and its **body** sub-object, where
+   the body is whichever of `rule` and `measurement` the entry has. Nothing
+   else — not `status`, not dates, not provenance. Re-verifying or re-reviewing
+   an entry must not change its revision. An entry with neither body or with
+   both is schema-invalid, so by step 0 its hash is undefined; an implementation
+   must refuse it rather than pick one.
 2. In `rule.fingerprints`: lowercase **ASCII letters only** (`A`–`Z` → `a`–`z`,
    nothing else), strip leading and trailing ASCII whitespace, collapse internal
    runs of ASCII whitespace to one `U+0020`, drop duplicates and empties, then
@@ -104,8 +109,11 @@ Byte-wise sorting in step 2 is specified in place of locale collation for the
 same reason: a locale-dependent sort is divergent by definition. For well-formed
 UTF-8 it coincides with code-point order, so either phrasing is implementable,
 but byte-wise leaves nothing to interpret.
-4. Serialize `{"rule": …, "scope": …}` as JSON with `sort_keys=True`,
-   `ensure_ascii=False`, and separators `(",", ":")`.
+4. Serialize `{<body>: …, "scope": …}` as JSON with `sort_keys=True`,
+   `ensure_ascii=False`, and separators `(",", ":")` — that is, `{"rule": …,
+   "scope": …}` for a rule entry and `{"measurement": …, "scope": …}` for a
+   measurement entry. The payload is keyed by the body's own name, which is why
+   adding the `measurement` variant moved no existing entry's `content_hash`.
 5. `content_hash` = `"sha256:" + sha256(utf8(that string)).hexdigest()`.
 
 Step 1 is the one worth restating: the revision tracks what the entry *claims*,
@@ -123,7 +131,7 @@ belong to the main repo and describe review state, which a proposer cannot know.
 
 | Owner | Fields |
 |---|---|
-| fork | `scope`, `rule`, `slug`, `confidence`, `provenance` |
+| fork | `scope`, the body (`rule` or `measurement`), `slug`, `confidence`, `provenance` |
 | main repo | `status`, `redaction_cleared_under`, `lifecycle.first_seen`, `lifecycle.supersedes`, `lifecycle.superseded_by`, `lifecycle.resolved_by`, `conflicts`, `verification` |
 | derived | `content_hash`, and the document's `updated_at` |
 
@@ -150,7 +158,7 @@ the tooling makes for them.
 
 ## Duplicate candidates do not land by default
 
-A near-identical `rule` under a different `uuid` is reported, not written.
+A near-identical body under a different `uuid` is reported, not written.
 Landing it automatically would grow the corpus with pairs nobody chose to keep
 separate. Writing it is opt-in, and merging the pair is a human decision recorded
 with `lifecycle.supersedes`.
@@ -168,6 +176,17 @@ explicit, and gives up reproducibility for that run.
 `corpus/<review-zone>/<kind>.yaml`. Readers accept any `*.yaml` under a zone
 directory, so a `kind` may be split across files when one grows unwieldy, and the
 `layer` field inside each document must still agree with its directory.
+
+The splitting allowance is used by `kind: hardware-measurements`, which is two
+files in `corpus/unverified/`: `hardware-measurements-theoretical-peaks.yaml`
+(63 entries, one per SoC, quantities declared by the vendor's CANN
+`platform_config`) and `hardware-measurements-sustained.yaml` (self-measured
+fractions of those peaks). Same kind, separate files, because a vendor
+declaration and a microbenchmark are reviewed on different grounds even though
+they share the entry contract — and a re-snapshot of the vendor table should not
+touch the measured file. Neither is in `corpus/verified/`: one contributor
+submitted both and nobody else has re-derived any of it. See
+[decisions.md](decisions.md) §24.
 
 ## Central collection (trusted default branch)
 
