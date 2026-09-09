@@ -662,11 +662,19 @@ def load_entries(
                     {"layer": layer, "file": rel, "error": "document root is not a mapping"}
                 )
                 continue
+            # Frozen v1 documents (and any whole file with no uuid-bearing
+            # entries) are not this reader's contract. Skip them quietly so a
+            # mixed project directory does not look like a load failure.
+            if doc.get("schema_version") in (1, "1"):
+                continue
             entries = doc.get("entries")
             if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes, Mapping)):
                 report.errors.append(
                     {"layer": layer, "file": rel, "error": "document has no 'entries' list"}
                 )
+                continue
+            mapping_entries = [item for item in entries if isinstance(item, Mapping)]
+            if mapping_entries and not any(item.get("uuid") for item in mapping_entries):
                 continue
 
             kind = str(doc.get("kind", "unknown"))

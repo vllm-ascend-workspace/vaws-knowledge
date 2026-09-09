@@ -252,12 +252,37 @@ class DocumentLoading(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             (root / "doc.json").write_text(
+                json.dumps(
+                    {
+                        "kind": "k",
+                        "layer": "unverified",
+                        "entries": [
+                            {"uuid": support.CANDIDATE_ONLY, "slug": "ok"},
+                            {"slug": "no-uuid"},
+                        ],
+                    }
+                )
+            )
+            config = support.build_config(shared=False, project=False, candidate=root)
+            report = load_entries(config, ["candidate"])
+            self.assertEqual(1, len(report.entries))
+            self.assertIn("no uuid", report.errors[0]["error"])
+
+    def test_v1_document_is_skipped_without_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "legacy.yaml").write_text(
+                "schema_version: 1\nkind: known-failure-signatures\nentries:\n"
+                "  - id: old-v1-entry\n    status: active\n",
+                encoding="utf-8",
+            )
+            (root / "no-uuid.json").write_text(
                 json.dumps({"kind": "k", "layer": "unverified", "entries": [{"slug": "no-uuid"}]})
             )
             config = support.build_config(shared=False, project=False, candidate=root)
             report = load_entries(config, ["candidate"])
             self.assertEqual([], report.entries)
-            self.assertIn("no uuid", report.errors[0]["error"])
+            self.assertEqual([], report.errors)
 
 
 if __name__ == "__main__":
