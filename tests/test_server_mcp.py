@@ -20,6 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "s
 
 import support  # noqa: E402
 from vaws_knowledge import package_version
+from vaws_knowledge.server.layers import load_config  # noqa: E402
 from vaws_knowledge.server.mcp_server import (  # noqa: E402
     METHOD_NOT_FOUND,
     PARSE_ERROR,
@@ -140,6 +141,8 @@ class Tools(unittest.TestCase):
         payload = result["structuredContent"]
         self.assertEqual(package_version(), payload["version"])
         self.assertEqual("unknown", payload["absent_fact_semantics"])
+        self.assertEqual("vllm-ascend-workspace/vaws-knowledge", payload["source_repo"])
+        self.assertIn("source_ref", payload)
         self.assertIn(support.SHARED_SOC_A, [r["uuid"] for r in payload["results"]])
         # The text block must carry the same payload for text-only clients.
         self.assertEqual(payload, json.loads(result["content"][0]["text"]))
@@ -206,6 +209,38 @@ class Tools(unittest.TestCase):
         result = call(service(), "knowledge_invent")
         self.assertTrue(result["isError"])
         self.assertEqual("unknown_tool", result["structuredContent"]["error"])
+
+
+class PackagedCorpusQuery(unittest.TestCase):
+    def _service(self) -> KnowledgeService:
+        config = load_config({}, env={"VAWS_KNOWLEDGE_CANDIDATE_ROOT": ""})
+        return KnowledgeService(config=config, today=TODAY)
+
+    def test_unverified_status_reaches_a_packaged_measurement(self):
+        payload = call(
+            self._service(),
+            "knowledge_query",
+            {
+                "text": "Ascend910B4",
+                "statuses": ["unverified"],
+                "bodies": ["measurement"],
+                "limit": 5,
+            },
+        )["structuredContent"]
+        self.assertTrue(payload["results"], payload)
+        self.assertTrue(all(r["body"] == "measurement" for r in payload["results"]))
+        self.assertTrue(all(r["status"] == "unverified" for r in payload["results"]))
+        self.assertTrue(any("Ascend910B4" in (r.get("summary") or "") for r in payload["results"]))
+        self.assertEqual("vllm-ascend-workspace/vaws-knowledge", payload["source_repo"])
+
+    def test_default_statuses_hide_unverified_shared_entries(self):
+        payload = call(
+            self._service(),
+            "knowledge_query",
+            {"text": "Ascend910B4", "bodies": ["measurement"], "limit": 5},
+        )["structuredContent"]
+        self.assertEqual([], payload["results"])
+        self.assertNotIn("unverified", payload["request"]["statuses"])
 
 
 class Degradation(unittest.TestCase):

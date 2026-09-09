@@ -48,6 +48,7 @@ from .layers import (
     ConfigError,
     ServiceConfig,
     load_config,
+    shared_source,
 )
 from .query import READER_DIMENSIONS, SCOPE_DIMENSIONS, explain, query
 
@@ -308,6 +309,7 @@ class KnowledgeService:
             "absent_fact_semantics": "unknown",
             "degradation_contract": DEGRADATION_CONTRACT,
         }
+        env.update(shared_source())
         if self.config_error:
             env["configuration_error"] = self.config_error
         return env

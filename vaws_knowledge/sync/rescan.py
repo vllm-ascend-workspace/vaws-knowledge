@@ -5,7 +5,7 @@
 
 `provenance.redaction_profile` records which ruleset cleared each entry at
 export time. When the ruleset moves to r<N+1>, every entry recorded under an
-older profile is re-scanned with the *current* `tools/redact.py --check`
+older profile is re-scanned with the current `vaws_knowledge.redact` ruleset
 rather than trusted (docs/federation.md, "Re-scanning after a ruleset
 change").
 
@@ -37,22 +37,19 @@ import pathlib
 import sys
 import tempfile
 
+from vaws_knowledge import redact
 from vaws_knowledge.sync._common import (  # noqa: E402
     EXIT_ERROR,
     EXIT_GATE,
     EXIT_OK,
     Corpus,
-    GateResult,
     Located,
-    Runner,
     SyncError,
-    default_runner,
     dump_yaml,
     json_dumps,
     load_corpus,
     profile_number,
     repo_root_from,
-    run_gate,
     today,
 )
 
@@ -146,19 +143,11 @@ def rescan(
     corpus: Corpus,
     target: str,
     *,
-    tools_dir: pathlib.Path,
-    runner: Runner = default_runner,
     include_findings: bool = False,
     day: str | None = None,
 ) -> RescanReport:
     below, current = entries_below(corpus, target)
     items: list[RescanItem] = []
-    redact = pathlib.Path(tools_dir) / "redact.py"
-    if not redact.is_file():
-        raise SyncError(
-            f"gate unavailable: {redact} does not exist; a re-scan without the redaction "
-            "tool would trust exactly the entries it is meant to check"
-        )
     with tempfile.TemporaryDirectory(prefix="vaws-rescan-") as tmp:
         tmp_dir = pathlib.Path(tmp)
         for loc in below:
@@ -172,7 +161,7 @@ def rescan(
             probe = tmp_dir / loc.layer / loc.kind / f"{loc.entry['uuid']}.yaml"
             probe.parent.mkdir(parents=True, exist_ok=True)
             probe.write_text(dump_yaml(single), encoding="utf-8")
-            gate: GateResult = run_gate(tools_dir, "redact.py", ["--check", str(probe)], runner=runner)
+            findings = redact.scan_file(probe)
             item = RescanItem(
                 uuid=loc.entry["uuid"],
                 slug=str(loc.entry.get("slug", "")),
@@ -180,14 +169,12 @@ def rescan(
                 layer=loc.layer,
                 path=_rel(corpus, loc.path),
                 recorded_profile=str((loc.entry.get("provenance") or {}).get("redaction_profile")),
-                result="passed" if gate.status == "passed" else "quarantine",
+                result="quarantine" if findings else "passed",
             )
-            if gate.status == "unavailable":
-                raise SyncError(gate.detail)
             if item.result == "quarantine":
                 item.remediation = _remediation(corpus, loc, target)
                 if include_findings:
-                    item.findings = gate.detail
+                    item.findings = "\n".join(f.render(show_matches=True) for f in findings)
             items.append(item)
     return RescanReport(
         target_profile=target,
@@ -219,7 +206,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=pathlib.Path, default=None, help="write the proposal JSON here")
     parser.add_argument("--repo", type=pathlib.Path, default=None)
     parser.add_argument("--corpus", type=pathlib.Path, default=None)
-    parser.add_argument("--tools-dir", type=pathlib.Path, default=None)
     parser.add_argument("--today", default=None)
     parser.add_argument("--include-findings", action="store_true",
                         help="embed the redaction tool output for failing entries (sensitive)")
@@ -228,10 +214,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repo = repo_root_from(args.repo)
         corpus_dir = pathlib.Path(args.corpus).resolve() if args.corpus else repo / "corpus"
-        tools_dir = pathlib.Path(args.tools_dir).resolve() if args.tools_dir else None
         corpus = load_corpus(corpus_dir)
-        report = rescan(corpus, args.profile, tools_dir=tools_dir,
-                        include_findings=args.include_findings, day=args.today)
+        report = rescan(
+            corpus, args.profile, include_findings=args.include_findings, day=args.today
+        )
     except SyncError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_GATE if "gate unavailable" in str(exc) else EXIT_ERROR

@@ -50,6 +50,7 @@ from .layers import (
     ServiceConfig,
     load_config,
     load_entries,
+    shared_source,
 )
 
 #: All twelve dimensions of the applicability coordinate.
@@ -686,6 +687,7 @@ class QueryResponse:
             "count": len(self.results),
             "results": [r.to_dict() for r in self.results],
         }
+        payload.update(shared_source())
         return payload
 
 
@@ -995,6 +997,7 @@ def explain(
         "absent_fact_semantics": "unknown",
         "load": report.describe(),
     }
+    base.update(shared_source())
 
     if not matches:
         base.update(

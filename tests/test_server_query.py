@@ -47,6 +47,8 @@ class DefaultResultSet(unittest.TestCase):
         )
         self.assertEqual(["shared", "project"], payload["request"]["layers"])
         self.assertEqual(["verified", "stale", "resolved"], payload["request"]["statuses"])
+        self.assertEqual("vllm-ascend-workspace/vaws-knowledge", payload["source_repo"])
+        self.assertIn("source_ref", payload)
 
     def test_deprecated_and_superseded_stay_out_of_default_results(self):
         payload = run(reader_coordinate=support.READER_SOC_A)

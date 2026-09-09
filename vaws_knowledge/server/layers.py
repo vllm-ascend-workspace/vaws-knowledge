@@ -3,9 +3,13 @@
 The trust model in README.md has three layers, and a reader must be able to
 tell which one an answer came from:
 
-    shared     this repo's reviewed corpus/verified/, read-only
+    shared     the packaged corpus (verified/ and unverified/), read-only
     project    a business repo's own knowledge, e.g. .agents/knowledge/
     candidate  a developer's untracked local capture directory
+
+A layer is a trust source. Each entry carries its own ``status``; default
+visibility is ``policy.default_statuses``. Unverified shared entries stay
+hidden until a caller passes ``statuses`` or changes that policy.
 
 A layer that is not configured, or configured at a path that does not exist,
 is *absent*. Absent is not an error: someone who has never pulled the shared
@@ -75,6 +79,8 @@ DEFAULT_IDENTITY = {
 #: and deprecated are not.
 DEFAULT_STATUSES: tuple[str, ...] = ("verified", "stale", "resolved")
 OPT_IN_STATUSES: tuple[str, ...] = ("unverified",)
+SHARED_SUBSETS: tuple[str, ...] = ("verified", "unverified")
+SOURCE_REPO = "vllm-ascend-workspace/vaws-knowledge"
 
 DEFAULT_POLICY: dict[str, Any] = {
     # docs/lifecycle.md leaves the horizon to policy. This only *labels* an
@@ -95,23 +101,37 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def resolve_shared_from_corpus(raw: str | Path) -> Path:
-    """Map a corpus root or repo checkout to the shared ``verified/`` directory."""
+def resolve_shared_from_corpus(raw: str | Path) -> tuple[Path, ...]:
+    """Map a corpus root or repo checkout to shared subset directories.
+
+    Returns every existing ``verified/`` and ``unverified/`` child. Layer is
+    the trust source; entry ``status`` is a separate axis.
+    """
 
     path = Path(raw).expanduser()
-    if (path / "verified").is_dir():
-        return path / "verified"
-    if (path / "corpus" / "verified").is_dir():
-        return path / "corpus" / "verified"
-    return path / "verified"
+    for base in (path, path / "corpus"):
+        roots = tuple(base / subset for subset in SHARED_SUBSETS if (base / subset).is_dir())
+        if roots:
+            return roots
+    return (path / "verified",)
 
 
 def default_shared_roots(env: Mapping[str, str] | None = None) -> tuple[Path, ...]:
     env = os.environ if env is None else env
     corpus = env.get(ENV_CORPUS)
     if corpus:
-        return (resolve_shared_from_corpus(corpus),)
-    return ()
+        return resolve_shared_from_corpus(corpus)
+    from vaws_knowledge.corpus import corpus_root
+
+    return resolve_shared_from_corpus(corpus_root())
+
+
+def shared_source() -> dict[str, str | None]:
+    """Pin the packaged corpus to the installed commons commit, when known."""
+
+    from vaws_knowledge.corpus import installed_commit
+
+    return {"source_ref": installed_commit(), "source_repo": SOURCE_REPO}
 
 
 def default_candidate_root() -> Path:
@@ -180,7 +200,7 @@ class ServiceConfig:
     def describe(self) -> dict[str, Any]:
         from vaws_knowledge import package_version
 
-        return {
+        out = {
             "version": package_version(),
             "config_path": str(self.config_path) if self.config_path else None,
             "layers": {name: self.mount(name).describe() for name in LAYERS},
@@ -192,6 +212,8 @@ class ServiceConfig:
             "yaml_available": yaml is not None,
             "warnings": list(self.warnings),
         }
+        out.update(shared_source())
+        return out
 
     @property
     def stale_after_days(self) -> int:
