@@ -525,13 +525,41 @@ version channel is unused cost.
 
 **Resolution:** there is no `service-api.json` and no `service_api_version`
 field. The installed package version (`importlib.metadata.version("vaws-knowledge")`,
-currently `0.1.5`) is the contract version. `measurement` is part of that
-contract. `bodies` remains an ordinary query filter, not a compatibility
-switch.
+currently `0.2.0`) is the contract version. `measurement` and `reference`
+are part of that contract. `bodies` remains an ordinary query filter, not a
+compatibility switch.
 
 **Keeping a dual-version handshake was rejected** because nothing has been
 released. Compatibility shims would only exist to simulate a client that
 does not exist.
+
+---
+
+## 28. Sourced references are a third body, not a weakened fact
+
+**Context:** the product needs official documentation, principles and guides
+alongside verified rules and measurements. Stuffing those into `rule` would
+invent twelve runtime coordinates and a verification record that never happened.
+
+**Resolution:** `reference` is a third exclusive body. It carries kind,
+summary, text, source (title/provider/url and optional version/date) and an
+explicit trust assessment. It must not declare `scope` or `verification`.
+The canonical fixture is `corpus/unverified/sourced-references.yaml` (one
+entry, packaged with the wheel). Query labels
+`evidence_class=sourced_reference` and cites source/trust rather than
+treating the row as a local observation. A client handshake confirms
+protocol reachability; it does not turn a specification into runtime
+evidence. Rule and measurement gates are unchanged. Their `content_hash`
+values did not move.
+
+## 29. MCP stdio is newline-delimited JSON-RPC
+
+**Context:** Content-Length framing on this server caused Grok MCP initialize
+timeouts and skipped `Content-Length:` lines as undecodable stdout. Official
+MCP stdio is newline-delimited JSON-RPC.
+
+**Resolution:** `mcp_server.py` reads and writes one JSON object per line.
+Content-Length is not used. Stdout carries only JSON-RPC messages.
 
 ---
 

@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from vaws_knowledge._common import ToolError
-from vaws_knowledge.canonical import canonical_json
+from vaws_knowledge.canonical import BODY_KEYS, canonical_json
 from vaws_knowledge.canonical import content_hash as packaged_content_hash
 
 from .layers import (
@@ -55,11 +55,13 @@ ENTRY_FIELDS = {
     "conflicts",
     "rule",
     "measurement",
+    "reference",
 }
 RULE_FIELDS = {"summary", "symptom", "root_cause", "resolution", "avoidance", "fingerprints"}
 RULE_REQUIRED = ("summary", "symptom", "root_cause", "resolution")
-#: The two entry body variants. Exactly one per entry.
-BODY_KEYS = ("rule", "measurement")
+REFERENCE_FIELDS = {"kind", "summary", "text", "source", "trust", "topics"}
+REFERENCE_REQUIRED = ("kind", "summary", "text", "source", "trust")
+REFERENCE_KINDS = ("official_documentation", "principle", "guide")
 MEASUREMENT_FIELDS = {"summary", "subject", "method", "quantities", "notes"}
 MEASUREMENT_REQUIRED = ("summary", "subject", "method", "quantities")
 MEASUREMENT_BASES = ("declared", "theoretical", "measured", "sustained")
@@ -211,7 +213,7 @@ def body_key(entry: Mapping[str, Any]) -> str:
         raise ValueError(
             "entry declares more than one body ("
             + ", ".join(present)
-            + "); an entry has exactly one of rule / measurement"
+            + "); an entry has exactly one of rule / measurement / reference"
         )
     return present[0] if present else "rule"
 
@@ -372,6 +374,51 @@ def _measurement_problems(measurement: Any) -> list[str]:
     return problems
 
 
+_URL_RE = re.compile(r"^https?://\S+$")
+
+
+def _reference_problems(reference: Any) -> list[str]:
+    problems: list[str] = []
+    if not isinstance(reference, Mapping):
+        return ["reference must be a mapping"]
+    extra = set(reference) - REFERENCE_FIELDS
+    if extra:
+        problems.append("undeclared reference field(s) " + ", ".join(sorted(extra)))
+    for field_name in REFERENCE_REQUIRED:
+        if field_name not in reference:
+            problems.append(f"reference.{field_name} is required")
+    if reference.get("kind") not in REFERENCE_KINDS:
+        problems.append(
+            "reference.kind must be official_documentation, principle, or guide"
+        )
+    summary = reference.get("summary")
+    if summary is not None and (not isinstance(summary, str) or not summary.strip()):
+        problems.append("reference.summary must be a non-empty string")
+    text = reference.get("text")
+    if text is not None and (not isinstance(text, str) or len(text.strip()) < 12):
+        problems.append("reference.text must be a substantive attributed summary")
+    trust = reference.get("trust")
+    if trust is not None and (not isinstance(trust, str) or len(trust.strip()) < 12):
+        problems.append("reference.trust must be an explicit source/trust assessment")
+    source = reference.get("source")
+    if source is not None:
+        if not isinstance(source, Mapping):
+            problems.append("reference.source must be a mapping")
+        else:
+            for field_name in ("title", "provider", "url"):
+                if not isinstance(source.get(field_name), str) or not str(source.get(field_name)).strip():
+                    problems.append(f"reference.source.{field_name} is required")
+            url = source.get("url")
+            if isinstance(url, str) and url.strip() and not _URL_RE.match(url.strip()):
+                problems.append("reference.source.url must be an http(s) URL with no whitespace")
+    topics = reference.get("topics")
+    if topics is not None and (
+        not isinstance(topics, list) or any(not isinstance(t, str) or not t.strip() for t in topics)
+    ):
+        problems.append("reference.topics must be a list of non-empty strings")
+    return problems
+
+
 def validate_entry(entry: Mapping[str, Any], *, kind: str) -> list[str]:
     """Structural check mirroring schemas/knowledge-v2.schema.json.
 
@@ -413,9 +460,10 @@ def validate_entry(entry: Mapping[str, Any], *, kind: str) -> list[str]:
     bodies = [key for key in BODY_KEYS if key in entry]
     if len(bodies) != 1:
         problems.append(
-            "an entry has exactly one body: 'rule' for a failure rule or "
-            "'measurement' for a measured or vendor-declared quantity; this one "
-            + ("declares both" if bodies else "declares neither")
+            "an entry has exactly one body: 'rule' for a failure rule, "
+            "'measurement' for a measured or vendor-declared quantity, or "
+            "'reference' for sourced material; this one "
+            + ("declares more than one" if bodies else "declares neither")
         )
     elif bodies == ["rule"]:
         rule = entry.get("rule")
@@ -437,11 +485,29 @@ def validate_entry(entry: Mapping[str, Any], *, kind: str) -> list[str]:
                 or any(not isinstance(f, str) or not f for f in fingerprints)
             ):
                 problems.append("rule.fingerprints must be a list of non-empty strings")
-    else:
+    elif bodies == ["measurement"]:
         problems.extend(_measurement_problems(entry.get("measurement")))
+    elif bodies == ["reference"]:
+        problems.extend(_reference_problems(entry.get("reference")))
+        if "scope" in entry:
+            problems.append(
+                "a sourced reference must not declare scope; the twelve runtime "
+                "coordinates are for rules and measurements only"
+            )
+        if "verification" in entry:
+            problems.append(
+                "a sourced reference is not hardware/runtime verification; omit verification"
+            )
+        if status not in (None, "unverified", "deprecated"):
+            problems.append(
+                "a sourced reference cannot use status "
+                f"{status!r}; use unverified (or deprecated)"
+            )
 
     scope = entry.get("scope")
-    if not isinstance(scope, Mapping):
+    if bodies == ["reference"]:
+        pass
+    elif not isinstance(scope, Mapping):
         problems.append(
             "scope must be a mapping declaring all twelve dimensions: "
             + ", ".join(SCOPE_DIMENSIONS)

@@ -13,11 +13,12 @@ The steps, restated from the contract so that a deviation is visible in review:
    require the stored ``content_hash`` to already match, so a stale derived
    hash can still be recomputed. Low-level helpers still refuse to stringify
    types; they are not a public validation shortcut.
-1. Take only ``scope`` and the entry's body. The body is ``rule`` for a failure
-   rule and ``measurement`` for a measured or vendor-declared quantity; an
-   entry has exactly one. The payload key is the body's own name, so a rule
-   entry hashes byte-for-byte as it always did and adding the second variant
-   moved no existing hash.
+1. Take the entry's single body, plus ``scope`` when the body is a runtime
+   claim. The body is ``rule`` for a failure rule, ``measurement`` for a
+   measured or vendor-declared quantity, or ``reference`` for sourced
+   material. The payload key is the body's own name, so a rule entry hashes
+   byte-for-byte as it always did. A sourced reference hashes ``{"reference":
+   …}`` only: it must not invent the twelve runtime coordinates.
 2. ``rule.fingerprints``: lowercase ASCII letters only, strip leading and
    trailing ASCII whitespace, collapse internal runs of ASCII whitespace to
    one ``U+0020``, drop duplicates and empties, sort byte-wise over UTF-8.
@@ -63,7 +64,8 @@ HASH_PREFIX = "sha256:"
 #: docs/federation.md step 1 takes ``scope`` plus the body; the payload key is
 #: the body's own name, which is what keeps every pre-existing rule hash
 #: unchanged.
-BODY_KEYS = ("rule", "measurement")
+BODY_KEYS = ("rule", "measurement", "reference")
+RUNTIME_BODY_KEYS = ("rule", "measurement")
 
 ASCII_WHITESPACE = " \t\n\r\x0b\x0c"
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
@@ -167,10 +169,10 @@ def _normalize_tree(value: Any) -> Any:
 def body_key(entry: Mapping[str, Any]) -> str | None:
     """Name of the entry's single body key, or ``None`` if it has not got one.
 
-    Exactly one of ``rule`` / ``measurement`` is expected. Two bodies is
-    ambiguous rather than richer, so it is refused here as well as by the
-    schema: hashing both under one revision would let a change to either look
-    like a change to the entry as a whole.
+    Exactly one of ``rule`` / ``measurement`` / ``reference`` is expected.
+    Two bodies is ambiguous rather than richer, so it is refused here as well
+    as by the schema: hashing both under one revision would let a change to
+    either look like a change to the entry as a whole.
     """
     if not isinstance(entry, Mapping):
         return None
@@ -182,10 +184,11 @@ def canonical_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
     """Return the canonical ``{<body>: ..., "scope": ...}`` payload for ``entry``.
 
     ``entry`` is a single entry mapping (one element of a document's
-    ``entries``). The body key is ``rule`` or ``measurement``; a missing
-    ``scope``, a missing body or two bodies raise ``ToolError`` rather than
-    hashing a partial payload, because a hash over half an entry would collide
-    with nothing and silently look like a legitimate revision.
+    ``entries``). The body key is ``rule``, ``measurement`` or ``reference``.
+    Runtime bodies still require ``scope``. A sourced reference must not
+    carry ``scope``: hashing invented coordinates would look like a runtime
+    claim. A missing body or two bodies raise ``ToolError`` rather than
+    hashing a partial payload.
     """
     if not isinstance(entry, Mapping):
         raise ToolError("canonical_payload: entry must be a mapping")
@@ -200,14 +203,21 @@ def canonical_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
             )
         raise ToolError(
             "canonical_payload: entry has no body; content_hash is defined over "
-            "scope + one of " + ", ".join(f"'{k}'" for k in BODY_KEYS)
+            "scope + one of " + ", ".join(f"'{k}'" for k in RUNTIME_BODY_KEYS)
+            + f", or over '{BODY_KEYS[-1]}' alone"
         )
-    if "scope" not in entry:
+    if body in RUNTIME_BODY_KEYS and "scope" not in entry:
         raise ToolError(
             "canonical_payload: entry is missing 'scope'; content_hash is defined "
             f"over scope + {body} and cannot be computed without both"
         )
-    for key in ("scope", body):
+    if body == "reference" and "scope" in entry:
+        raise ToolError(
+            "canonical_payload: a sourced reference must not declare 'scope'; "
+            "the twelve runtime coordinates are for rules and measurements only"
+        )
+    keys = (body,) if body == "reference" else ("scope", body)
+    for key in keys:
         if not isinstance(entry[key], Mapping):
             raise ToolError(
                 f"canonical_payload: {key} must be a mapping, got "
@@ -221,6 +231,8 @@ def canonical_payload(entry: Mapping[str, Any]) -> dict[str, Any]:
         # Step 2 applies to the original fingerprint strings, not to the
         # already step-3-normalized copies in the walked tree.
         body_tree["fingerprints"] = _normalize_fingerprints(entry[body].get("fingerprints"))
+    if body == "reference":
+        return {body: body_tree}
     scope = _normalize_tree(entry["scope"])
     return {body: body_tree, "scope": scope}
 

@@ -66,6 +66,7 @@ _DOC_ORDER = ("schema_version", "kind", "layer", "updated_at", "entries")
 _ENTRY_ORDER = (
     "uuid", "slug", "content_hash", "status", "confidence", "scope",
     "provenance", "verification", "lifecycle", "conflicts", "rule", "measurement",
+    "reference",
 )
 _ORDER_BY_KEY = {
     "scope": validate.SCOPE_DIMENSIONS,
@@ -78,6 +79,8 @@ _ORDER_BY_KEY = {
     "measurement.subject": ("id", "aliases", "family", "architecture", "core_version", "compiler_target"),
     "measurement.method": ("type", "description", "parameters", "source"),
     "measurement.method.parameters[]": ("name", "value"),
+    "reference": ("kind", "summary", "text", "source", "trust", "topics"),
+    "reference.source": ("title", "provider", "url", "version", "date"),
     "measurement.method.source": ("kind", "ref", "note"),
     "measurement.quantities[]": ("name", "basis", "value", "unit", "qualifier"),
     "range": ("min", "max"),

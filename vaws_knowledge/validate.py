@@ -513,17 +513,47 @@ def lifecycle_problems(entry: Mapping[str, Any], file: str, base: str) -> list[P
     return out
 
 
+def reference_problems(entry: Mapping[str, Any], file: str, base: str) -> list[Problem]:
+    """Sourced references must not impersonate runtime-verified claims."""
+    if "reference" not in entry:
+        return []
+    out: list[Problem] = []
+    if "scope" in entry:
+        out.append(Problem(
+            file, f"{base}.scope",
+            "a sourced reference must not declare the twelve runtime coordinates; "
+            "put applicable topics or published versions on reference.topics",
+        ))
+    if "verification" in entry:
+        out.append(Problem(
+            file, f"{base}.verification",
+            "a sourced reference is not hardware/runtime verification; omit verification",
+        ))
+    status = entry.get("status")
+    if status not in (None, "unverified", "deprecated"):
+        out.append(Problem(
+            file, f"{base}.status",
+            f"a sourced reference cannot have status {status!r}; use unverified "
+            "(or deprecated). verified/stale/resolved remain runtime-evidence statuses",
+        ))
+    return out
+
+
 def hash_problems(entry: Mapping[str, Any], file: str, base: str) -> list[Problem]:
     declared = entry.get("content_hash")
     bodies = [k for k in canonical.BODY_KEYS if k in entry]
-    if not isinstance(declared, str) or "scope" not in entry or len(bodies) != 1:
+    if not isinstance(declared, str) or len(bodies) != 1:
+        return []
+    body = bodies[0]
+    if body in canonical.RUNTIME_BODY_KEYS and "scope" not in entry:
         return []
     try:
         actual = canonical.content_hash(entry)
     except ToolError:
         return []
     if declared != actual:
-        return [Problem(file, f"{base}.content_hash", f"declared {declared} but the canonical scope+{bodies[0]} payload hashes to {actual}; regenerate with tools/canonical.py (or tools/export.py), do not edit by hand")]
+        payload = f"{body}" if body == "reference" else f"scope+{body}"
+        return [Problem(file, f"{base}.content_hash", f"declared {declared} but the canonical {payload} payload hashes to {actual}; regenerate with tools/canonical.py (or tools/export.py), do not edit by hand")]
     return []
 
 
@@ -579,6 +609,7 @@ def validate_document(doc: Any, file: str, expected_layer: str | None = None, sc
         if layer == "verified" and entry.get("status") == "unverified":
             problems.append(Problem(file, f"{base}.status", "a layer: verified document cannot hold status: unverified entries; they belong in corpus/unverified/"))
         problems.extend(hash_problems(entry, file, base))
+        problems.extend(reference_problems(entry, file, base))
         problems.extend(evidence_problems(entry, file, base))
         problems.extend(verified_by_problems(entry, file, base, layer))
         problems.extend(lifecycle_problems(entry, file, base))

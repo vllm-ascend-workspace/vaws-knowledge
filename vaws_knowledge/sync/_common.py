@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover - exercised only on broken installs
     )
     raise SystemExit(2)
 
+from vaws_knowledge.canonical import BODY_KEYS  # noqa: E402
 
 LAYERS = ("verified", "unverified")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -61,11 +62,8 @@ ENTRY_KEY_ORDER = (
     "conflicts",
     "rule",
     "measurement",
+    "reference",
 )
-#: The two entry body variants. An entry has exactly one; the content_hash
-#: payload key is the body's own name, which is why adding `measurement` moved
-#: no existing rule hash.
-BODY_KEYS = ("rule", "measurement")
 SCOPE_KEY_ORDER = (
     "soc",
     "cann",
@@ -82,6 +80,8 @@ SCOPE_KEY_ORDER = (
 )
 RULE_KEY_ORDER = ("summary", "symptom", "root_cause", "resolution", "avoidance", "fingerprints")
 MEASUREMENT_KEY_ORDER = ("summary", "subject", "method", "quantities", "notes")
+REFERENCE_KEY_ORDER = ("kind", "summary", "text", "source", "trust", "topics")
+REFERENCE_SOURCE_KEY_ORDER = ("title", "provider", "url", "version", "date")
 
 
 class SyncError(Exception):
@@ -221,7 +221,7 @@ def canonical_fingerprints(items: Iterable[Any]) -> Any:
 def body_key(entry: dict) -> str:
     """Name of the entry's single body key.
 
-    Defaults to ``rule`` when neither is present, which keeps the historical
+    Defaults to ``rule`` when none is present, which keeps the historical
     behaviour of hashing a bodyless entry as an empty rule rather than
     changing what such an input hashes to. Two bodies is refused: the schema
     forbids it, and hashing both under one revision would make a change to
@@ -232,7 +232,7 @@ def body_key(entry: dict) -> str:
         raise SyncError(
             "entry declares more than one body ("
             + ", ".join(present)
-            + "); an entry has exactly one of rule / measurement"
+            + "); an entry has exactly one of rule / measurement / reference"
         )
     return present[0] if present else "rule"
 
@@ -313,6 +313,12 @@ def order_entry(entry: dict) -> dict:
         out["rule"] = _ordered(out["rule"], RULE_KEY_ORDER)
     if isinstance(out.get("measurement"), dict):
         out["measurement"] = _ordered(out["measurement"], MEASUREMENT_KEY_ORDER)
+    if isinstance(out.get("reference"), dict):
+        out["reference"] = _ordered(out["reference"], REFERENCE_KEY_ORDER)
+        if isinstance(out["reference"].get("source"), dict):
+            out["reference"]["source"] = _ordered(
+                out["reference"]["source"], REFERENCE_SOURCE_KEY_ORDER
+            )
     return out
 
 

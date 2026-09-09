@@ -1,6 +1,7 @@
 """sync/plan.py decides every idempotency rule in docs/federation.md and
 changes nothing while doing so."""
 
+import copy
 import pathlib
 import subprocess
 import sys
@@ -150,6 +151,72 @@ class PlanDecisions(synctest.SyncTestCase):
         e["uuid"] = "not-a-uuid"
         item = self._single(self.plan([self.make_export([e])]))
         self.assertEqual("conflict", item.action)
+
+    def test_mixed_rule_measurement_reference_roundtrip_is_not_a_false_duplicate(self):
+        packaged_ref = synctest.yaml.safe_load(
+            (synctest.REPO / "corpus" / "unverified" / "sourced-references.yaml").read_text(
+                encoding="utf-8"
+            )
+        )["entries"][0]
+        (self.corpus_dir / "unverified" / "sourced-references.yaml").write_text(
+            _common.dump_yaml(
+                {
+                    "schema_version": 2,
+                    "kind": "sourced-references",
+                    "layer": "unverified",
+                    "updated_at": "2026-09-10",
+                    "entries": [copy.deepcopy(packaged_ref)],
+                }
+            ),
+            encoding="utf-8",
+        )
+        rule = self.new_entry("mixed-rule")
+        measurement = copy.deepcopy(
+            synctest.yaml.safe_load(
+                (synctest.REPO / "corpus" / "unverified" / "hardware-measurements-sustained.yaml").read_text(
+                    encoding="utf-8"
+                )
+            )["entries"][0]
+        )
+        measurement["uuid"] = synctest.fresh_uuid("mixed-meas")
+        measurement["slug"] = "mixed-measurement"
+        measurement["content_hash"] = _common.content_hash(measurement)
+        other_ref = copy.deepcopy(packaged_ref)
+        other_ref["uuid"] = synctest.fresh_uuid("mixed-ref")
+        other_ref["slug"] = "mixed-other-reference"
+        other_ref["reference"] = copy.deepcopy(packaged_ref["reference"])
+        other_ref["reference"]["summary"] = "JSON-RPC 2.0 specifies batched arrays of requests"
+        other_ref["reference"]["text"] = (
+            "The JSON-RPC 2.0 specification describes batch requests as arrays. "
+            "That is a different citation from MCP stdio newline framing."
+        )
+        other_ref["reference"]["source"] = {
+            "title": "JSON-RPC 2.0 Specification",
+            "provider": "JSON-RPC",
+            "url": "https://www.jsonrpc.org/specification",
+        }
+        other_ref["content_hash"] = _common.content_hash(other_ref)
+
+        rule_export = self.make_export([rule], name="mixed-rule.yaml")
+        meas_export = self.make_export(
+            [measurement], kind="hardware-measurements", name="mixed-meas.yaml"
+        )
+        ref_export = self.make_export(
+            [other_ref], kind="sourced-references", name="mixed-ref.yaml"
+        )
+        plan = self.plan([rule_export, meas_export, ref_export])
+        self.assertEqual(["new", "new", "new"], [item.action for item in plan.items], [item.reason for item in plan.items])
+        self.assertTrue(all(not item.related for item in plan.items))
+
+        _, _, written = self.propose_apply([rule_export, meas_export, ref_export])
+        self.assertTrue(written)
+        corpus = self.corpus()
+        self.assertEqual("rule", _common.body_key(corpus.index[rule["uuid"]].entry))
+        self.assertEqual("measurement", _common.body_key(corpus.index[measurement["uuid"]].entry))
+        self.assertEqual("reference", _common.body_key(corpus.index[other_ref["uuid"]].entry))
+        self.assertEqual("reference", _common.body_key(corpus.index[packaged_ref["uuid"]].entry))
+        replay = self.plan([rule_export, meas_export, ref_export])
+        self.assertEqual(["no-op", "no-op", "no-op"], [item.action for item in replay.items])
 
 
 class PlanCli(synctest.SyncTestCase):

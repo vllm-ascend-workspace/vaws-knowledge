@@ -7,7 +7,7 @@ plus a write path that can only ever touch the local one.
 layers.py      mount the three layers; absence is a reported state
 query.py       retrieval + coordinate matching + labelling
 capture.py     the write path (candidate layer only) and content_hash
-mcp_server.py  stdio JSON-RPC MCP server, Content-Length framing
+mcp_server.py  stdio JSON-RPC MCP server, newline-delimited framing
 ```
 
 Runtime dependency: the installed `vaws-knowledge` package (PyYAML is
@@ -23,11 +23,14 @@ NPU hardware; the service reads and writes text documents.
 | `candidate` | a developer's untracked local directory | yes, by `capture.py` | `$XDG_STATE_HOME/vaws-knowledge/candidate`, else `~/.local/state/vaws-knowledge/candidate` |
 
 A layer is a trust source, not a status filter. Entries carry their own
-`status`; default visibility is `policy.default_statuses` (`verified`,
-`stale`, `resolved`). Shared `unverified` entries are therefore mounted but
-hidden until a caller passes `statuses` (or changes `default_statuses`).
-`VAWS_KNOWLEDGE_CORPUS` still overrides the default and resolves both
-subsets from that path.
+`status`; default visibility for operational facts is
+`policy.default_statuses` (`verified`, `stale`, `resolved`). Shared
+`unverified` rules and measurements are therefore mounted but hidden until a
+caller passes `statuses`, `include_unverified`, or changes
+`default_statuses`. Sourced `reference` entries in shared and project layers
+are part of the default result set even at `status: unverified`, labelled as
+citations. `VAWS_KNOWLEDGE_CORPUS` still overrides the default and resolves
+both subsets from that path.
 
 `shared` is forced read-only even if configuration asks otherwise:
 [docs/federation.md](../docs/federation.md) says a fork never writes into
@@ -110,7 +113,7 @@ package version), `layers_available`, `layers_absent` (layer → reason),
 |---|---|---|---|
 | `text` | string | — | free-text symptom |
 | `fingerprint` | string | — | matched against `rule.fingerprints` |
-| `bodies` | array | `["rule","measurement"]` | restrict to one body variant |
+| `bodies` | array | `["rule","measurement","reference"]` | restrict to one body variant |
 | `reader_coordinate` | object | `{}` | your own build; any of the twelve `scope` dimensions |
 | `layers` | array | `["shared","project"]` | overrides the layer set |
 | `statuses` | array | policy default | replaces the default status set |
@@ -119,10 +122,11 @@ package version), `layers_available`, `layers_absent` (layer → reason),
 | `kind` | string | — | restrict to one document family |
 | `limit` | int | `20` | |
 
-Each result carries `body` (`"rule"` or `"measurement"`), `layer`, `status`,
-`confidence`, `content_hash`, `provenance.origin_repo`, `evidence`,
+Each result carries `body` (`"rule"`, `"measurement"` or `"reference"`),
+`evidence_class` (`operational_evidence` or `sourced_reference`), `layer`,
+`status`, `confidence`, `content_hash`, `provenance.origin_repo`, `evidence`,
 `verified_by`, `lifecycle`, `staleness`, `source`, `warnings`, `notes`, and an
-`applicability` block:
+`applicability` block. Runtime bodies include coordinate verdicts:
 
 ```json
 "applicability": {
@@ -161,11 +165,12 @@ that were *asserted* (`assumed_any`).
 | `layer` | string | `candidate` — anything else is refused |
 | `dry_run` | bool | `false` |
 
-Supply `slug`, `rule` and all twelve `scope` dimensions. `uuid`,
-`content_hash`, `provenance` and the `lifecycle` dates are stamped when
-absent; `status` defaults to `unverified` and `confidence` to `low`.
-`rule.fingerprints` are stored in canonical form so that anyone reading the
-file can reproduce `content_hash` from it.
+Supply `slug` and exactly one body. Runtime bodies (`rule` / `measurement`)
+still need all twelve `scope` dimensions. A sourced `reference` must not
+invent those coordinates. `uuid`, `content_hash`, `provenance` and the
+`lifecycle` dates are stamped when absent; `status` defaults to `unverified`
+and `confidence` to `low`. `rule.fingerprints` are stored in canonical form
+so that anyone reading the file can reproduce `content_hash` from it.
 
 Refusals are results, not crashes: `error: "capture_refused"` with
 `refused_layer`, or `error: "capture_rejected"` with every structural problem
@@ -182,12 +187,16 @@ actually consulted.
 
 ## Default result set
 
-Following [docs/lifecycle.md](../docs/lifecycle.md): `verified`, `stale` (with
-the "do not trust its version bounds" warning) and `resolved` (with its
-`resolved_by` reference) are returned. `unverified` requires
-`include_unverified`. `deprecated` is never returned by default, and neither
-is an entry with `lifecycle.superseded_by` set. An explicit `statuses`
-argument overrides all of that, including reaching superseded entries.
+Following [docs/lifecycle.md](../docs/lifecycle.md): operational `verified`,
+`stale` (with the "do not trust its version bounds" warning) and `resolved`
+(with its `resolved_by` reference) are returned. Operational `unverified`
+rules and measurements require `include_unverified`. Sourced `reference`
+entries in shared and project layers are returned by default even when
+`status: unverified`, labelled by source and trust — not as a local
+observation, and not as a fact that a handshake would promote. `deprecated`
+is never returned by default, and neither is an entry with
+`lifecycle.superseded_by` set. An explicit `statuses` argument overrides all
+of that, including reaching superseded entries.
 
 ## When a layer, or the service, is unavailable
 
@@ -213,19 +222,19 @@ success.
 `version` (the installed `vaws-knowledge` package version) appears in the
 `initialize` result at top level, inside `serverInfo`, and in every tool
 payload. The package version is the contract; there is no separate
-service-API handshake. `measurement` is part of that contract. `bodies` is
-an ordinary query filter. Rule-only fields come back as `null` rather than
-absent on a measurement result, so a client can tell "not a rule" from "a
-rule missing a field".
+service-API handshake. `measurement` and `reference` are part of that
+contract. `bodies` is an ordinary query filter. Rule-only fields come back as
+`null` rather than absent on a measurement or reference result, so a client
+can tell "not a rule" from "a rule missing a field".
 
 ## Framing
 
-`Content-Length: <n>\r\n\r\n<body>` over stdio, implemented in
-`mcp_server.py`. The official MCP SDK is not required; if it happens to be
-importable we report that in `initialize`
+Newline-delimited JSON-RPC over stdio, implemented in `mcp_server.py`. One
+UTF-8 JSON object per line; messages must not contain embedded newlines.
+`Content-Length` framing is not used. The official MCP SDK is not required;
+if it happens to be importable we report that in `initialize`
 (`serviceInfo.official_mcp_sdk_importable`) but we do not switch transports
-based on what is installed. A single-line bare JSON object is also accepted,
-which makes the server drivable by hand.
+based on what is installed. Blank lines are ignored.
 
 ## Canonicalization
 

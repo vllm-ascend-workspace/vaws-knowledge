@@ -24,6 +24,10 @@ An entry with any `mismatch` does not apply. It is dropped from the result
 set by default, and when explicitly requested it comes back with
 ``applies: false`` and the offending dimensions named. A fact established on
 one SoC quietly reused on another is the confusion this repo exists to remove.
+
+Sourced ``reference`` entries have no runtime coordinate. They are labelled
+``evidence_class=sourced_reference`` and included in the default shared/project
+result set; operational ``unverified`` rules and measurements stay opt-in.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from vaws_knowledge import package_version
+from vaws_knowledge.canonical import BODY_KEYS, body_key as canonical_body_key
 
 from .layers import (
     DEFAULT_STATUSES,
@@ -102,6 +107,32 @@ STALE_WARNING = (
     "recent enough environment. Do not trust its version bounds; the diagnosis "
     "is usually still the fastest route to a root cause."
 )
+
+UNVERIFIED_FACT_WARNING = (
+    "status=unverified: a single unconfirmed observation with no "
+    "non-submitter confirmation. Treat as a lead, not as a fact."
+)
+
+
+def _unverified_warning(entry: Mapping[str, Any], body: str) -> str:
+    """Label unverified operational facts vs sourced citations separately."""
+    if body != "reference":
+        return UNVERIFIED_FACT_WARNING
+    reference = entry.get("reference") if isinstance(entry.get("reference"), Mapping) else {}
+    source = reference.get("source") if isinstance(reference.get("source"), Mapping) else {}
+    provider = str(source.get("provider") or "").strip()
+    title = str(source.get("title") or "").strip()
+    trust = " ".join(str(reference.get("trust") or "").split())
+    cited = ", ".join(part for part in (provider, title) if part) or "unspecified source"
+    message = f"sourced reference material, not a local observation (source: {cited}"
+    if trust:
+        message += f"; trust: {trust}"
+    return (
+        message
+        + "). A client handshake or local run does not turn this citation into "
+        "operational evidence."
+    )
+
 
 NO_RESULT_MEANING = (
     "No entry matched. That means UNKNOWN, not supported and not absent-therefore-fine. "
@@ -462,19 +493,14 @@ class TextMatch:
     matched_terms: list[str] = field(default_factory=list)
 
 
-BODY_KEYS = ("rule", "measurement")
-
-
 def entry_body(entry: Mapping[str, Any]) -> str:
-    """``"rule"`` or ``"measurement"``; ``"rule"`` for anything malformed.
+    """``rule`` / ``measurement`` / ``reference``; ``rule`` for anything malformed.
 
     Exactly one body is guaranteed by the schema. Malformed entries are still
     reported (rather than dropped) so a broken file is visible, and treating
     them as rules keeps every v1 field populated with whatever is there.
     """
-    if isinstance(entry.get("measurement"), Mapping) and not isinstance(entry.get("rule"), Mapping):
-        return "measurement"
-    return "rule"
+    return canonical_body_key(entry) or "rule"
 
 
 def searchable_view(entry: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -487,8 +513,23 @@ def searchable_view(entry: Mapping[str, Any]) -> Mapping[str, Any]:
     its aliases and the quantity names therefore play the fingerprint role;
     the summary and the method description play the prose role.
     """
-    if entry_body(entry) == "rule":
+    body = entry_body(entry)
+    if body == "rule":
         return entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
+    if body == "reference":
+        ref = entry["reference"] if isinstance(entry.get("reference"), Mapping) else {}
+        source = ref.get("source") if isinstance(ref.get("source"), Mapping) else {}
+        tokens = [str(t) for t in (ref.get("topics") or []) if isinstance(t, str)]
+        if source.get("title"):
+            tokens.append(str(source["title"]))
+        if source.get("provider"):
+            tokens.append(str(source["provider"]))
+        return {
+            "summary": ref.get("summary"),
+            "symptom": ref.get("text"),
+            "root_cause": ref.get("trust"),
+            "fingerprints": tokens,
+        }
     m = entry["measurement"]
     subject = m.get("subject") if isinstance(m.get("subject"), Mapping) else {}
     method = m.get("method") if isinstance(m.get("method"), Mapping) else {}
@@ -608,11 +649,19 @@ class Result:
         body = entry_body(entry)
         rule = entry.get("rule") if isinstance(entry.get("rule"), Mapping) else {}
         measurement = entry.get("measurement") if isinstance(entry.get("measurement"), Mapping) else {}
-        # ``summary`` is the one prose field both bodies share. The three
+        reference = entry.get("reference") if isinstance(entry.get("reference"), Mapping) else {}
+        # ``summary`` is the one prose field every body shares. The three
         # rule-only fields stay in the payload (a v1 caller indexes them) and
-        # are null for a measurement, which is the v1-visible signal that this
-        # result is not a failure rule; ``body`` is the v2 signal.
-        summary = rule.get("summary") if body == "rule" else measurement.get("summary")
+        # are null for a measurement/reference, which is the v1-visible signal
+        # that this result is not a failure rule; ``body`` and
+        # ``evidence_class`` are the v2 signals.
+        if body == "rule":
+            summary = rule.get("summary")
+        elif body == "measurement":
+            summary = measurement.get("summary")
+        else:
+            summary = reference.get("summary")
+        evidence_class = "sourced_reference" if body == "reference" else "operational_evidence"
 
         out: dict[str, Any] = {
             "uuid": entry.get("uuid"),
@@ -623,6 +672,7 @@ class Result:
             "confidence": entry.get("confidence"),
             "content_hash": entry.get("content_hash"),
             "body": body,
+            "evidence_class": evidence_class,
             "summary": summary,
             "symptom": rule.get("symptom"),
             "root_cause": rule.get("root_cause"),
@@ -662,6 +712,22 @@ class Result:
                 "subject": measurement.get("subject"),
                 "method": measurement.get("method"),
                 "quantities": measurement.get("quantities"),
+            }
+        if body == "reference":
+            out["reference"] = {
+                "kind": reference.get("kind"),
+                "text": reference.get("text"),
+                "source": reference.get("source"),
+                "trust": reference.get("trust"),
+                "topics": reference.get("topics") or [],
+            }
+            out["applicability"] = {
+                "runtime_scoped": False,
+                "applies": True,
+                "note": (
+                    "sourced reference material, not operational evidence; "
+                    "it was not established on a hardware/runtime coordinate"
+                ),
             }
         if self.shadowed:
             out["also_present_in"] = self.shadowed
@@ -754,12 +820,16 @@ def query(
 ) -> QueryResponse:
     """Search the mounted layers.
 
-    Defaults follow docs/lifecycle.md: `verified`, `stale` (with a warning)
-    and `resolved` (with its fix reference) come back; `unverified` requires
-    ``include_unverified=True``; `deprecated` and superseded entries are out.
+    Defaults follow docs/lifecycle.md for operational facts: `verified`,
+    `stale` (with a warning) and `resolved` (with its fix reference) come
+    back; operational `unverified` rules and measurements require
+    ``include_unverified=True``. Sourced ``reference`` entries in shared and
+    project layers are part of the default result set even at
+    ``status=unverified``, labelled as citations rather than local
+    observations. `deprecated` and superseded entries stay out.
 
     ``bodies`` restricts the payload variants returned. The default is every
-    body the service knows (``rule`` and ``measurement``).
+    body the service knows (``rule``, ``measurement`` and ``reference``).
     """
 
     today = today or _dt.date.today()
@@ -827,8 +897,16 @@ def query(
             filtered_out["body"] += 1
             continue
         if status not in wanted_statuses:
-            filtered_out["status"] += 1
-            continue
+            # Sourced references are not runtime-verified, so they live at
+            # status=unverified. Include them in the default result set
+            # without widening the rule/measurement verification gate.
+            if not (
+                statuses is None
+                and entry_body(entry) == "reference"
+                and status == "unverified"
+            ):
+                filtered_out["status"] += 1
+                continue
 
         lifecycle = entry.get("lifecycle") if isinstance(entry.get("lifecycle"), Mapping) else {}
         if lifecycle.get("superseded_by") and statuses is None:
@@ -837,7 +915,10 @@ def query(
             filtered_out["superseded"] += 1
             continue
 
-        applicability = evaluate_scope(entry.get("scope"), coordinate)
+        if entry_body(entry) == "reference":
+            applicability = Applicability(verdicts=[])
+        else:
+            applicability = evaluate_scope(entry.get("scope"), coordinate)
         if not applicability.applies and not include_non_matching:
             filtered_out["coordinate"] += 1
             continue
@@ -862,10 +943,7 @@ def query(
                 + ". It still applies to anyone on an affected version."
             )
         if status == "unverified":
-            warnings.append(
-                "status=unverified: a single unconfirmed observation with no "
-                "non-submitter confirmation. Treat as a lead, not as a fact."
-            )
+            warnings.append(_unverified_warning(entry, entry_body(entry)))
         if loaded.layer == "candidate":
             warnings.append(
                 "layer=candidate: unreviewed local capture, not part of any "
@@ -1271,7 +1349,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fingerprint", help="fingerprint string to match")
     parser.add_argument("--kind", help="restrict to one document kind")
     parser.add_argument("--layers", help="comma-separated layers (shared,project,candidate)")
-    parser.add_argument("--bodies", help="comma-separated body variants (rule,measurement)")
+    parser.add_argument("--bodies", help="comma-separated body variants (rule,measurement,reference)")
     parser.add_argument("--include-unverified", action="store_true")
     parser.add_argument("--include-non-matching", action="store_true")
     parser.add_argument("--limit", type=int, default=20)

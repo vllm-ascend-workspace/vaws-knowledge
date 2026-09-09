@@ -24,7 +24,7 @@ Sync keys:
 | Field | Role |
 |---|---|
 | `uuid` | identity — stable across revisions and across forks |
-| `content_hash` | revision — `sha256:` over the canonicalized `scope` + body payload, where the body is the entry's `rule` or `measurement` |
+| `content_hash` | revision — `sha256:` over the canonicalized body payload: `scope` + `rule` or `measurement` for runtime claims, `reference` alone for sourced material |
 | `provenance.origin_repo` | which fork proposed this revision |
 
 Two date rules that follow from the above and are easy to get wrong:
@@ -48,6 +48,7 @@ Rules:
 - same `uuid` + different `content_hash` → revision proposal, `lifecycle.updated_at` advances, `verification.last_verified_at` does **not**
 - different `uuid` + near-identical `rule` → duplicate candidate, bot reports both; humans decide whether to merge with `lifecycle.supersedes`
 - different `uuid` + same `measurement` subject and coordinate → duplicate candidate on the same terms, compared by subject + quantity identity + coordinate rather than by prose
+- different `uuid` + near-identical sourced `reference` → duplicate candidate on citation identity; a rule, a measurement and a reference are never duplicates of each other just because two empty rule strings compare equally
 - …but if such a pair claims a **different value or unit** for a quantity identity it shares, it is a conflict rather than a duplicate: it is reported by the conflicts gate, blocks promotion, and is never offered as something to merge, because merging it would discard one of two irreconcilable numbers
 - `uuid` unknown here → new entry, lands in `unverified/`
 
@@ -59,11 +60,14 @@ canonicalization is specified exactly rather than left to an implementation:
    is a float where the schema requires a string, and an implementation that
    quietly stringifies it produces a different hash from one that does not.
    Reject it as invalid instead.
-1. Take only the entry's `scope` sub-object and its **body** sub-object, where
-   the body is whichever of `rule` and `measurement` the entry has. Nothing
-   else — not `status`, not dates, not provenance. Re-verifying or re-reviewing
-   an entry must not change its revision. An entry with neither body or with
-   both is schema-invalid, so by step 0 its hash is undefined; an implementation
+1. Take the entry's **body** sub-object, plus `scope` when the body is a
+   runtime claim. The body is `rule`, `measurement`, or `reference`. The
+   payload key is the body's own name, so a rule hashes byte-for-byte as it
+   always did. A sourced reference hashes `{"reference": …}` only: it must
+   not invent the twelve runtime coordinates. Nothing else — not `status`,
+   not dates, not provenance. Re-verifying or re-reviewing an entry must not
+   change its revision. An entry with neither body or with both is
+   schema-invalid, so by step 0 its hash is undefined; an implementation
    must refuse it rather than pick one.
 2. In `rule.fingerprints`: lowercase **ASCII letters only** (`A`–`Z` → `a`–`z`,
    nothing else), strip leading and trailing ASCII whitespace, collapse internal
@@ -112,8 +116,10 @@ but byte-wise leaves nothing to interpret.
 4. Serialize `{<body>: …, "scope": …}` as JSON with `sort_keys=True`,
    `ensure_ascii=False`, and separators `(",", ":")` — that is, `{"rule": …,
    "scope": …}` for a rule entry and `{"measurement": …, "scope": …}` for a
-   measurement entry. The payload is keyed by the body's own name, which is why
-   adding the `measurement` variant moved no existing entry's `content_hash`.
+   measurement entry. A sourced `reference` hashes `{"reference": …}` only and
+   must not invent the twelve runtime coordinates. The payload is keyed by the
+   body's own name, which is why adding later body variants moved no existing
+   rule or measurement `content_hash`.
 5. `content_hash` = `"sha256:" + sha256(utf8(that string)).hexdigest()`.
 
 Step 1 is the one worth restating: the revision tracks what the entry *claims*,

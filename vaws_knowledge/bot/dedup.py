@@ -11,15 +11,15 @@ that matched, and a human decides whether to merge them with
 ``lifecycle.supersedes``. The bot never merges, never deletes and never picks
 which of the pair survives.
 
-Both entry bodies are handled, and they are compared differently on purpose.
-A rule is compared on its prose, because that is what a duplicate rule
-duplicates. A measurement has almost no distinguishing prose - a whole vendor
-catalogue shares one method description and one summary shape - so it is
-compared on *subject identity, quantity identity and coordinate*. Running
-prose similarity over measurements would report sixty-three hardware rows as
-duplicates of one another; comparing subject and quantities reports exactly
-the pairs that actually claim the same thing. A rule and a measurement are
-never a duplicate pair: they are different kinds of claim.
+All three entry bodies are handled, and they are compared differently on
+purpose. A rule is compared on its prose, because that is what a duplicate
+rule duplicates. A measurement has almost no distinguishing prose - a whole
+vendor catalogue shares one method description and one summary shape - so it
+is compared on *subject identity, quantity identity and coordinate*. A
+sourced reference is compared on its citation. Running prose similarity over
+measurements, or comparing two empty rule strings, would report unrelated
+rows as duplicates of one another. A rule, a measurement and a reference are
+never a duplicate pair across bodies: they are different kinds of claim.
 
 Usage::
 
@@ -173,8 +173,73 @@ def _score_measurement_pair(a: EntryRef, b: EntryRef) -> dict[str, Any]:
     }
 
 
+def _score_reference_pair(a: EntryRef, b: EntryRef, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """Score two sourced references on citation identity, never on empty rules."""
+    shingle = int(policy["duplicates"]["shingle_size"])
+    field_threshold = float(policy["duplicates"]["field_match_threshold"])
+    sa = a.reference.get("source") if isinstance(a.reference.get("source"), Mapping) else {}
+    sb = b.reference.get("source") if isinstance(b.reference.get("source"), Mapping) else {}
+    text_a = " ".join(
+        str(a.reference.get(k) or "") for k in ("kind", "summary", "text")
+    ) + " " + " ".join(str(sa.get(k) or "") for k in ("title", "provider", "url"))
+    text_b = " ".join(
+        str(b.reference.get(k) or "") for k in ("kind", "summary", "text")
+    ) + " " + " ".join(str(sb.get(k) or "") for k in ("title", "provider", "url"))
+    body = text_similarity(text_a, text_b, shingle)
+    same_url = bool(sa.get("url")) and str(sa.get("url")).strip() == str(sb.get("url") or "").strip()
+    same_canonical = _canonical_reference(a) == _canonical_reference(b)
+    matched: list[str] = []
+    if a.content_hash and a.content_hash == b.content_hash:
+        matched.append("content_hash")
+    if same_url:
+        matched.append("reference.source.url")
+    if same_canonical:
+        matched.append("reference")
+    field_scores = {
+        "reference.summary": text_similarity(
+            str(a.reference.get("summary") or ""), str(b.reference.get("summary") or ""), shingle
+        ),
+        "reference.text": text_similarity(
+            str(a.reference.get("text") or ""), str(b.reference.get("text") or ""), shingle
+        ),
+    }
+    matched.extend(sorted(k for k, v in field_scores.items() if v >= field_threshold))
+    exact_reason = None
+    if a.content_hash and a.content_hash == b.content_hash and a.uuid != b.uuid:
+        exact_reason = "same content_hash under different uuids"
+    elif a.uuid != b.uuid and same_canonical:
+        exact_reason = "identical sourced-reference body under different uuids"
+    return {
+        "score": round(body, 4),
+        "body": "reference",
+        "body_similarity": body,
+        "fingerprint_similarity": 0.0,
+        "shared_fingerprints": [],
+        "field_scores": field_scores,
+        "matched_fields": matched,
+        "exact_reason": exact_reason,
+        "comparison": "sourced reference citation",
+    }
+
+
+def _canonical_reference(ref: EntryRef) -> str:
+    body = ref.reference
+    source = body.get("source") if isinstance(body.get("source"), Mapping) else {}
+    fields = {
+        "kind": normalize_text(str(body.get("kind", ""))),
+        "summary": normalize_text(str(body.get("summary", ""))),
+        "text": normalize_text(str(body.get("text", ""))),
+        "source": {
+            "title": normalize_text(str(source.get("title", ""))),
+            "provider": normalize_text(str(source.get("provider", ""))),
+            "url": normalize_text(str(source.get("url", ""))),
+        },
+    }
+    return json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
 def _score_cross_body_pair(a: EntryRef, b: EntryRef) -> dict[str, Any]:
-    """A rule and a measurement are different kinds of claim, never duplicates."""
+    """Different body variants are different kinds of claim, never duplicates."""
     return {
         "score": 0.0,
         "body": "mixed",
@@ -202,6 +267,8 @@ def score_pair(a: EntryRef, b: EntryRef, policy: Mapping[str, Any]) -> dict[str,
         return _score_cross_body_pair(a, b)
     if a.body == "measurement":
         return _score_measurement_pair(a, b)
+    if a.body == "reference":
+        return _score_reference_pair(a, b, policy)
     dup = policy["duplicates"]
     shingle = int(dup["shingle_size"])
     field_threshold = float(dup["field_match_threshold"])

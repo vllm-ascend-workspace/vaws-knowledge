@@ -25,30 +25,38 @@ Consumers see one query surface, backed by three layers with different trust:
 | `candidate` | each developer's untracked local state | capture at the moment of a fix | unreviewed, single observation |
 
 Query results are always labelled with their layer. The default result set is
-`shared` + `project` at `status: verified`; anything else is opt-in.
+`shared` + `project` at operational `status: verified` (plus labelled `stale`
+and `resolved`). Sourced `reference` entries in those layers are included
+even when unverified, labelled by source and trust, not as local
+observations. Operational unverified rules and measurements remain opt-in.
 
 Two reasons the `project` layer is not absorbed into this repo: some
 compatibility facts are only meaningful relative to a specific submodule
 checkout and would decay the moment they left it, and some facts are simply not
 publishable.
 
-## Two kinds of claim, one entry contract
+## Three kinds of claim, one entry contract
 
-An entry's body is either a `rule` or a `measurement`, and never both:
+An entry's body is exactly one of `rule`, `measurement`, or `reference`:
 
 | Body | Claims | Example |
 |---|---|---|
 | `rule` | a failure and what to do about it — `summary`, `symptom`, `root_cause`, `resolution`, plus `fingerprints` | a container's hostname is missing from `/etc/hosts`, so gloo init fails |
 | `measurement` | a quantity — a `subject` (SoC and its aliases), the `method` that established it, and `quantities` of `name` + `basis` + `value` + `unit` | `Ascend910B4` sustains 232.33 tflops on an 8192³ fp16 matmul |
+| `reference` | sourced material — `kind` (official documentation / principle / guide), `summary`, `text`, `source` (title/provider/url and optional version/date), and an explicit `trust` assessment | MCP stdio is newline-delimited JSON-RPC |
 
-Everything else is identical and equally required: `uuid`, `content_hash`, all
-twelve `scope` dimensions, `provenance`, `lifecycle`, `confidence`, `status`,
-`slug`, `layer`. A measurement is gated, de-duplicated, conflict-checked,
-redacted, aged and promoted by exactly the same pipeline as a rule — only the
-comparisons that read the body differ, and for measurements they compare
-subject, quantity identity and coordinate rather than prose. Two entries
-claiming a different value for the same quantity at the same coordinate are a
-**conflict**, not a duplicate, and block promotion.
+Rules and measurements still require all twelve `scope` dimensions, provenance,
+lifecycle, and the full verification gate for `verified`/`stale`. A sourced
+`reference` must **not** invent those coordinates or carry a hardware
+`verification` record; optional `topics` may name published subjects or
+versions. Query results set `evidence_class` to `operational_evidence` or
+`sourced_reference` so a reader cannot mistake a citation for a run.
+
+A measurement is gated, de-duplicated, conflict-checked, redacted, aged and
+promoted by exactly the same pipeline as a rule — only the comparisons that
+read the body differ. Two entries claiming a different value for the same
+quantity at the same coordinate are a **conflict**, not a duplicate, and block
+promotion.
 
 Measurement values are stored as strings (`"2.70336"`, not `2.70336`) for the
 same reason version bounds are: `content_hash` must be byte-reproducible in
