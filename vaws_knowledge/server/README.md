@@ -227,18 +227,11 @@ importable we report that in `initialize`
 based on what is installed. A single-line bare JSON object is also accepted,
 which makes the server drivable by hand.
 
-## Known duplication
+## Canonicalization
 
-`capture.py` reimplements the `content_hash` canonicalization specified in
-[docs/federation.md](../docs/federation.md) because the fallback must remain
-usable when `tools/canonical.py` is not installed beside the server. The
-implementation prefers the tool when it is present: it probes a few CLI
-shapes with the entry JSON on stdin, uses the tool's hash when one comes
-back, and reports a `disagreement` warning if the tool and the fallback
-differ. The fallback follows the same ratified rule (ASCII whitespace and
-lowercase, per-line trailing ASCII whitespace, no type coercion).
-`content_hash_source` in every capture result says which implementation
-produced the value.
+`content_hash` is computed only by `vaws_knowledge.canonical.content_hash`.
+`capture.py` does not keep a second implementation. Every capture result
+reports `content_hash_source: vaws_knowledge.canonical`.
 
 ## One thing schema v2 cannot express
 

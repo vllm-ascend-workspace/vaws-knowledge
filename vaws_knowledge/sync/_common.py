@@ -1,9 +1,9 @@
 """Shared mechanics for the federation sync commands.
 
 Everything here is deliberately boring: loading and dumping corpus documents,
-the exact `content_hash` canonicalization from docs/federation.md, the
-per-uuid corpus index, and the shell-out gates to `tools/`. The commands in
-`sync/` compose these; none of them contain a code path that removes an entry.
+the `content_hash` from `vaws_knowledge.canonical`, the per-uuid corpus
+index, and the shell-out gates to `tools/`. The commands in `sync/` compose
+these; none of them contain a code path that removes an entry.
 
 Deletion is not a sync operation (docs/federation.md, "Deletion"). The single
 write primitive, `write_documents`, refuses to write a corpus state in which
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as _dt
-import hashlib
 import json
 import os
 import pathlib
@@ -239,32 +238,33 @@ def body_key(entry: dict) -> str:
 
 
 def canonical_payload(entry: dict) -> dict:
-    body = body_key(entry)
-    body_in = entry.get(body, {})
-    scope_in = entry.get("scope", {})
-    for label, node in ((body, body_in), ("scope", scope_in)):
-        if isinstance(node, dict):
-            err = _payload_type_error(node, label)
-            if err:
-                raise SyncError(err)
-    body_out = _canon_strings(body_in)
-    if isinstance(body_out, dict) and "fingerprints" in body_out:
-        fps = None
-        if isinstance(entry.get(body), dict):
-            fps = entry[body].get("fingerprints")
-        body_out["fingerprints"] = canonical_fingerprints(fps)
-    scope = _canon_strings(scope_in)
-    return {body: body_out, "scope": scope}
+    from vaws_knowledge._common import ToolError
+    from vaws_knowledge.canonical import canonical_payload as packaged
+
+    try:
+        return packaged(entry)
+    except ToolError as exc:
+        raise SyncError(str(exc)) from exc
 
 
 def canonical_json(entry: dict) -> str:
-    return json.dumps(
-        canonical_payload(entry), sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
+    from vaws_knowledge._common import ToolError
+    from vaws_knowledge.canonical import canonical_json as packaged
+
+    try:
+        return packaged(entry)
+    except ToolError as exc:
+        raise SyncError(str(exc)) from exc
 
 
 def content_hash(entry: dict) -> str:
-    return "sha256:" + hashlib.sha256(canonical_json(entry).encode("utf-8")).hexdigest()
+    from vaws_knowledge._common import ToolError
+    from vaws_knowledge.canonical import content_hash as packaged
+
+    try:
+        return packaged(entry)
+    except ToolError as exc:
+        raise SyncError(str(exc)) from exc
 
 
 # --------------------------------------------------------------------------

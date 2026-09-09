@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Runner adapter: hash via the real server.capture builtin fallback.
+"""Runner adapter: hash via capture's alias of ``vaws_knowledge.canonical``.
 
-Calls builtin_content_hash / canonical_payload, not tools/canonical.py and not
-conformance/reference.py. This is the independently usable fallback.
+Calls builtin_content_hash / canonical_payload, which now delegate to the
+single implementation in ``vaws_knowledge.canonical``.
 """
 
 from __future__ import annotations
