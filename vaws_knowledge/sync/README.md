@@ -130,7 +130,6 @@ modified. Tool findings are withheld from the proposal unless
 - On a revision the fork owns `scope`, `rule`, `slug`, `confidence` and
   `provenance`; the main repo keeps `status`, `lifecycle.first_seen`,
   `supersedes`/`superseded_by`/`resolved_by`, `conflicts` and `verification`.
-- `content_hash` is computed locally (`_common.content_hash`) because `sync/`
-  may not import `tools/` and the CLI of `tools/canonical.py` is not fixed yet.
-  It is pinned to `examples/valid-entry.yaml` by `tests/test_sync_canonical.py`
-  and should be collapsed onto the tool once that exists.
+- `content_hash` is computed by `vaws_knowledge.canonical` (the only
+  implementation). `sync/_common.content_hash` is a thin wrapper. It is
+  pinned to `examples/valid-entry.yaml` by `tests/test_sync_canonical.py`.

@@ -160,7 +160,7 @@ class WritesCandidateEntries(unittest.TestCase):
 
     def test_reports_which_canonicalization_produced_the_hash(self):
         result = self._capture()
-        self.assertIn(result["content_hash_source"], ("vaws_knowledge.canonical", "server-builtin"))
+        self.assertEqual(result["content_hash_source"], "vaws_knowledge.canonical")
 
     def test_a_supplied_content_hash_is_recomputed_and_the_override_reported(self):
         result = self._capture(draft(content_hash="sha256:" + "0" * 64))

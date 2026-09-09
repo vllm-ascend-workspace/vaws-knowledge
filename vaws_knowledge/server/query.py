@@ -35,6 +35,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from vaws_knowledge import package_version
@@ -370,8 +371,31 @@ class Applicability:
         }
 
 
+UNKNOWN = "unknown"
+
+
+def _is_unsupplied(value: Any) -> bool:
+    """True when the caller omitted a dimension rather than stating a value.
+
+    The capture-side sentinel ``unknown`` is omitted here so it is never
+    sent into ``evaluate_scope`` as if it were a SoC or version. A caller
+    that wants the historical ``undecidable`` reading of the literal
+    string ``unknown`` against a range still can, by calling
+    ``evaluate_dimension`` directly.
+    """
+
+    if value in (None, ""):
+        return True
+    return str(value).strip().lower() == UNKNOWN
+
+
 def normalize_coordinate(coordinate: Mapping[str, Any] | None) -> tuple[dict[str, str], list[str]]:
-    """Keep only known dimensions with non-empty values; report the rest."""
+    """Keep only known dimensions with real values; report the rest.
+
+    Empty strings and the sentinel ``unknown`` are dropped so a CLI can
+    record every dimension without inventing a version or matching the
+    word ``unknown`` against an entry's bounds.
+    """
 
     if not coordinate:
         return {}, []
@@ -382,7 +406,7 @@ def normalize_coordinate(coordinate: Mapping[str, Any] | None) -> tuple[dict[str
         if name not in SCOPE_DIMENSIONS:
             ignored.append(str(key))
             continue
-        if value in (None, ""):
+        if _is_unsupplied(value):
             continue
         kept[name] = _norm(value)
     return kept, ignored
@@ -1042,6 +1066,200 @@ def explain(
     return base
 
 
+_MANIFEST_KEYS: dict[str, tuple[str, ...]] = {
+    "soc": ("soc", "soc_version", "chip", "npu", "hardware_model"),
+    "cann": ("cann", "cann_version"),
+    "driver": ("driver", "driver_version", "firmware"),
+    "python_abi": ("python_abi", "soabi", "python"),
+    "torch": ("torch", "torch_version"),
+    "torch_npu": ("torch_npu", "torch_npu_version"),
+    "vllm": ("vllm", "vllm_version"),
+    "vllm_ascend": ("vllm_ascend", "vllm_ascend_version"),
+    "model": ("model", "model_name", "name", "served_model_name"),
+    "topology": ("topology", "parallelism"),
+    "execution_mode": ("execution_mode", "mode", "graph_mode"),
+    "component": ("component", "subsystem"),
+}
+
+RUN_MANIFEST_ENV = "VAWS_RUN_MANIFEST"
+RUN_MANIFEST_CWD_NAME = "run-manifest.json"
+
+
+def add_reader_coordinate_arguments(parser: argparse.ArgumentParser) -> None:
+    """Attach the twelve scope dimensions, JSON override, and manifest input."""
+
+    parser.add_argument(
+        "--reader-coordinate",
+        help="JSON object of scope dimensions; per-dimension flags override it",
+    )
+    for name in SCOPE_DIMENSIONS:
+        parser.add_argument(
+            f"--{name.replace('_', '-')}",
+            dest=f"coord_{name}",
+            help=f"reader coordinate {name}",
+        )
+    parser.add_argument(
+        "--run-manifest",
+        dest="run_manifest",
+        help=(
+            "Run Manifest v1 path. When omitted, VAWS_RUN_MANIFEST or "
+            "./run-manifest.json is used if present. Loaded through "
+            "vaws_coordinator.run_manifest; missing coordinator is an error."
+        ),
+    )
+
+
+def _first_manifest_value(source: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        if key not in source:
+            continue
+        value = source[key]
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        if isinstance(value, str) and value.strip() and not _is_unsupplied(value):
+            return value.strip()
+    return None
+
+
+def coordinate_from_manifest(manifest: Mapping[str, Any]) -> dict[str, str]:
+    """Derive reader dimensions that a Run Manifest v1 actually recorded.
+
+    Dimensions that are absent stay absent. This function never invents a
+    version and never writes the ``unknown`` sentinel into the query
+    coordinate; ``normalize_coordinate`` treats ``unknown`` as unsupplied.
+    """
+
+    scopes = [
+        manifest.get("environment") if isinstance(manifest.get("environment"), Mapping) else {},
+        manifest.get("model") if isinstance(manifest.get("model"), Mapping) else {},
+        manifest.get("topology") if isinstance(manifest.get("topology"), Mapping) else {},
+        manifest.get("workspace_snapshot")
+        if isinstance(manifest.get("workspace_snapshot"), Mapping)
+        else {},
+    ]
+    coordinate: dict[str, str] = {}
+    for dimension, keys in _MANIFEST_KEYS.items():
+        for scope in scopes:
+            value = _first_manifest_value(scope, keys)
+            if value is not None:
+                coordinate[dimension] = value
+                break
+    topology = manifest.get("topology")
+    if "topology" not in coordinate and isinstance(topology, Mapping):
+        parts: list[str] = []
+        for key, prefix in (
+            ("tensor_parallel_size", "tp"),
+            ("tp", "tp"),
+            ("data_parallel_size", "dp"),
+            ("dp", "dp"),
+            ("expert_parallel_size", "ep"),
+            ("ep", "ep"),
+        ):
+            value = topology.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                parts.append(f"{prefix}{value}")
+        if parts:
+            coordinate["topology"] = ",".join(dict.fromkeys(parts))
+    return coordinate
+
+
+def discover_run_manifest_path(
+    explicit: str | None,
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+) -> Path | None:
+    """Return a manifest path from the flag, ``VAWS_RUN_MANIFEST``, or cwd."""
+
+    if explicit:
+        path = Path(explicit)
+        if not path.is_file():
+            raise SystemExit(
+                f"--run-manifest {path} does not exist; pass a Run Manifest v1 "
+                "file or omit the flag"
+            )
+        return path
+    raw = env.get(RUN_MANIFEST_ENV)
+    if raw:
+        path = Path(raw)
+        if not path.is_file():
+            raise SystemExit(
+                f"{RUN_MANIFEST_ENV}={path} does not exist; unset it or point it "
+                "at a Run Manifest v1 file"
+            )
+        return path
+    candidate = Path(cwd) / RUN_MANIFEST_CWD_NAME
+    if candidate.is_file():
+        return candidate
+    return None
+
+
+def load_run_manifest(path: Path) -> Mapping[str, Any]:
+    """Load and validate a Run Manifest v1 via ``vaws_coordinator.run_manifest``.
+
+    A missing coordinator is a hard failure: silently parsing JSON here would
+    be a second implementation of the manifest contract.
+    """
+
+    try:
+        from vaws_coordinator.run_manifest import load_manifest
+    except ImportError as exc:
+        raise SystemExit(
+            f"cannot read Run Manifest {path}: vaws_coordinator.run_manifest is "
+            f"not importable ({type(exc).__name__}: {exc}). Install "
+            "vaws-coordinator (`uv sync` in the scaffold, or "
+            "`pip install vaws-coordinator`) or pass explicit "
+            "--soc/--cann/... flags instead of a manifest."
+        ) from exc
+    try:
+        return load_manifest(path)
+    except Exception as exc:
+        raise SystemExit(
+            f"cannot load Run Manifest {path}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def reader_coordinate_from_args(
+    args: argparse.Namespace,
+    *,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Merge manifest-derived dimensions with explicit CLI overrides."""
+
+    environ = dict(os.environ if env is None else env)
+    collected: dict[str, str] = {}
+    manifest_path = discover_run_manifest_path(
+        getattr(args, "run_manifest", None),
+        cwd=Path(cwd or Path.cwd()),
+        env=environ,
+    )
+    if manifest_path is not None:
+        collected.update(coordinate_from_manifest(load_run_manifest(manifest_path)))
+    raw_json = getattr(args, "reader_coordinate", None)
+    if raw_json:
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"--reader-coordinate is not JSON: {exc}") from exc
+        if not isinstance(parsed, Mapping):
+            raise SystemExit("--reader-coordinate must be a JSON object")
+        for key, value in parsed.items():
+            if key not in SCOPE_DIMENSIONS:
+                continue
+            if _is_unsupplied(value):
+                continue
+            collected[str(key)] = str(value).strip()
+    for name in SCOPE_DIMENSIONS:
+        value = getattr(args, f"coord_{name}", None)
+        if _is_unsupplied(value):
+            continue
+        collected[name] = str(value).strip()
+    return collected
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="vaws-knowledge query",
@@ -1057,6 +1275,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--include-unverified", action="store_true")
     parser.add_argument("--include-non-matching", action="store_true")
     parser.add_argument("--limit", type=int, default=20)
+    add_reader_coordinate_arguments(parser)
     args = parser.parse_args(argv)
 
     env = dict(os.environ)
@@ -1065,10 +1284,15 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(path=args.config, env=env)
     layers = [item.strip() for item in args.layers.split(",")] if args.layers else None
     bodies = [item.strip() for item in args.bodies.split(",")] if args.bodies else None
+    try:
+        reader_coordinate = reader_coordinate_from_args(args, env=env)
+    except SystemExit:
+        raise
     response = query(
         config,
         text=args.text,
         fingerprint=args.fingerprint,
+        reader_coordinate=reader_coordinate,
         layers=layers,
         include_unverified=args.include_unverified,
         include_non_matching=args.include_non_matching,

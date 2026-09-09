@@ -16,24 +16,23 @@ recorded a reviewed fact.
 
 Canonicalization
 ----------------
-`content_hash` is the revision key for federated sync, so it must be computed
-identically everywhere. `docs/federation.md` specifies it exactly. This module
-uses ``vaws_knowledge.canonical`` when importable and falls back to a local
-implementation of the same specification. The fallback is a deliberate
-duplication so an independent adapter can still hash without the library
-module, and a disagreement is reported instead of becoming a sync storm.
+``content_hash`` is computed only by ``vaws_knowledge.canonical.content_hash``.
+This module does not keep a second implementation.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
-import hashlib
 import json
 import os
 import re
 import uuid as _uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from vaws_knowledge._common import ToolError
+from vaws_knowledge.canonical import canonical_json
+from vaws_knowledge.canonical import content_hash as packaged_content_hash
 
 from .layers import (
     WRITABLE_LAYERS,
@@ -93,30 +92,18 @@ class CaptureRejected(Exception):
 
 
 # --------------------------------------------------------------------------
-# canonicalization (docs/federation.md)
+# stored-form helpers (not a second hasher)
 # --------------------------------------------------------------------------
 
 
 def _ascii_lower(value: str) -> str:
-    """Step 2: A–Z → a–z only. Non-ASCII letters are left unchanged."""
+    """A–Z → a–z only. Non-ASCII letters are left unchanged."""
 
     return value.translate(_ASCII_LOWER)
 
 
-def _normalize_string(value: str) -> str:
-    """Step 3: LF endings, per-line trailing ASCII whitespace, then outer ASCII strip."""
-
-    text = value.replace("\r\n", "\n").replace("\r", "\n")
-    text = "\n".join(line.rstrip(ASCII_WHITESPACE) for line in text.split("\n"))
-    return text.strip(ASCII_WHITESPACE)
-
-
 def _normalize_fingerprints(items: Any) -> Any:
-    """Step 2: ASCII-lower, ASCII-trim, collapse ASCII runs, drop dupes/empties, byte-sort.
-
-    Non-list values and lists with a non-string item are returned unchanged so a
-    hash is not invented by stringifying them.
-    """
+    """Store fingerprints in the same form ``canonical`` hashes."""
 
     if not isinstance(items, list):
         return items
@@ -131,7 +118,7 @@ def _normalize_fingerprints(items: Any) -> Any:
 
 
 def _payload_type_error(value: Any, path: str, *, in_fingerprints: bool = False) -> str | None:
-    """Step 0: name a type this fallback must not coerce into a hash."""
+    """Refuse types that ``canonical`` will not hash, before a write."""
 
     if isinstance(value, Mapping):
         for key, sub in value.items():
@@ -178,22 +165,38 @@ def _payload_type_error(value: Any, path: str, *, in_fingerprints: bool = False)
     )
 
 
-def _normalize_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return _normalize_string(value)
-    if isinstance(value, Mapping):
-        out: dict[str, Any] = {}
-        for key, sub in value.items():
-            if not isinstance(key, str):
-                raise ValueError(
-                    f"mapping keys must be strings, got {type(key).__name__} {key!r}; "
-                    "canonicalization does not stringify keys"
-                )
-            out[key] = _normalize_value(sub)
-        return out
-    if isinstance(value, (list, tuple)):
-        return [_normalize_value(v) for v in value]
-    return value
+def canonical_payload(entry: Mapping[str, Any]) -> str:
+    """Canonical JSON string from the single ``canonical`` implementation."""
+
+    try:
+        return canonical_json(entry)
+    except ToolError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def builtin_content_hash(entry: Mapping[str, Any]) -> str:
+    """``vaws_knowledge.canonical.content_hash``.
+
+    The name is historical. Capture used to keep a local fallback; this
+    alias remains so tests and the conformance adapter call the one
+    implementation.
+    """
+
+    try:
+        return packaged_content_hash(entry)
+    except ToolError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def content_hash(entry: Mapping[str, Any], root: Path | None = None) -> tuple[str, dict[str, Any]]:
+    """Compute ``content_hash`` via ``vaws_knowledge.canonical`` only."""
+
+    del root
+    digest = builtin_content_hash(entry)
+    return digest, {
+        "source": "vaws_knowledge.canonical",
+        "library": "vaws_knowledge.canonical",
+    }
 
 
 def body_key(entry: Mapping[str, Any]) -> str:
@@ -211,78 +214,6 @@ def body_key(entry: Mapping[str, Any]) -> str:
             + "); an entry has exactly one of rule / measurement"
         )
     return present[0] if present else "rule"
-
-
-def canonical_payload(entry: Mapping[str, Any]) -> str:
-    """Canonical JSON for an entry, per docs/federation.md steps 1-4."""
-
-    body = body_key(entry)
-    body_in = entry.get(body) if isinstance(entry.get(body), Mapping) else {}
-    scope_in = entry.get("scope") if isinstance(entry.get("scope"), Mapping) else {}
-    for label, node in ((body, body_in), ("scope", scope_in)):
-        err = _payload_type_error(node, label)
-        if err:
-            raise ValueError(err)
-
-    body_out: dict[str, Any] = {}
-    for key, value in body_in.items():
-        if key == "fingerprints":
-            body_out[key] = _normalize_fingerprints(value)
-        else:
-            body_out[key] = _normalize_value(value)
-
-    scope = {k: _normalize_value(v) for k, v in scope_in.items()}
-
-    return json.dumps(
-        {body: body_out, "scope": scope},
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def builtin_content_hash(entry: Mapping[str, Any]) -> str:
-    """Step 5. Local implementation of the specified canonicalization."""
-
-    payload = canonical_payload(entry)
-    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def library_content_hash(entry: Mapping[str, Any]) -> tuple[str | None, dict[str, Any]]:
-    """Use the packaged ``canonical`` module. Never raises."""
-
-    info: dict[str, Any] = {"library": "vaws_knowledge.canonical"}
-    try:
-        from vaws_knowledge.canonical import content_hash as packaged
-    except Exception as exc:  # noqa: BLE001
-        info["reason"] = f"{type(exc).__name__}: {exc}"
-        return None, info
-    try:
-        return packaged(entry), info
-    except Exception as exc:  # noqa: BLE001
-        info["reason"] = f"{type(exc).__name__}: {exc}"
-        return None, info
-
-
-def content_hash(entry: Mapping[str, Any], root: Path | None = None) -> tuple[str, dict[str, Any]]:
-    """Compute ``content_hash``, preferring the packaged canonicalizer."""
-
-    del root
-    builtin = builtin_content_hash(entry)
-    from_lib, info = library_content_hash(entry)
-    diagnostics: dict[str, Any] = {"builtin": builtin, "library": info}
-    if from_lib is None:
-        diagnostics["source"] = "server-builtin"
-        return builtin, diagnostics
-    diagnostics["source"] = "vaws_knowledge.canonical"
-    diagnostics["library_hash"] = from_lib
-    if from_lib != builtin:
-        diagnostics["disagreement"] = (
-            "vaws_knowledge.canonical and the server's fallback canonicalization "
-            "disagree on this entry's content_hash. The library value was used. "
-            "One of the two implementations does not follow docs/federation.md."
-        )
-    return from_lib, diagnostics
 
 
 # --------------------------------------------------------------------------
