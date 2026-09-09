@@ -31,6 +31,36 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
+      - name: Build, install, and import the wheel outside the checkout
+        run: |
+          set -euo pipefail
+          python -m pip wheel --no-deps -w "${RUNNER_TEMP}/dist" .
+          shopt -s nullglob
+          wheels=("${RUNNER_TEMP}/dist"/vaws_knowledge-*.whl)
+          test "${#wheels[@]}" -eq 1
+          wheel="${wheels[0]}"
+          python -m venv "${RUNNER_TEMP}/pkg"
+          "${RUNNER_TEMP}/pkg/bin/python" -m pip install --upgrade pip
+          "${RUNNER_TEMP}/pkg/bin/python" -m pip install "${wheel}"
+          cd "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/pkg/bin/python" -I -c '
+          from vaws_knowledge import corpus, package_version
+          root = corpus.corpus_root()
+          files = list(corpus.iter_entry_files())
+          if not root.is_dir():
+              raise SystemExit(f"corpus root missing: {root}")
+          packed = "site-packages" in str(root) and "data/corpus" in str(root)
+          if not packed:
+              raise SystemExit(f"corpus is not the packaged tree: {root}")
+          if not files:
+              raise SystemExit("packaged corpus has no entries")
+          print("version", package_version())
+          print("corpus_root", root)
+          print("entry_files", len(files))
+          '
+          "${RUNNER_TEMP}/pkg/bin/vaws-knowledge" --help
+          "${RUNNER_TEMP}/pkg/bin/python" -I -m vaws_knowledge --help
+
       - name: Contract suite
         run: python -m unittest discover -s tests
 
