@@ -555,6 +555,26 @@ def find_conflicts(
             key = (min(a.uuid, b.uuid), max(a.uuid, b.uuid))
             asserted_here = key in asserted_set
 
+            if a.is_reference or b.is_reference:
+                if not asserted_here:
+                    continue
+                unattributable.append(
+                    {
+                        "a": a.describe(),
+                        "b": b.describe(),
+                        "source": "asserted",
+                        "outcome": "not_a_conflict",
+                        "reason": (
+                            f"one side is a {a.body} body and the other a {b.body} body; "
+                            "sourced references are citations, not coordinate-bounded "
+                            "claims, and cannot contradict a runtime fact"
+                            if a.body != b.body
+                            else "sourced references are citations, not coordinate-bounded claims"
+                        ),
+                    }
+                )
+                continue
+
             if a.is_measurement or b.is_measurement:
                 record = _measurement_pair(
                     a, b, asserted_here, as_of, measurement_blocks

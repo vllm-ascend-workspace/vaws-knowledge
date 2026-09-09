@@ -6,9 +6,10 @@ What this module checks (nothing here recomputes a hash — that is
 * one ``uuid`` never carries two different ``content_hash`` values or two
   different ``slug`` values within the same corpus snapshot,
 * ``content_hash`` has the ``sha256:<64 hex>`` shape,
-* an entry declares exactly one body (``rule`` or ``measurement``); neither or
-  both is an error, because ``content_hash`` is defined over ``scope`` plus one
-  body and cannot describe two claims under one revision,
+* an entry declares exactly one body (``rule``, ``measurement`` or
+  ``reference``); neither or both is an error, because ``content_hash`` is
+  defined over one body (plus ``scope`` for runtime bodies) and cannot
+  describe two claims under one revision,
 * the directory a document lives in agrees with its ``layer`` and with the
   ``status`` of every entry in it (``corpus/verified/`` may only hold
   ``layer: verified``; an ``unverified`` layer may not hold ``verified``
@@ -118,9 +119,8 @@ def check_integrity(loaded: LoadResult, policy: Mapping[str, Any]) -> dict[str, 
                     "entry-body-cardinality",
                     ref,
                     "entry declares "
-                    + ("no body" if ref.body == "none" else "both a rule and a measurement")
-                    + "; an entry has exactly one of rule / measurement, and "
-                    "content_hash is defined over scope plus that one body",
+                    + ("no body" if ref.body == "none" else "more than one body")
+                    + "; an entry has exactly one of rule / measurement / reference",
                 )
             )
 

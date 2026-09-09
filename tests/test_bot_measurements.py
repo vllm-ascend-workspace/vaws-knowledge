@@ -62,22 +62,41 @@ class TheMigratedCorpus(unittest.TestCase):
         self.assertEqual([], list(self.loaded.errors))
         self.assertTrue(self.loaded.ok)
 
-    def test_every_entry_is_a_measurement_in_the_unverified_zone(self):
-        for ref in self.loaded.entries:
+    def test_every_measurement_is_in_the_unverified_zone_and_the_reference_loads(self):
+        measurements = [ref for ref in self.loaded.entries if ref.is_measurement]
+        references = [ref for ref in self.loaded.entries if ref.is_reference]
+        other = [ref for ref in self.loaded.entries if ref.body not in ("measurement", "reference")]
+        self.assertFalse(other, [ref.slug for ref in other])
+        self.assertTrue(measurements, "measurement cohort is missing from the packaged corpus")
+        self.assertTrue(references, "sourced-reference entries must load with the corpus")
+        self.assertTrue(any(ref.slug == "mcp-stdio-newline-delimited-jsonrpc" for ref in references))
+        for ref in measurements:
             self.assertTrue(ref.is_measurement, ref.slug)
             self.assertEqual("unverified", ref.entry.get("status"), ref.slug)
+            self.assertTrue(ref.scope, ref.slug)
+        for ref in references:
+            self.assertEqual("unverified", ref.entry.get("status"), ref.slug)
+            self.assertFalse(ref.scope, ref.slug)
+            self.assertEqual("sourced-references", ref.kind, ref.slug)
 
-    def test_no_entry_claims_a_coordinate_it_did_not_establish(self):
+    def test_no_measurement_claims_a_coordinate_it_did_not_establish(self):
         # An unestablished dimension is an unbounded range, never an invented
         # version and never a bare `any` without a basis.
-        for ref in self.loaded.entries:
+        measurements = [ref for ref in self.loaded.entries if ref.is_measurement]
+        self.assertTrue(measurements)
+        for ref in measurements:
+            self.assertTrue(ref.scope, ref.slug)
             for dimension, constraint in ref.scope.items():
                 if "any" in constraint:
                     self.assertGreaterEqual(
                         len(constraint.get("basis", "")), 12, f"{ref.slug}/{dimension}"
                     )
+        for ref in self.loaded.entries:
+            if ref.is_reference:
+                self.assertFalse(ref.scope, ref.slug)
 
     def test_a_catalogue_of_distinct_subjects_is_not_a_pile_of_duplicates(self):
+        self.assertTrue(any(ref.is_reference for ref in self.loaded.entries))
         report = dedup.find_duplicates(self.loaded, self.policy)
         self.assertEqual(0, report["counts"]["exact"], report["exact"][:2])
         self.assertEqual(0, report["counts"]["near"], report["near"][:2])
@@ -100,6 +119,8 @@ class TheMigratedCorpus(unittest.TestCase):
         # not in conflict, so a gate keyed on the subject alone would be wrong.
         by_subject = {}
         for ref in self.loaded.entries:
+            if not ref.is_measurement:
+                continue
             by_subject.setdefault(ref.subject_id, []).append(ref)
         shared = [s for s, refs in by_subject.items() if len(refs) > 1]
         self.assertTrue(shared, "no subject appears twice; this test proves nothing")
@@ -122,7 +143,7 @@ class ContradictionIsDetectedNotMerged(unittest.TestCase):
         base = loaded()
         if not base.entries:
             raise unittest.SkipTest("corpus/ carries no entries in this checkout")
-        original = base.entries[0]
+        original = next(ref for ref in base.entries if ref.is_measurement)
         clone = copy.deepcopy(original.entry)
         clone["uuid"] = "0f1e2d3c-4b5a-4968-8776-655443322110"
         clone["slug"] = original.slug + "-restated"
@@ -173,7 +194,7 @@ class UnitsAreNotOptional(unittest.TestCase):
         base = loaded()
         if not base.entries:
             self.skipTest("corpus/ carries no entries in this checkout")
-        original = base.entries[0]
+        original = next(ref for ref in base.entries if ref.is_measurement)
         clone = copy.deepcopy(original.entry)
         clone["uuid"] = "11112222-3333-4444-8555-666677778888"
         clone["measurement"]["quantities"][0]["unit"] = "tops"

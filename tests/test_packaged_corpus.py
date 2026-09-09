@@ -15,7 +15,7 @@ from test_tools_support import REPO_ROOT
 from vaws_knowledge import canonical, corpus
 from vaws_knowledge._common import load_document
 
-EXPECTED_ENTRY_COUNT = 64
+EXPECTED_ENTRY_COUNT = 65
 _YAML_SUFFIXES = (".yaml", ".yml")
 
 

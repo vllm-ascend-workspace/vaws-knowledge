@@ -73,6 +73,25 @@ class KnowledgeSchemaContract(unittest.TestCase):
         details = "; ".join(f"{list(e.path)}: {e.message}" for e in errors)
         self.assertEqual([], errors, f"reference fixture must validate: {details}")
 
+    def test_sourced_reference_fixture_validates_without_runtime_scope(self):
+        doc = yaml.safe_load((REPO / "corpus" / "unverified" / "sourced-references.yaml").read_text())
+        errors = list(self.validator.iter_errors(doc))
+        details = "; ".join(f"{list(e.path)}: {e.message}" for e in errors)
+        self.assertEqual([], errors, details)
+        self.assertNotIn("scope", doc["entries"][0])
+        self.assertNotIn("verification", doc["entries"][0])
+
+    def test_rejects_sourced_reference_with_twelve_dimension_scope(self):
+        doc = yaml.safe_load((REPO / "corpus" / "unverified" / "sourced-references.yaml").read_text())
+        doc["entries"][0]["scope"] = copy.deepcopy(self.doc["entries"][0]["scope"])
+        self.assertTrue(list(self.validator.iter_errors(doc)))
+
+    def test_rejects_sourced_reference_with_hardware_verification(self):
+        doc = yaml.safe_load((REPO / "corpus" / "unverified" / "sourced-references.yaml").read_text())
+        doc["entries"][0]["verification"] = copy.deepcopy(self.doc["entries"][0]["verification"])
+        doc["entries"][0]["status"] = "verified"
+        self.assertTrue(list(self.validator.iter_errors(doc)))
+
     # -- the applicability coordinate has no "omitted" state ---------------
 
     def test_rejects_omitted_scope_dimension(self):

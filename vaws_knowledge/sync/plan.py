@@ -10,8 +10,8 @@ Actions (docs/federation.md, "Idempotency"):
     new                  uuid unknown here; lands in corpus/unverified/<kind>.yaml
     revision             same uuid in corpus/unverified/, different content_hash;
                          lifecycle.updated_at advances, last_verified_at does not
-    duplicate-candidate  unknown uuid whose rule is near-identical to an
-                         existing entry; both are reported, nothing is merged
+    duplicate-candidate  unknown uuid whose body is near-identical to an
+                         existing same-body entry; both are reported, nothing is merged
     conflict             cannot be applied mechanically — hash mismatch,
                          kind mismatch, duplicate uuid inside the export, or a
                          revision that targets an entry in corpus/verified/
@@ -31,6 +31,7 @@ import re
 import sys
 from typing import Iterable
 
+from vaws_knowledge.canonical import RUNTIME_BODY_KEYS, body_key  # noqa: E402
 from vaws_knowledge.sync._common import (  # noqa: E402
     EXIT_ERROR,
     EXIT_GATE,
@@ -111,17 +112,21 @@ class Plan:
 # near-duplicate detection
 
 
-def _rule_text(entry: dict) -> str:
-    """Comparable text for the entry's body.
+def _comparable_text(entry: dict) -> str:
+    """Comparable text for the entry's own body.
 
     A rule is compared on its prose. A measurement has no prose worth
     comparing — two platform_config snapshots of different SoCs read almost
     identically — so it is compared on subject and quantity identity instead.
-    Feeding measurement prose to a text-similarity ratio would report the whole
-    hardware catalogue as duplicates of itself.
+    A sourced reference is compared on citation text, not on an empty rule.
+    Feeding the wrong body, or two empty rule strings, into a text-similarity
+    ratio would report unrelated variants as duplicates of each other.
     """
-    if "measurement" in entry and "rule" not in entry:
+    key = body_key(entry)
+    if key == "measurement":
         return _measurement_key_text(entry)
+    if key == "reference":
+        return _reference_text(entry)
     rule = entry.get("rule") or {}
     parts = [str(rule.get(k, "")) for k in ("summary", "symptom", "root_cause", "resolution")]
     return re.sub(r"\s+", " ", " ".join(parts)).strip().lower()
@@ -141,7 +146,23 @@ def _measurement_key_text(entry: dict) -> str:
     return re.sub(r"\s+", " ", " ".join(parts)).strip().lower()
 
 
+def _reference_text(entry: dict) -> str:
+    reference = entry.get("reference") or {}
+    source = reference.get("source") or {}
+    parts = [
+        str(reference.get("kind", "")),
+        str(reference.get("summary", "")),
+        str(reference.get("text", "")),
+        str(source.get("title", "")),
+        str(source.get("provider", "")),
+        str(source.get("url", "")),
+    ]
+    return re.sub(r"\s+", " ", " ".join(parts)).strip().lower()
+
+
 def _fingerprints(entry: dict) -> set[str]:
+    if body_key(entry) != "rule":
+        return set()
     rule = entry.get("rule") or {}
     return {
         re.sub(r"\s+", " ", str(f).strip().lower())
@@ -152,7 +173,13 @@ def _fingerprints(entry: dict) -> set[str]:
 
 def similarity(a: dict, b: dict) -> dict:
     """Return the similarity measures used for the duplicate-candidate decision."""
-    ta, tb = _rule_text(a), _rule_text(b)
+    ka, kb = body_key(a), body_key(b)
+    if ka is None or kb is None or ka != kb:
+        # Unrelated body variants are different kinds of claim. Empty rule
+        # strings must not make a reference look like another reference, or
+        # like a measurement.
+        return {"text_ratio": 0.0, "fingerprint_jaccard": 0.0, "exact_rule": False}
+    ta, tb = _comparable_text(a), _comparable_text(b)
     matcher = difflib.SequenceMatcher(None, ta, tb, autojunk=False)
     text_ratio = matcher.ratio() if matcher.quick_ratio() >= TEXT_RATIO_THRESHOLD else 0.0
     fa, fb = _fingerprints(a), _fingerprints(b)
@@ -164,11 +191,19 @@ def similarity(a: dict, b: dict) -> dict:
 def _body_only_json(entry: dict) -> str:
     """Canonical JSON of the body alone, with the coordinate blanked out.
 
-    Two entries with different bodies (one rule, one measurement) can never be
-    byte-identical here, because the payload key is the body's own name.
+    Two entries with different bodies can never be byte-identical here,
+    because the payload key is the body's own name. A sourced reference has
+    no runtime coordinate, so it hashes the reference mapping alone.
     """
-    body = "measurement" if ("measurement" in entry and "rule" not in entry) else "rule"
-    return canonical_json({body: entry.get(body), "scope": {}})
+    key = body_key(entry)
+    if key is None:
+        return ""
+    body = entry.get(key)
+    if not isinstance(body, dict):
+        return ""
+    if key == "reference":
+        return canonical_json({"reference": body})
+    return canonical_json({key: body, "scope": {}})
 
 
 def is_near_duplicate(measures: dict) -> bool:
@@ -227,25 +262,32 @@ def shape_new_entry(incoming: dict, day: str) -> tuple[dict, list[str]]:
 def shape_revision(current: dict, incoming: dict, day: str) -> tuple[dict, list[str]]:
     """Apply a revision to the same uuid.
 
-    The fork owns the claim (scope, rule), the human handle (slug), its
-    confidence, and the provenance of *this* revision. The main repo owns
-    everything that records what happened to the entry here: status,
-    lifecycle decisions (first_seen, supersedes, superseded_by, resolved_by),
-    recorded conflicts, and the verification record — in particular
-    `verification.last_verified_at`, which a rewording must never advance.
+    The fork owns the claim (scope plus the runtime body, or the sourced
+    reference), the human handle (slug), its confidence, and the provenance
+    of *this* revision. The main repo owns everything that records what
+    happened to the entry here: status, lifecycle decisions (first_seen,
+    supersedes, superseded_by, resolved_by), recorded conflicts, and the
+    verification record — in particular `verification.last_verified_at`,
+    which a rewording must never advance.
     """
     entry = copy.deepcopy(current)
     notes = []
-    entry["scope"] = copy.deepcopy(incoming["scope"])
+    incoming_body = body_key(incoming)
     # The body is fork-owned and replaced wholesale. A revision may also switch
     # variant (a measurement that was mistakenly filed as a rule), so the old
     # body key is dropped rather than left behind next to the new one.
     entry.pop("rule", None)
     entry.pop("measurement", None)
-    if "rule" in incoming:
-        entry["rule"] = copy.deepcopy(incoming["rule"])
-    if "measurement" in incoming:
-        entry["measurement"] = copy.deepcopy(incoming["measurement"])
+    entry.pop("reference", None)
+    if incoming_body in RUNTIME_BODY_KEYS:
+        entry["scope"] = copy.deepcopy(incoming["scope"])
+        entry[incoming_body] = copy.deepcopy(incoming[incoming_body])
+    elif incoming_body == "reference":
+        entry.pop("scope", None)
+        entry["reference"] = copy.deepcopy(incoming["reference"])
+    else:
+        if "scope" in incoming:
+            entry["scope"] = copy.deepcopy(incoming["scope"])
     entry["slug"] = incoming.get("slug", entry.get("slug"))
     entry["content_hash"] = content_hash(entry)
     if "provenance" in incoming:
@@ -339,7 +381,7 @@ def compute_plan(exports: list[dict], corpus: Corpus, *, day: str | None = None)
                         for d in dups
                     )
                     item.reason = (
-                        "uuid unknown here but the rule is near-identical to " + details
+                        "uuid unknown here but the claim is near-identical to " + details
                         + "; reported, not merged — humans decide via lifecycle.supersedes"
                     )
                     entry_after, notes = shape_new_entry(incoming, day)

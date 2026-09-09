@@ -198,11 +198,11 @@ class PackagedCorpusDefault(unittest.TestCase):
         )
         self.assertEqual({p.name for p in roots}, {"verified", "unverified"})
 
-    def test_load_entries_reads_the_sixty_four_packaged_entries(self):
+    def test_load_entries_reads_the_packaged_entries(self):
         config = load_config({}, env={"VAWS_KNOWLEDGE_CANDIDATE_ROOT": ""})
         report = load_entries(config, ["shared"])
         self.assertEqual([], report.errors)
-        self.assertEqual(64, len(report.entries))
+        self.assertEqual(65, len(report.entries))
         self.assertEqual({"shared"}, {e.layer for e in report.entries})
 
     def test_shared_source_names_the_commons_repo(self):

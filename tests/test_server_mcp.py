@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -30,6 +31,8 @@ from vaws_knowledge.server.mcp_server import (  # noqa: E402
     serve,
     write_message,
 )
+
+REFERENCE_UUID = "7c2e9a10-4b3d-4f1a-8c6e-2a9b0d4e5f11"
 
 TODAY = dt.date(2026, 9, 7)
 
@@ -69,22 +72,23 @@ def call(svc, name, arguments=None, request_id=1):
 
 
 class Framing(unittest.TestCase):
-    def test_content_length_round_trip(self):
+    def test_newline_jsonrpc_round_trip(self):
         payload = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
         raw = frame(payload)
-        self.assertTrue(raw.startswith(b"Content-Length: "))
-        self.assertIn(b"\r\n\r\n", raw)
+        self.assertTrue(raw.endswith(b"\n"))
+        self.assertNotIn(b"Content-Length:", raw)
+        self.assertEqual(raw.count(b"\n"), 1)
         self.assertEqual([payload], read_all(raw))
 
-    def test_bare_json_line_is_accepted(self):
-        stream = io.BytesIO(b'{"jsonrpc":"2.0","id":2,"method":"ping"}\n')
+    def test_blank_lines_are_skipped(self):
+        stream = io.BytesIO(b'\n\n{"jsonrpc":"2.0","id":2,"method":"ping"}\n')
         self.assertEqual(2, read_message(stream)["id"])
 
     def test_eof_returns_none(self):
         self.assertIsNone(read_message(io.BytesIO(b"")))
 
-    def test_malformed_framing_is_a_parse_error_and_the_loop_survives(self):
-        stdin = io.BytesIO(b"garbage without a colon\n\n" + frame({"jsonrpc": "2.0", "id": 3, "method": "ping"}))
+    def test_malformed_json_is_a_parse_error_and_the_loop_survives(self):
+        stdin = io.BytesIO(b"garbage without json\n" + frame({"jsonrpc": "2.0", "id": 3, "method": "ping"}))
         stdout = io.BytesIO()
         self.assertEqual(0, serve(stdin, stdout, service()))
         responses = read_all(stdout.getvalue())
@@ -102,6 +106,11 @@ class Handshake(unittest.TestCase):
         self.assertEqual("unknown", info["degradation_contract"]["absent_fact_means"])
         self.assertEqual(12, len(info["scope_dimensions"]))
         self.assertFalse(info["degraded"])
+        self.assertIn("newline-delimited JSON-RPC", info["framing"])
+        self.assertEqual(
+            ["rule", "measurement", "reference"],
+            result["capabilities"]["experimental"]["vaws-knowledge"]["bodies"],
+        )
 
     def test_initialize_reports_absent_layers_with_reasons(self):
         info = handle_message(
@@ -298,6 +307,80 @@ class Degradation(unittest.TestCase):
         self.assertEqual(
             4, len(responses[2]["result"]["structuredContent"]["results"])
         )
+
+
+class StdioSubprocessHandshake(unittest.TestCase):
+    """Actual stdio subprocess, not a direct handle_message call."""
+
+    def test_initialize_tools_list_and_query_over_newline_stdio(self):
+        import subprocess
+
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        env = {**os.environ, "PYTHONPATH": str(repo), "VAWS_KNOWLEDGE_CANDIDATE_ROOT": ""}
+        env.pop("VAWS_KNOWLEDGE_CORPUS", None)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "vaws_knowledge", "server", "--corpus", str(repo / "corpus")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(repo),
+            env=env,
+        )
+        assert proc.stdin is not None and proc.stdout is not None
+
+        def send(message: dict) -> None:
+            proc.stdin.write((json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8"))
+            proc.stdin.flush()
+
+        def recv() -> dict:
+            line = proc.stdout.readline()
+            self.assertTrue(line, proc.stderr.read() if proc.poll() is not None else "eof")
+            self.assertFalse(line.startswith(b"Content-Length:"), line[:80])
+            return json.loads(line)
+
+        try:
+            send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+            init = recv()
+            self.assertEqual(init["id"], 1)
+            self.assertEqual(init["result"]["serverInfo"]["name"], "vaws-knowledge")
+            self.assertIn("newline-delimited JSON-RPC", init["result"]["serviceInfo"]["framing"])
+            send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            listed = recv()
+            names = [tool["name"] for tool in listed["result"]["tools"]]
+            self.assertEqual(names, ["knowledge_query", "knowledge_capture", "knowledge_explain"])
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "knowledge_query",
+                        "arguments": {"text": "newline-delimited JSON-RPC", "include_unverified": True},
+                    },
+                }
+            )
+            queried = recv()
+            payload = queried["result"]["structuredContent"]
+            self.assertFalse(queried["result"]["isError"])
+            uuids = [row["uuid"] for row in payload["results"]]
+            self.assertIn(REFERENCE_UUID, uuids)
+            row = next(item for item in payload["results"] if item["uuid"] == REFERENCE_UUID)
+            self.assertEqual(row["body"], "reference")
+            self.assertEqual(row["evidence_class"], "sourced_reference")
+            self.assertFalse(row["applicability"].get("runtime_scoped", True))
+            send({"jsonrpc": "2.0", "id": 4, "method": "shutdown"})
+            self.assertEqual(recv()["id"], 4)
+        finally:
+            proc.stdin.close()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        leftover = proc.stdout.read()
+        self.assertFalse(leftover)
+        self.assertNotIn(b"Traceback", proc.stderr.read())
 
 
 if __name__ == "__main__":

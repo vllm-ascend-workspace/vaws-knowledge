@@ -408,6 +408,59 @@
       }
     },
 
+    "reference_source": {
+      "$comment": "Where the sourced material came from. A URL/title/provider is a citation, not a run_manifest. version and date are the publisher's, when known.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "provider", "url"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "minLength": 1 },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^https?://\\S+$",
+          "description": "Followable http(s) URL with no whitespace."
+        },
+        "version": { "type": "string", "minLength": 1 },
+        "date": { "$ref": "#/$defs/date" }
+      }
+    },
+
+    "reference": {
+      "$comment": "The third entry body: sourced reference material (official documentation, a principle, or a practical guide). It is not operational evidence. It must not carry a hardware verification record or the twelve runtime coordinates; optional topics/published versions live here instead.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "summary", "text", "source", "trust"],
+      "properties": {
+        "kind": {
+          "enum": ["official_documentation", "principle", "guide"],
+          "description": "What kind of sourced material this is."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One line naming the document and the claim it supports."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 12,
+          "description": "Substantive attributed summary. Do not paste a full article."
+        },
+        "source": { "$ref": "#/$defs/reference_source" },
+        "trust": {
+          "type": "string",
+          "minLength": 12,
+          "description": "Explicit source/trust assessment. Must not claim local hardware or runtime verification."
+        },
+        "topics": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Optional applicable topics or published versions. Not the twelve runtime coordinates."
+        }
+      }
+    },
+
     "entry": {
       "type": "object",
       "additionalProperties": false,
@@ -417,7 +470,6 @@
         "content_hash",
         "status",
         "confidence",
-        "scope",
         "provenance",
         "lifecycle"
       ],
@@ -434,7 +486,7 @@
         "content_hash": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$",
-          "description": "Version identity over the canonicalized scope + body payload, where the body is whichever of rule / measurement the entry carries and the payload key is the body's own name. Makes federated sync idempotent per entry."
+          "description": "Version identity over the canonicalized payload. Rule and measurement hash scope + body keyed by the body's own name. A sourced reference hashes the reference body only (no invented runtime scope). Makes federated sync idempotent per entry."
         },
         "status": {
           "enum": ["verified", "unverified", "stale", "deprecated", "resolved"]
@@ -454,14 +506,25 @@
           "items": { "$ref": "#/$defs/conflict" }
         },
         "rule": { "$ref": "#/$defs/rule" },
-        "measurement": { "$ref": "#/$defs/measurement" }
+        "measurement": { "$ref": "#/$defs/measurement" },
+        "reference": { "$ref": "#/$defs/reference" }
       },
       "allOf": [
         {
-          "$comment": "An entry has exactly one body: `rule` for a failure rule, `measurement` for a measured or vendor-declared quantity. Everything that makes an entry trustworthy - identity, coordinate, provenance, lifecycle, review state - is shared; only the body differs. Neither body is not an entry, and both bodies would make content_hash cover two unrelated claims under one revision.",
+          "$comment": "An entry has exactly one body. rule and measurement remain runtime claims and still require the twelve-dimension scope. reference is sourced material: it must not invent those coordinates or carry a hardware verification record.",
           "oneOf": [
-            { "required": ["rule"] },
-            { "required": ["measurement"] }
+            {
+              "required": ["rule", "scope"],
+              "not": { "anyOf": [ { "required": ["measurement"] }, { "required": ["reference"] } ] }
+            },
+            {
+              "required": ["measurement", "scope"],
+              "not": { "anyOf": [ { "required": ["rule"] }, { "required": ["reference"] } ] }
+            },
+            {
+              "required": ["reference"],
+              "not": { "anyOf": [ { "required": ["rule"] }, { "required": ["measurement"] }, { "required": ["scope"] }, { "required": ["verification"] } ] }
+            }
           ]
         },
         {

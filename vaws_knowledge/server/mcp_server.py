@@ -6,12 +6,12 @@ Three tools:
     knowledge_capture   write one entry to the candidate layer (only)
     knowledge_explain   expand one entry by uuid into its full record
 
-Framing is `Content-Length` headers over stdio, implemented here. The official
-MCP SDK is not a dependency: this package must run on a laptop with nothing
-installed but PyYAML, and the framing is a dozen lines. If the SDK is
-importable we say so in `initialize` (so a caller can tell what it is talking
-to) but we still do our own framing, because switching transports based on
-what happens to be installed would make failures irreproducible.
+Framing is newline-delimited JSON-RPC on stdio, matching the MCP stdio
+transport. Messages MUST NOT contain embedded newlines. The official MCP SDK
+is not a dependency: this package must run on a laptop with nothing installed
+but PyYAML. If the SDK is importable we say so in ``initialize`` (so a caller
+can tell what it is talking to) but we still do our own framing. Nothing but
+JSON-RPC messages is written to stdout.
 
 Degradation contract
 --------------------
@@ -53,7 +53,7 @@ from .layers import (
 from .query import READER_DIMENSIONS, SCOPE_DIMENSIONS, explain, query
 
 SERVER_NAME = "vaws-knowledge"
-MCP_PROTOCOL_VERSION = "2024-11-05"
+MCP_PROTOCOL_VERSION = "2025-11-25"
 
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
@@ -75,66 +75,35 @@ class FramingError(Exception):
 
 
 # --------------------------------------------------------------------------
-# framing
+# framing — newline-delimited JSON-RPC (MCP stdio)
 # --------------------------------------------------------------------------
 
 
 def write_message(stream: BinaryIO, payload: Mapping[str, Any]) -> None:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    stream.write(b"Content-Length: %d\r\n\r\n" % len(body))
-    stream.write(body)
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if b"\n" in body:
+        raise FramingError("MCP stdio message must not contain an embedded newline")
+    stream.write(body + b"\n")
     stream.flush()
 
 
 def read_message(stream: BinaryIO) -> dict[str, Any] | None:
-    """Read one framed message. Returns None at EOF.
+    """Read one newline-delimited JSON-RPC message. Returns None at EOF."""
 
-    Accepts a bare single-line JSON object too. That fallback exists because
-    hand-driving the server (and testing it) with newline-delimited JSON is
-    otherwise painful, and a line starting with '{' is unambiguous against a
-    header block.
-    """
-
-    headers: dict[str, str] = {}
     while True:
         line = stream.readline()
         if not line:
             return None
         stripped = line.strip()
         if not stripped:
-            if headers:
-                break
             continue
-        if not headers and stripped.startswith(b"{"):
-            try:
-                return json.loads(stripped.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise FramingError(f"invalid JSON line: {exc}") from exc
-        if b":" not in stripped:
-            raise FramingError(f"malformed header line: {stripped[:80]!r}")
-        name, _, value = stripped.partition(b":")
-        headers[name.strip().lower().decode("ascii", "replace")] = value.strip().decode(
-            "utf-8", "replace"
-        )
-
-    raw_length = headers.get("content-length")
-    if raw_length is None:
-        raise FramingError("message has no Content-Length header")
-    try:
-        length = int(raw_length)
-    except ValueError as exc:
-        raise FramingError(f"invalid Content-Length {raw_length!r}") from exc
-
-    body = b""
-    while len(body) < length:
-        chunk = stream.read(length - len(body))
-        if not chunk:
-            raise FramingError("stream ended mid-body")
-        body += chunk
-    try:
-        return json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise FramingError(f"invalid JSON body: {exc}") from exc
+        try:
+            payload = json.loads(stripped.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FramingError(f"invalid JSON line: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise FramingError("JSON-RPC message must be an object")
+        return payload
 
 
 # --------------------------------------------------------------------------
@@ -157,8 +126,11 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Search the mounted knowledge layers. Default result set: shared + "
             "project at status verified, plus stale (labelled with a warning) and "
-            "resolved (with its fix reference). Entries whose scope does not cover "
-            "the supplied reader coordinate are dropped, not silently returned."
+            "resolved (with its fix reference). Sourced references in those layers "
+            "are included even when unverified, labelled by source and trust, not "
+            "as local observations. Operational unverified rules and measurements "
+            "remain opt-in. Runtime entries whose scope does not cover the supplied "
+            "reader coordinate are dropped, not silently returned."
         ),
         "inputSchema": {
             "type": "object",
@@ -185,8 +157,10 @@ TOOLS: list[dict[str, Any]] = [
                     "type": "boolean",
                     "default": False,
                     "description": (
-                        "Opt in to unconfirmed single observations, and to the "
-                        "candidate layer that holds them."
+                        "Opt in to operational unverified rules and measurements, "
+                        "and to the candidate layer that holds them. Sourced "
+                        "references in shared/project are already in the default "
+                        "result set."
                     ),
                 },
                 "include_non_matching": {
@@ -200,8 +174,8 @@ TOOLS: list[dict[str, Any]] = [
                 "kind": {"type": "string"},
                 "bodies": {
                     "type": "array",
-                    "items": {"enum": ["rule", "measurement"]},
-                    "description": "Payload variants to return. Default: both.",
+                    "items": {"enum": ["rule", "measurement", "reference"]},
+                    "description": "Payload variants to return. Default: all supported bodies.",
                 },
                 "limit": {"type": "integer", "default": 20, "minimum": 1},
             },
@@ -222,9 +196,10 @@ TOOLS: list[dict[str, Any]] = [
                 "entry": {
                     "type": "object",
                     "description": (
-                        "A schema v2 entry. slug, rule and all twelve scope "
-                        "dimensions are required; uuid, content_hash, provenance "
-                        "and lifecycle dates are stamped when absent."
+                        "A schema v2 entry. Runtime bodies (rule/measurement) still "
+                        "require all twelve scope dimensions. A sourced reference "
+                        "body must not invent those coordinates. uuid, content_hash, "
+                        "provenance and lifecycle dates are stamped when absent."
                     ),
                 },
                 "kind": {"type": "string", "default": "known-failure-signatures"},
@@ -322,7 +297,7 @@ class KnowledgeService:
                 "tools": [tool["name"] for tool in TOOLS],
                 "degradation_contract": DEGRADATION_CONTRACT,
                 "official_mcp_sdk_importable": _sdk_available(),
-                "framing": "Content-Length (implemented in-package; SDK not required)",
+                "framing": "newline-delimited JSON-RPC (MCP stdio; SDK not required)",
                 "reader_coordinate_dimensions": list(READER_DIMENSIONS),
                 "scope_dimensions": list(SCOPE_DIMENSIONS),
                 "writable_layers": ["candidate"],
@@ -485,7 +460,7 @@ def handle_message(service: KnowledgeService, message: Mapping[str, Any]) -> dic
                     "experimental": {
                         "vaws-knowledge": {
                             "version": package_version(),
-                            "bodies": ["rule", "measurement"],
+                            "bodies": ["rule", "measurement", "reference"],
                         },
                     },
                 },

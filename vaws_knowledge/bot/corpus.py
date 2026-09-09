@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
+from vaws_knowledge.canonical import BODY_KEYS
+
 try:  # pragma: no cover - exercised only when the dependency is missing
     import yaml
 except ModuleNotFoundError:  # pragma: no cover
@@ -53,13 +55,6 @@ SCOPE_DIMENSIONS: tuple[str, ...] = (
 )
 
 RULE_BODY_FIELDS: tuple[str, ...] = ("summary", "symptom", "root_cause", "resolution")
-
-#: The two entry body variants. An entry has exactly one: ``rule`` for a
-#: failure rule, ``measurement`` for a measured or vendor-declared quantity.
-#: Everything else about an entry - identity, coordinate, provenance,
-#: lifecycle, review state - is shared, so the gates stay one pipeline and
-#: only the body-specific comparisons branch.
-BODY_KEYS: tuple[str, ...] = ("rule", "measurement")
 
 YAML_SUFFIXES = (".yaml", ".yml")
 
@@ -111,7 +106,7 @@ class EntryRef:
 
     @property
     def body(self) -> str:
-        """``rule`` / ``measurement`` / ``none`` / ``both``.
+        """``rule`` / ``measurement`` / ``reference`` / ``none`` / ``both``.
 
         Reported rather than raised: loading is tolerant so that a malformed
         entry can still be pointed at by path. ``bot/integrity.py`` turns
@@ -127,8 +122,16 @@ class EntryRef:
         return self.body == "measurement"
 
     @property
+    def is_reference(self) -> bool:
+        return self.body == "reference"
+
+    @property
+    def reference(self) -> Mapping[str, Any]:
+        return _mapping(self.entry.get("reference"))
+
+    @property
     def subject_id(self) -> str:
-        """Identity of what a measurement is about; empty for a rule entry."""
+        """Identity of what a measurement is about; empty for a rule or reference."""
         return _string(_mapping(self.measurement.get("subject")).get("id")).strip()
 
     @property
@@ -198,15 +201,16 @@ class EntryRef:
     def rule_body(self) -> str:
         """The prose a text-similarity comparison may read.
 
-        Empty for a measurement entry, and deliberately so. A measurement's
-        summary and method description are near-identical across an entire
-        vendor catalogue — sixty-three platform_config rows differ only in a
-        SoC name and some numbers — so scoring them as prose would report the
-        whole catalogue as duplicates of itself. Measurements are compared on
-        subject, quantity identity and coordinate instead; see
-        ``measurement_body_key`` and ``bot/dedup.py``.
+        Empty for a measurement or reference entry, and deliberately so. A
+        measurement's summary and method description are near-identical across
+        an entire vendor catalogue — sixty-three platform_config rows differ
+        only in a SoC name and some numbers — so scoring them as prose would
+        report the whole catalogue as duplicates of itself. A sourced
+        reference is compared on its citation, not on an empty rule.
+        Measurements are compared on subject, quantity identity and
+        coordinate instead; see ``measurement_body_key`` and ``bot/dedup.py``.
         """
-        if self.is_measurement:
+        if self.is_measurement or self.is_reference:
             return ""
         parts = [_string(self.rule.get(f)) for f in RULE_BODY_FIELDS]
         return "\n".join(p for p in parts if p)

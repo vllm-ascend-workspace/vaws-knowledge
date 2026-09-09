@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vaws-knowledge"
-version = "0.1.5"
-description = "Federated, evidence-gated knowledge engine for vLLM-Ascend"
+version = "0.2.0"
+description = "Federated knowledge: verified runtime facts plus sourced reference material"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

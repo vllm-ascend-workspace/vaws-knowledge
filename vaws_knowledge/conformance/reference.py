@@ -49,7 +49,7 @@ import sys
 #   * an entry with no body, or with both, is not canonicalizable. It is a
 #     schema violation (the schema's entry oneOf), and step 0 is validate
 #     first, so refusing here rather than guessing is the narrow choice.
-BODY_KEYS = ("rule", "measurement")
+BODY_KEYS = ("rule", "measurement", "reference")
 
 #: Kept for readers of the older name: the payload keys for a rule entry.
 PAYLOAD_KEYS = ("rule", "scope")
