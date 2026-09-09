@@ -60,6 +60,22 @@ class LayerMounting(unittest.TestCase):
         self.assertIn("does not exist", config.absent_layers()["shared"])
         self.assertTrue(config.mount("shared").configured)
 
+    def test_missing_candidate_root_is_an_empty_present_layer(self):
+        config = support.build_config(candidate="missing")
+        mount = config.mount("candidate")
+        self.assertTrue(mount.present)
+        self.assertTrue(mount.configured)
+        self.assertNotIn("candidate", config.absent_layers())
+        self.assertFalse(config.degraded(["candidate"]))
+
+    def test_unreadable_candidate_root_is_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            blocker = pathlib.Path(tmp) / "not-a-directory"
+            blocker.write_text("nope\n", encoding="utf-8")
+            config = support.build_config(candidate=blocker)
+            self.assertFalse(config.mount("candidate").present)
+            self.assertIn("not a directory", config.absent_layers()["candidate"])
+
     def test_no_shared_cache_still_yields_the_local_layers(self):
         config = support.build_config(shared="missing")
         report = load_entries(config, ["shared", "project", "candidate"])

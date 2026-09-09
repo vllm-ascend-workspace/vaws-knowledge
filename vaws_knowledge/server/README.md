@@ -197,8 +197,11 @@ success.
 
 | Situation | Behaviour |
 |---|---|
-| A layer is unconfigured | `layers_absent[layer] = "not configured (no roots supplied)"`, `degraded: true`. Not an error. |
-| A configured path does not exist | `layers_absent[layer]` names the path. Other layers still answer. |
+| A layer is unconfigured | `layers_absent[layer] = "not configured (no roots supplied)"`. `degraded` is true only when that layer was actually requested. |
+| A configured shared/project path does not exist | `layers_absent[layer]` names the path. Other layers still answer. |
+| A configured candidate path does not exist | Mounted as an empty layer (`present: true`). "Nothing captured yet" is the normal start state, not a gap. |
+| A candidate path exists but cannot be read | Absent, same as any other unreadable layer. |
+| `degraded` | True only when a **consulted** layer is missing. An unrequested candidate root does not make the answer incomplete. |
 | A layer is disabled by config or env | The reason names the config key or variable. |
 | No layer at all is mounted | Empty `results`, `answer: "unknown"`, and a note that every answer from this service is therefore unknown. |
 | One document is malformed | Recorded in `load.errors` (layer + file relative to its root) and skipped. The service does not go down, and the gap is visible. |

@@ -286,6 +286,33 @@ class LayerPrecedence(unittest.TestCase):
         payload = run(reader_coordinate=support.READER_SOC_A, layers=["project"])
         self.assertEqual({"project"}, {r["layer"] for r in payload["results"]})
 
+    def test_degraded_ignores_layers_that_were_not_requested(self):
+        config = support.build_config(candidate=False)
+        default = run(config=config, reader_coordinate=support.READER_SOC_A)
+        self.assertFalse(default["degraded"])
+        self.assertNotIn("candidate", default["layers_absent"])
+        self.assertEqual(["shared", "project"], default["layers_available"])
+        opted = run(
+            config=config,
+            reader_coordinate=support.READER_SOC_A,
+            include_unverified=True,
+        )
+        self.assertTrue(opted["degraded"])
+        self.assertIn("candidate", opted["layers_absent"])
+
+    def test_missing_candidate_root_does_not_degrade_a_candidate_query(self):
+        config = support.build_config(candidate="missing")
+        payload = run(
+            config=config,
+            text="Ascend910B4",
+            layers=["candidate"],
+            include_unverified=True,
+            limit=1,
+        )
+        self.assertFalse(payload["degraded"])
+        self.assertEqual(["candidate"], payload["layers_available"])
+        self.assertEqual({}, payload["layers_absent"])
+
 
 class TextAndFingerprintMatching(unittest.TestCase):
     def test_fingerprint_match_is_reported_on_the_result(self):
@@ -323,7 +350,7 @@ class ServiceUnavailable(unittest.TestCase):
         self.assertEqual([], payload["results"])
         self.assertTrue(payload["degraded"])
         self.assertEqual([], payload["layers_available"])
-        self.assertEqual({"shared", "project", "candidate"}, set(payload["layers_absent"]))
+        self.assertEqual({"shared", "project"}, set(payload["layers_absent"]))
         self.assertTrue(any("'unknown', never 'supported'" in n for n in payload["notes"]))
 
 

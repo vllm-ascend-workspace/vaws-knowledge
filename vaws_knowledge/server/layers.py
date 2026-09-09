@@ -11,10 +11,11 @@ A layer is a trust source. Each entry carries its own ``status``; default
 visibility is ``policy.default_statuses``. Unverified shared entries stay
 hidden until a caller passes ``statuses`` or changes that policy.
 
-A layer that is not configured, or configured at a path that does not exist,
-is *absent*. Absent is not an error: someone who has never pulled the shared
-corpus must still get useful results out of their own project and candidate
-layers. Every absence is reported with a reason so that a caller can tell
+A layer that is not configured, or a shared/project path that does not exist,
+is *absent*. Candidate is different: it is a local write target, so a
+configured root that has not been created yet is an empty mounted layer, not
+a missing one. A candidate path that exists but cannot be read is still
+absent. Every absence is reported with a reason so that a caller can tell
 "this layer said nothing" apart from "this layer was not consulted".
 
 Nothing here validates entries against schemas/knowledge-v2.schema.json --
@@ -187,15 +188,32 @@ class ServiceConfig:
     def available_layers(self) -> list[str]:
         return [name for name in LAYERS if self.mounts.get(name, Mount(name)).present]
 
-    def absent_layers(self) -> dict[str, str]:
+    def absent_layers(self, layers: Sequence[str] | None = None) -> dict[str, str]:
+        wanted = [name for name in (layers or LAYERS) if name in LAYER_PRECEDENCE]
         out: dict[str, str] = {}
-        for name in LAYERS:
+        for name in wanted:
             mount = self.mounts.get(name)
             if mount is None:
                 out[name] = "not configured"
             elif not mount.present:
                 out[name] = mount.absent_reason or "not present"
         return out
+
+    def degraded(self, layers: Sequence[str] | None = None) -> bool:
+        """True when a consulted layer is missing.
+
+        Layers that were not requested do not affect completeness.
+        """
+
+        return bool(self.absent_layers(layers))
+
+    def consulted(self, layers: Sequence[str] | None = None) -> dict[str, Any]:
+        wanted = [name for name in (layers or LAYERS) if name in LAYER_PRECEDENCE]
+        return {
+            "layers_available": [name for name in wanted if self.mount(name).present],
+            "layers_absent": self.absent_layers(wanted),
+            "degraded": self.degraded(wanted),
+        }
 
     def describe(self) -> dict[str, Any]:
         from vaws_knowledge import package_version
@@ -206,7 +224,7 @@ class ServiceConfig:
             "layers": {name: self.mount(name).describe() for name in LAYERS},
             "layers_available": self.available_layers(),
             "layers_absent": self.absent_layers(),
-            "degraded": self.available_layers() != list(LAYERS),
+            "degraded": self.degraded(),
             "identity": dict(self.identity),
             "policy": dict(self.policy),
             "yaml_available": yaml is not None,
@@ -280,6 +298,50 @@ def _resolve(raw: str, base: Path) -> Path:
     if not path.is_absolute():
         path = base / path
     return path
+
+
+def _candidate_root_problem(path: Path) -> str | None:
+    """None when the root is an empty-or-readable write target.
+
+    A path that has never been created is the normal initial state. A path
+    that exists but cannot be listed is a real gap.
+    """
+
+    try:
+        if not path.exists():
+            return None
+        if not path.is_dir():
+            return f"path is not a directory: {path}"
+        os.listdir(path)
+    except OSError as exc:
+        return f"cannot read {path}: {exc}"
+    return None
+
+
+def _candidate_mount(
+    roots: tuple[Path, ...],
+    *,
+    read_only: bool,
+    configured: bool,
+) -> Mount:
+    problems = [reason for path in roots if (reason := _candidate_root_problem(path))]
+    if problems and len(problems) == len(roots):
+        return Mount(
+            layer="candidate",
+            roots=roots,
+            read_only=read_only,
+            configured=True,
+            present=False,
+            absent_reason="; ".join(problems),
+        )
+    return Mount(
+        layer="candidate",
+        roots=roots,
+        read_only=read_only,
+        configured=configured or True,
+        present=True,
+        absent_reason=None if not problems else "some configured roots cannot be read: " + "; ".join(problems),
+    )
 
 
 def _layer_spec(raw: Any) -> dict[str, Any]:
@@ -465,12 +527,16 @@ def load_config(
         if layer != "candidate":
             read_only = True
 
+        if layer == "candidate":
+            mounts[layer] = _candidate_mount(roots, read_only=read_only, configured=configured)
+            continue
+
         if existing:
             mounts[layer] = Mount(
                 layer=layer,
                 roots=existing,
                 read_only=read_only,
-                configured=configured or layer in ("shared", "candidate"),
+                configured=configured or layer == "shared",
                 present=True,
                 absent_reason=None
                 if len(existing) == len(roots)
@@ -482,7 +548,7 @@ def load_config(
                 layer=layer,
                 roots=roots,
                 read_only=read_only,
-                configured=configured or layer in ("shared", "candidate"),
+                configured=configured or layer == "shared",
                 present=False,
                 absent_reason="path does not exist: " + ", ".join(str(p) for p in roots),
             )
