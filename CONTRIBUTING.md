@@ -4,7 +4,7 @@
 
 This is a public repository and its history cannot be recalled. Before an entry
 leaves your fork it must pass the source-side redaction gate
-(`vaws-knowledge redact`), and it must not contain:
+(`python -m vaws_knowledge redact`), and it must not contain:
 
 - IP addresses, hostnames, container names, MAC addresses
 - internal machine identities — the name or slot number a team uses for a
@@ -103,7 +103,7 @@ three and a mismatch is rejected.
 ```bash
 python3 -m pip install -e .
 vaws-knowledge validate corpus/ examples/
-vaws-knowledge redact --check corpus/ examples/
+python -m vaws_knowledge redact --check corpus/ examples/
 python3 -m unittest discover -s tests
 ```
 

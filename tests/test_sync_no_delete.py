@@ -75,7 +75,7 @@ class EveryCommandPreservesIdentities(synctest.SyncTestCase):
         e["rule"]["summary"] = "A reworded summary for the capture warmup failure"
         self.propose_apply([self.make_export([e, self.new_entry("chi")])])
         publish_mod.build_snapshot(self.corpus(), revision="x", generated_at="2026-09-10T00:00:00+00:00")
-        rescan_mod.rescan(self.corpus(), "r2", tools_dir=synctest.TOOLS_MARKER)
+        rescan_mod.rescan(self.corpus(), "r2")
         after = set(self.corpus().index)
         self.assertTrue(before <= after, before - after)
 

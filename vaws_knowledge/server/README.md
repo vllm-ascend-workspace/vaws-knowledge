@@ -18,9 +18,16 @@ NPU hardware; the service reads and writes text documents.
 
 | Layer | Reads | Writable | Default |
 |---|---|---|---|
-| `shared` | this repo's `corpus/verified/` | never | `<repo>/corpus/verified` |
+| `shared` | packaged corpus `verified/` and `unverified/` | never | `vaws_knowledge.corpus` both subsets |
 | `project` | paths from config, e.g. a business repo's `.agents/knowledge/` | never through this service | unconfigured |
 | `candidate` | a developer's untracked local directory | yes, by `capture.py` | `$XDG_STATE_HOME/vaws-knowledge/candidate`, else `~/.local/state/vaws-knowledge/candidate` |
+
+A layer is a trust source, not a status filter. Entries carry their own
+`status`; default visibility is `policy.default_statuses` (`verified`,
+`stale`, `resolved`). Shared `unverified` entries are therefore mounted but
+hidden until a caller passes `statuses` (or changes `default_statuses`).
+`VAWS_KNOWLEDGE_CORPUS` still overrides the default and resolves both
+subsets from that path.
 
 `shared` is forced read-only even if configuration asks otherwise:
 [docs/federation.md](../docs/federation.md) says a fork never writes into
@@ -67,7 +74,7 @@ Discovery order when no path is passed: `$VAWS_KNOWLEDGE_CONFIG`, then
 
 | Variable | Effect |
 |---|---|
-| `VAWS_KNOWLEDGE_CORPUS` | corpus root (`verified/` or a checkout with `corpus/verified/`) |
+| `VAWS_KNOWLEDGE_CORPUS` | corpus root (`verified/` + `unverified/`, or a checkout with `corpus/`) |
 | `VAWS_KNOWLEDGE_CONFIG` | config file path |
 | `VAWS_KNOWLEDGE_SHARED_ROOTS` | shared roots, `:`- or `,`-separated |
 | `VAWS_KNOWLEDGE_PROJECT_ROOTS` | project roots, `:`- or `,`-separated |
@@ -93,7 +100,9 @@ vaws-knowledge server --corpus /path/to/vaws-knowledge [--config path/to/vaws-kn
 
 All three tool payloads carry the same envelope: `version` (the installed
 package version), `layers_available`, `layers_absent` (layer → reason),
-`degraded`, `absent_fact_semantics: "unknown"` and `degradation_contract`.
+`degraded`, `absent_fact_semantics: "unknown"`, `degradation_contract`,
+`source_ref` (the installed commons commit, or `null`) and
+`source_repo` (`vllm-ascend-workspace/vaws-knowledge`).
 
 ### `knowledge_query`
 
@@ -188,8 +197,11 @@ success.
 
 | Situation | Behaviour |
 |---|---|
-| A layer is unconfigured | `layers_absent[layer] = "not configured (no roots supplied)"`, `degraded: true`. Not an error. |
-| A configured path does not exist | `layers_absent[layer]` names the path. Other layers still answer. |
+| A layer is unconfigured | `layers_absent[layer] = "not configured (no roots supplied)"`. `degraded` is true only when that layer was actually requested. |
+| A configured shared/project path does not exist | `layers_absent[layer]` names the path. Other layers still answer. |
+| A configured candidate path does not exist | Mounted as an empty layer (`present: true`). "Nothing captured yet" is the normal start state, not a gap. |
+| A candidate path exists but cannot be read | Absent, same as any other unreadable layer. |
+| `degraded` | True only when a **consulted** layer is missing. An unrequested candidate root does not make the answer incomplete. |
 | A layer is disabled by config or env | The reason names the config key or variable. |
 | No layer at all is mounted | Empty `results`, `answer: "unknown"`, and a note that every answer from this service is therefore unknown. |
 | One document is malformed | Recorded in `load.errors` (layer + file relative to its root) and skipped. The service does not go down, and the gap is visible. |

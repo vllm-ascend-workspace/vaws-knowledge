@@ -16,7 +16,7 @@
 
 ## Screening
 
-- [ ] I ran the source-side gate in my own fork (`python3 tools/redact.py --check <paths>`) and it passed
+- [ ] I ran the source-side gate in my own fork (`python -m vaws_knowledge redact --check <paths>`) and it passed
 - [ ] I understand this repository is public and its history cannot be recalled
 
 <!-- If a fact cannot be stated without an address, hostname, path or identifier

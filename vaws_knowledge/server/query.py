@@ -50,6 +50,7 @@ from .layers import (
     ServiceConfig,
     load_config,
     load_entries,
+    shared_source,
 )
 
 #: All twelve dimensions of the applicability coordinate.
@@ -667,6 +668,7 @@ class QueryResponse:
     def to_dict(self) -> dict[str, Any]:
         coordinate: dict[str, Any] = self.request.get("reader_coordinate") or {}
         missing = [d for d in READER_DIMENSIONS if d not in coordinate]
+        consulted = self.config.consulted(self.request.get("layers"))
         payload = {
             "version": package_version(),
             "request": self.request,
@@ -675,9 +677,9 @@ class QueryResponse:
                 "unsupplied_expected_dimensions": missing,
                 "ignored_keys": self.ignored_coordinate_keys,
             },
-            "layers_available": self.config.available_layers(),
-            "layers_absent": self.config.absent_layers(),
-            "degraded": self.config.available_layers() != list(LAYERS),
+            "layers_available": consulted["layers_available"],
+            "layers_absent": consulted["layers_absent"],
+            "degraded": consulted["degraded"],
             "absent_fact_semantics": "unknown",
             "no_result_meaning": NO_RESULT_MEANING,
             "load": self.load.describe(),
@@ -686,6 +688,7 @@ class QueryResponse:
             "count": len(self.results),
             "results": [r.to_dict() for r in self.results],
         }
+        payload.update(shared_source())
         return payload
 
 
@@ -986,15 +989,17 @@ def explain(
     coordinate, ignored = normalize_coordinate(reader_coordinate)
 
     matches = [e for e in report.entries if e.uuid == uuid and e.layer in wanted_layers]
+    consulted = config.consulted(wanted_layers)
     base: dict[str, Any] = {
         "version": package_version(),
         "uuid": uuid,
-        "layers_consulted": [n for n in wanted_layers if config.mount(n).present],
-        "layers_absent": config.absent_layers(),
-        "degraded": config.available_layers() != list(LAYERS),
+        "layers_consulted": consulted["layers_available"],
+        "layers_absent": consulted["layers_absent"],
+        "degraded": consulted["degraded"],
         "absent_fact_semantics": "unknown",
         "load": report.describe(),
     }
+    base.update(shared_source())
 
     if not matches:
         base.update(

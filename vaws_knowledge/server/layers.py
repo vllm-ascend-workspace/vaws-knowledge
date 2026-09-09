@@ -3,14 +3,19 @@
 The trust model in README.md has three layers, and a reader must be able to
 tell which one an answer came from:
 
-    shared     this repo's reviewed corpus/verified/, read-only
+    shared     the packaged corpus (verified/ and unverified/), read-only
     project    a business repo's own knowledge, e.g. .agents/knowledge/
     candidate  a developer's untracked local capture directory
 
-A layer that is not configured, or configured at a path that does not exist,
-is *absent*. Absent is not an error: someone who has never pulled the shared
-corpus must still get useful results out of their own project and candidate
-layers. Every absence is reported with a reason so that a caller can tell
+A layer is a trust source. Each entry carries its own ``status``; default
+visibility is ``policy.default_statuses``. Unverified shared entries stay
+hidden until a caller passes ``statuses`` or changes that policy.
+
+A layer that is not configured, or a shared/project path that does not exist,
+is *absent*. Candidate is different: it is a local write target, so a
+configured root that has not been created yet is an empty mounted layer, not
+a missing one. A candidate path that exists but cannot be read is still
+absent. Every absence is reported with a reason so that a caller can tell
 "this layer said nothing" apart from "this layer was not consulted".
 
 Nothing here validates entries against schemas/knowledge-v2.schema.json --
@@ -75,6 +80,8 @@ DEFAULT_IDENTITY = {
 #: and deprecated are not.
 DEFAULT_STATUSES: tuple[str, ...] = ("verified", "stale", "resolved")
 OPT_IN_STATUSES: tuple[str, ...] = ("unverified",)
+SHARED_SUBSETS: tuple[str, ...] = ("verified", "unverified")
+SOURCE_REPO = "vllm-ascend-workspace/vaws-knowledge"
 
 DEFAULT_POLICY: dict[str, Any] = {
     # docs/lifecycle.md leaves the horizon to policy. This only *labels* an
@@ -95,23 +102,37 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def resolve_shared_from_corpus(raw: str | Path) -> Path:
-    """Map a corpus root or repo checkout to the shared ``verified/`` directory."""
+def resolve_shared_from_corpus(raw: str | Path) -> tuple[Path, ...]:
+    """Map a corpus root or repo checkout to shared subset directories.
+
+    Returns every existing ``verified/`` and ``unverified/`` child. Layer is
+    the trust source; entry ``status`` is a separate axis.
+    """
 
     path = Path(raw).expanduser()
-    if (path / "verified").is_dir():
-        return path / "verified"
-    if (path / "corpus" / "verified").is_dir():
-        return path / "corpus" / "verified"
-    return path / "verified"
+    for base in (path, path / "corpus"):
+        roots = tuple(base / subset for subset in SHARED_SUBSETS if (base / subset).is_dir())
+        if roots:
+            return roots
+    return (path / "verified",)
 
 
 def default_shared_roots(env: Mapping[str, str] | None = None) -> tuple[Path, ...]:
     env = os.environ if env is None else env
     corpus = env.get(ENV_CORPUS)
     if corpus:
-        return (resolve_shared_from_corpus(corpus),)
-    return ()
+        return resolve_shared_from_corpus(corpus)
+    from vaws_knowledge.corpus import corpus_root
+
+    return resolve_shared_from_corpus(corpus_root())
+
+
+def shared_source() -> dict[str, str | None]:
+    """Pin the packaged corpus to the installed commons commit, when known."""
+
+    from vaws_knowledge.corpus import installed_commit
+
+    return {"source_ref": installed_commit(), "source_repo": SOURCE_REPO}
 
 
 def default_candidate_root() -> Path:
@@ -167,9 +188,10 @@ class ServiceConfig:
     def available_layers(self) -> list[str]:
         return [name for name in LAYERS if self.mounts.get(name, Mount(name)).present]
 
-    def absent_layers(self) -> dict[str, str]:
+    def absent_layers(self, layers: Sequence[str] | None = None) -> dict[str, str]:
+        wanted = [name for name in (layers or LAYERS) if name in LAYER_PRECEDENCE]
         out: dict[str, str] = {}
-        for name in LAYERS:
+        for name in wanted:
             mount = self.mounts.get(name)
             if mount is None:
                 out[name] = "not configured"
@@ -177,21 +199,39 @@ class ServiceConfig:
                 out[name] = mount.absent_reason or "not present"
         return out
 
+    def degraded(self, layers: Sequence[str] | None = None) -> bool:
+        """True when a consulted layer is missing.
+
+        Layers that were not requested do not affect completeness.
+        """
+
+        return bool(self.absent_layers(layers))
+
+    def consulted(self, layers: Sequence[str] | None = None) -> dict[str, Any]:
+        wanted = [name for name in (layers or LAYERS) if name in LAYER_PRECEDENCE]
+        return {
+            "layers_available": [name for name in wanted if self.mount(name).present],
+            "layers_absent": self.absent_layers(wanted),
+            "degraded": self.degraded(wanted),
+        }
+
     def describe(self) -> dict[str, Any]:
         from vaws_knowledge import package_version
 
-        return {
+        out = {
             "version": package_version(),
             "config_path": str(self.config_path) if self.config_path else None,
             "layers": {name: self.mount(name).describe() for name in LAYERS},
             "layers_available": self.available_layers(),
             "layers_absent": self.absent_layers(),
-            "degraded": self.available_layers() != list(LAYERS),
+            "degraded": self.degraded(),
             "identity": dict(self.identity),
             "policy": dict(self.policy),
             "yaml_available": yaml is not None,
             "warnings": list(self.warnings),
         }
+        out.update(shared_source())
+        return out
 
     @property
     def stale_after_days(self) -> int:
@@ -258,6 +298,50 @@ def _resolve(raw: str, base: Path) -> Path:
     if not path.is_absolute():
         path = base / path
     return path
+
+
+def _candidate_root_problem(path: Path) -> str | None:
+    """None when the root is an empty-or-readable write target.
+
+    A path that has never been created is the normal initial state. A path
+    that exists but cannot be listed is a real gap.
+    """
+
+    try:
+        if not path.exists():
+            return None
+        if not path.is_dir():
+            return f"path is not a directory: {path}"
+        os.listdir(path)
+    except OSError as exc:
+        return f"cannot read {path}: {exc}"
+    return None
+
+
+def _candidate_mount(
+    roots: tuple[Path, ...],
+    *,
+    read_only: bool,
+    configured: bool,
+) -> Mount:
+    problems = [reason for path in roots if (reason := _candidate_root_problem(path))]
+    if problems and len(problems) == len(roots):
+        return Mount(
+            layer="candidate",
+            roots=roots,
+            read_only=read_only,
+            configured=True,
+            present=False,
+            absent_reason="; ".join(problems),
+        )
+    return Mount(
+        layer="candidate",
+        roots=roots,
+        read_only=read_only,
+        configured=configured or True,
+        present=True,
+        absent_reason=None if not problems else "some configured roots cannot be read: " + "; ".join(problems),
+    )
 
 
 def _layer_spec(raw: Any) -> dict[str, Any]:
@@ -443,12 +527,16 @@ def load_config(
         if layer != "candidate":
             read_only = True
 
+        if layer == "candidate":
+            mounts[layer] = _candidate_mount(roots, read_only=read_only, configured=configured)
+            continue
+
         if existing:
             mounts[layer] = Mount(
                 layer=layer,
                 roots=existing,
                 read_only=read_only,
-                configured=configured or layer in ("shared", "candidate"),
+                configured=configured or layer == "shared",
                 present=True,
                 absent_reason=None
                 if len(existing) == len(roots)
@@ -460,7 +548,7 @@ def load_config(
                 layer=layer,
                 roots=roots,
                 read_only=read_only,
-                configured=configured or layer in ("shared", "candidate"),
+                configured=configured or layer == "shared",
                 present=False,
                 absent_reason="path does not exist: " + ", ".join(str(p) for p in roots),
             )
@@ -574,11 +662,19 @@ def load_entries(
                     {"layer": layer, "file": rel, "error": "document root is not a mapping"}
                 )
                 continue
+            # Frozen v1 documents (and any whole file with no uuid-bearing
+            # entries) are not this reader's contract. Skip them quietly so a
+            # mixed project directory does not look like a load failure.
+            if doc.get("schema_version") in (1, "1"):
+                continue
             entries = doc.get("entries")
             if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes, Mapping)):
                 report.errors.append(
                     {"layer": layer, "file": rel, "error": "document has no 'entries' list"}
                 )
+                continue
+            mapping_entries = [item for item in entries if isinstance(item, Mapping)]
+            if mapping_entries and not any(item.get("uuid") for item in mapping_entries):
                 continue
 
             kind = str(doc.get("kind", "unknown"))

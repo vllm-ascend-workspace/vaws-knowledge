@@ -48,6 +48,7 @@ from .layers import (
     ConfigError,
     ServiceConfig,
     load_config,
+    shared_source,
 )
 from .query import READER_DIMENSIONS, SCOPE_DIMENSIONS, explain, query
 
@@ -299,15 +300,16 @@ class KnowledgeService:
     # -- envelope ---------------------------------------------------------
 
     def envelope(self) -> dict[str, Any]:
-        available = self.config.available_layers()
+        consulted = self.config.consulted()
         env: dict[str, Any] = {
             "version": package_version(),
-            "layers_available": available,
-            "layers_absent": self.config.absent_layers(),
-            "degraded": available != list(LAYERS),
+            "layers_available": consulted["layers_available"],
+            "layers_absent": consulted["layers_absent"],
+            "degraded": consulted["degraded"],
             "absent_fact_semantics": "unknown",
             "degradation_contract": DEGRADATION_CONTRACT,
         }
+        env.update(shared_source())
         if self.config_error:
             env["configuration_error"] = self.config_error
         return env

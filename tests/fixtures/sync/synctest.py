@@ -75,6 +75,15 @@ class SyncTestCase(unittest.TestCase):
     def corpus(self) -> _common.Corpus:
         return _common.load_corpus(self.corpus_dir)
 
+    def poison_marker(self) -> None:
+        """Make the marker entry fail the real redaction ruleset."""
+
+        path = self.corpus_dir / "verified" / "known-failure-signatures.yaml"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace("QUARANTINE-ME", "remote 131"),
+            encoding="utf-8",
+        )
+
     def entry(self, uid: str) -> dict:
         return copy.deepcopy(self.corpus().index[uid].entry)
 
