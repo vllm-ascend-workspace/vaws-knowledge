@@ -525,7 +525,7 @@ version channel is unused cost.
 
 **Resolution:** there is no `service-api.json` and no `service_api_version`
 field. The installed package version (`importlib.metadata.version("vaws-knowledge")`,
-currently `0.1.4`) is the contract version. `measurement` is part of that
+currently `0.1.5`) is the contract version. `measurement` is part of that
 contract. `bodies` remains an ordinary query filter, not a compatibility
 switch.
 
