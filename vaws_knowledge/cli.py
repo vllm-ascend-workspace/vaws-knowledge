@@ -36,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
             "canonical",
             "query",
             "capture",
+            "contribution",
+            "distribution",
             "conformance",
         ),
         help="subcommand",
@@ -86,6 +88,14 @@ def main(argv: list[str] | None = None) -> int:
         from vaws_knowledge.server.capture_cli import main as capture_main
 
         return _dispatch(capture_main, rest)
+    if command == "contribution":
+        from vaws_knowledge.contribution.__main__ import main as contribution_main
+
+        return contribution_main(rest)
+    if command == "distribution":
+        from vaws_knowledge.distribution.__main__ import main as distribution_main
+
+        return distribution_main(rest)
     if command == "conformance":
         from vaws_knowledge.conformance.runner import main as conformance_main
 
