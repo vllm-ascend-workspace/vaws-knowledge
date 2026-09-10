@@ -134,7 +134,7 @@ class OpenVikingBackend:
             if not status.get("live"):
                 raise RuntimeError("openviking instance is not live")
             url = status["openviking_url"]
-            client = SyncHTTPClient(url=url)
+            client = SyncHTTPClient(url=url, api_key=self.instance.data_key())
             client.initialize()
         self._client = client
         for layer in LAYERS:

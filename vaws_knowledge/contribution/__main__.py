@@ -45,20 +45,20 @@ def _cmd_prepare(args: argparse.Namespace) -> int:
 def _cmd_submit(args: argparse.Namespace) -> int:
     from vaws_knowledge.contribution.pending import iter_pending
 
-    records = iter_pending(Path(args.state_root))
+    records = [record for record in iter_pending(Path(args.state_root))
+               if record.status in {"pending", "awaiting_transport"}]
     if not records:
-        print("no pending contribution records", file=sys.stderr)
-        return 1
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if not token or not args.git_repo:
-        payload = after_capture(
-            Path(args.candidate) if args.candidate else Path("."),
-            state_root=Path(args.state_root),
-            public_root=Path(args.public_root),
-        )
-        return _print(payload if isinstance(payload, dict) else {"pending": [item.to_dict() for item in records]})
+        return _print({"status": "unchanged", "pending": []})
+    if not args.git_repo:
+        return _print({"status": "awaiting_transport", "reason": "a configured fork checkout is required"})
+    from vaws_knowledge.github_transport import github_token
+
+    try:
+        token = github_token()
+    except (OSError, RuntimeError) as exc:
+        return _print({"status": "awaiting_transport", "reason": str(exc)})
     github = UrllibContributionGitHub(token)
-    config = SubmitConfig(upstream=args.upstream, fork=args.fork or args.upstream)
+    config = SubmitConfig(upstream=args.upstream, fork=args.fork or args.upstream, push_remote="origin")
     updated = submit_pending(
         records[0],
         state_root=Path(args.state_root),

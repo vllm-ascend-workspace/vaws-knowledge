@@ -14,12 +14,16 @@ from vaws_knowledge.contribution.errors import TransportError
 
 
 def run_git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise TransportError(f"git {args[0]} unavailable: {type(exc).__name__}") from exc
     if check and proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "git failed").strip()
         raise TransportError(f"git {' '.join(args)} failed: {detail}")

@@ -1,19 +1,13 @@
-"""Release adaptation: turn a build manifest + OVPack into a release layout.
-
-This round produces and consumes a *local release directory* only::
-
-    <release-dir>/
-      release.json                 # validated release manifest
-      <pack.file>                  # the dense OVPack asset
-
-Real GitHub Release creation and network publishing are disabled here on
-purpose; the corpus CI template uploads this directory as a workflow artifact
-and the publishing step stays commented until the main agent wires it up.
-"""
+"""Assemble, publish and receive complete, Git-bound OVPack releases."""
 
 from __future__ import annotations
 
 import shutil
+import json
+import os
+import tempfile
+import urllib.request
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -72,16 +66,17 @@ class LocalReleaseSource:
         return ReleaseSnapshot(manifest=manifest, pack_path=pack_path, label=str(directory))
 
 
-def source_from_location(location: Any) -> ReleaseSource:
-    """Resolve a configured source. Network sources are disabled this round."""
+def source_from_location(location: Any, *, cache_dir: Path | None = None) -> ReleaseSource:
+    """Accept a local directory or github://owner/repository."""
 
     if isinstance(location, LocalReleaseSource):
         return location
     text = str(location)
+    if text.startswith("github://"):
+        return GitHubReleaseSource(text.removeprefix("github://"), cache_dir=cache_dir)
     if text.startswith(("http://", "https://")):
         raise SourceUnavailable(
-            "network release sources are disabled in this round; mirror the release "
-            "directory locally and point the source at that directory"
+            "arbitrary HTTP release sources are disabled; use github://owner/repository"
         )
     return LocalReleaseSource(Path(text))
 
@@ -126,11 +121,125 @@ def make_release(
     return out_dir
 
 
-def publish_release(*_args: Any, **_kwargs: Any) -> None:
-    """Real GitHub Release creation / network publishing — disabled this round."""
+def publish_release(directory: Path, *, repository: str) -> dict[str, Any]:
+    """Upload both assets as a draft, then publish. Never overwrite a release."""
+    from vaws_knowledge.github_transport import api, gh, repository_name
+    from vaws_knowledge.distribution.pack import verify_pack
 
-    raise ReleaseError(
-        "real release creation and network publishing are disabled in this round; "
-        "use make_release() to produce a local release directory and let the corpus "
-        "CI template carry it as a workflow artifact"
-    )
+    repository = repository_name(repository)
+    snapshot = LocalReleaseSource(directory).fetch()
+    verify_pack(snapshot.pack_path, snapshot.manifest, expected=ExpectedContract())
+    sha = snapshot.manifest.source_git_sha
+    tag = f"knowledge-{snapshot.manifest.version_id}"
+    tag_ref = gh(["api", f"repos/{repository}/git/ref/tags/{tag}"], check=False)
+    if tag_ref.returncode:
+        gh(["api", "--method", "POST", f"repos/{repository}/git/refs",
+            "-f", f"ref=refs/tags/{tag}", "-f", f"sha={sha}"])
+    elif json.loads(tag_ref.stdout).get("object", {}).get("sha") != sha:
+        raise ReleaseError("release tag does not identify the corpus Git commit")
+    existing = gh(["release", "view", tag, "--repo", repository,
+                   "--json", "isDraft,url,tagName"], check=False)
+    if existing.returncode == 0:
+        release = json.loads(existing.stdout)
+        actual = api(f"repos/{repository}/git/ref/tags/{tag}")
+        if actual.get("object", {}).get("sha") != sha:
+            raise ReleaseError("release tag does not identify the corpus Git commit")
+        if not release["isDraft"]:
+            # A retry after publication verifies the remote assets, not just a tag.
+            with tempfile.TemporaryDirectory(prefix="knowledge-release-") as temporary:
+                remote = GitHubReleaseSource(repository, cache_dir=Path(temporary), tag=tag).fetch()
+                if remote.manifest.data != snapshot.manifest.data:
+                    raise ReleaseError("published release differs; published assets are immutable")
+            return {"status": "unchanged", "url": release["url"], "source_git_sha": sha}
+    else:
+        gh(["release", "create", tag, "--repo", repository, "--target", sha,
+            "--title", f"Knowledge {sha[:12]}", "--notes", f"Reviewed corpus commit: {sha}", "--draft"])
+    gh(["release", "upload", tag, str(Path(directory) / RELEASE_MANIFEST_NAME),
+        str(snapshot.pack_path), "--repo", repository, "--clobber"], timeout=600)
+    # Recheck the tag before making the complete draft visible to clients.
+    actual = api(f"repos/{repository}/git/ref/tags/{tag}")
+    if actual.get("object", {}).get("sha") != sha:
+        raise ReleaseError("release tag changed before publication")
+    gh(["release", "edit", tag, "--repo", repository, "--draft=false", "--latest"])
+    return {"status": "published", "url": f"https://github.com/{repository}/releases/tag/{tag}",
+            "source_git_sha": sha}
+
+
+class GitHubReleaseSource:
+    """Download a public release; cache verified assets and preserve offline state."""
+
+    def __init__(self, repository: str, *, cache_dir: Path | None = None, tag: str | None = None):
+        from vaws_knowledge.github_transport import repository_name
+
+        self.repository = repository_name(repository)
+        self.tag = tag
+        base = Path(os.environ.get("VAWS_KNOWLEDGE_STATE") or Path.home() / ".cache" / "vaws-knowledge")
+        self.cache_dir = Path(cache_dir) if cache_dir else base / "release-downloads"
+
+    def _json(self, suffix: str) -> Any:
+        url = f"https://api.github.com/repos/{self.repository}/{suffix}"
+        request = urllib.request.Request(url, headers={"User-Agent": "vaws-knowledge", "Accept": "application/vnd.github+json"})
+        # Public consumption needs no login. Existing environment credentials may
+        # raise the API rate limit, and are sent only to api.github.com.
+        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read(4 * 1024 * 1024 + 1)
+        if len(raw) > 4 * 1024 * 1024:
+            raise SourceUnavailable("GitHub release metadata is too large")
+        return json.loads(raw)
+
+    def _download(self, asset: dict[str, Any], destination: Path, *, maximum: int) -> None:
+        url = str(asset.get("browser_download_url") or "")
+        prefix = f"https://github.com/{self.repository}/releases/download/"
+        if not url.startswith(prefix):
+            raise SourceUnavailable("release asset URL does not belong to the configured repository")
+        request = urllib.request.Request(url, headers={"User-Agent": "vaws-knowledge"})
+        # No credential header is attached to asset URLs or their CDN redirects.
+        fd, temporary = tempfile.mkstemp(prefix=".download-", dir=destination.parent)
+        try:
+            with os.fdopen(fd, "wb") as output, urllib.request.urlopen(request, timeout=120) as response:
+                size = 0
+                while chunk := response.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > maximum:
+                        raise SourceUnavailable("release asset exceeds its declared size")
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, destination)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    def fetch(self) -> ReleaseSnapshot:
+        try:
+            suffix = f"releases/tags/{urllib.parse.quote(self.tag, safe='')}" if self.tag else "releases/latest"
+            release = self._json(suffix)
+            if release.get("draft") or release.get("prerelease"):
+                raise SourceUnavailable("release is not published")
+            release_id = int(release["id"])
+            directory = self.cache_dir / self.repository.replace("/", "--") / str(release_id)
+            directory.mkdir(parents=True, exist_ok=True)
+            assets = {item["name"]: item for item in release["assets"] if item.get("state") == "uploaded"}
+            self._download(assets[RELEASE_MANIFEST_NAME], directory / RELEASE_MANIFEST_NAME, maximum=4 * 1024 * 1024)
+            manifest = validate_release_manifest(read_json(directory / RELEASE_MANIFEST_NAME), expected=ExpectedContract())
+            tag = str(release["tag_name"])
+            if tag != f"knowledge-{manifest.version_id}":
+                raise SourceUnavailable("release tag and manifest version differ")
+            ref = self._json(f"git/ref/tags/{urllib.parse.quote(tag, safe='')}")
+            if ref.get("object", {}).get("sha") != manifest.source_git_sha:
+                raise SourceUnavailable("release tag and corpus Git identity differ")
+            pack = directory / manifest.pack["file"]
+            size = int(manifest.pack["size"])
+            if not 0 < size <= 2 * 1024**3:
+                raise SourceUnavailable("release pack is outside the supported size limit")
+            if not pack.is_file() or sha256_file(pack) != manifest.pack["sha256"]:
+                self._download(assets[pack.name], pack, maximum=size)
+            if pack.stat().st_size != size or sha256_file(pack) != manifest.pack["sha256"]:
+                raise SourceUnavailable("downloaded release pack failed its integrity check")
+            return ReleaseSnapshot(manifest, pack, str(release.get("html_url") or self.repository))
+        except SourceUnavailable:
+            raise
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise SourceUnavailable(f"GitHub release unavailable: {type(exc).__name__}: {exc}") from exc

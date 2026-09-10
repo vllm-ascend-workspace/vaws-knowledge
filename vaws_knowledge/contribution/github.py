@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+import urllib.parse
 from typing import Any, Mapping, Optional, Protocol
 
 from vaws_knowledge.bot.publish_comment import (
@@ -51,7 +52,7 @@ def raise_transport(exc: GitHubError) -> None:
 
 
 class UrllibContributionGitHub:
-    """Live client. Tests inject a fake instead. Never used in this delivery."""
+    """Authenticated GitHub REST transport. Tests can inject the same interface."""
 
     def __init__(self, token: str) -> None:
         if not token:
@@ -60,6 +61,9 @@ class UrllibContributionGitHub:
 
     def _request(self, method: str, path: str, body: Optional[Mapping[str, Any]] = None) -> tuple[Any, dict[str, str]]:
         url = path if path.startswith("http") else API_ROOT + path
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "https" or parsed.netloc != "api.github.com":
+            raise TransportError("GitHub API requests must stay on api.github.com")
         data = None
         headers = {
             "Accept": "application/vnd.github+json",

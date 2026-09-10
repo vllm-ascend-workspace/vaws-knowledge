@@ -247,8 +247,17 @@ def verify_model_files(model_cache: Path, manifest: ReleaseManifest) -> list[str
     root = Path(model_cache)
     if not root.is_dir():
         return [f"model cache {root} is missing; install the pinned embedding model first"]
+    checked_revisions: set[str] = set()
     for entry in model_files:
         path = root / entry["path"]
+        parts = Path(entry["path"]).parts
+        if len(parts) >= 4 and parts[0].startswith("models--") and parts[1] == "snapshots":
+            repository, revision = parts[0], parts[2]
+            if repository not in checked_revisions:
+                checked_revisions.add(repository)
+                ref = root / repository / "refs" / "main"
+                if not ref.is_file() or ref.read_text(encoding="utf-8").strip() != revision:
+                    problems.append("active embedding model revision differs from the released snapshot")
         if not path.is_file():
             problems.append(f"model file {entry['path']} is missing from the local cache")
             continue

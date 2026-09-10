@@ -1,11 +1,18 @@
 # Knowledge contribution and trusted review
 
+Status: current
+
+The deployed path uses human review and merge. The optional Grok classifier and
+trusted automatic-review template described below are not enabled. Capture,
+fork push/PR submission and background retries are connected through
+[the publishing lifecycle](publishing.md).
+
 This package turns a local Markdown candidate into a public copy, an
 idempotent fork PR, a Grok review against already-published related
 documents, and a merge that is bound to the candidate head and the base
-SHA. It is a library with `python -m vaws_knowledge.contribution`. The
-root CLI, package dependencies, and live GitHub workflows are wired by
-the integrator.
+SHA. The optional review library is exposed through
+`python -m vaws_knowledge.contribution`; its automatic review operations
+are separate from the currently deployed manual-review path.
 
 Public review records responsibility for published text. It does not prove
 hardware facts, and Grok does not reproduce hardware measurements. Local
@@ -112,19 +119,14 @@ paths (workflows, installable files, root README edits) refuse automatic
 merge. Missing, truncated, or unavailable recall/diff evidence does not
 permit publish. Permission and provider errors are explicit.
 
-## Join points (Grok 1 / integrator)
+## Active submission path
 
-- Capture writes `# Title` plus body Markdown. This module reads that shape
-  and does not depend on uncommitted `vaws_knowledge.markdown` APIs.
-- OpenViking: inject `client.find(...)` (`openviking_sdk.SyncHTTPClient`) or,
-  once published, wrap Grok 1 `OpenVikingBackend.search` as `Recall`.
-- Lifecycle should call `after_capture` after a successful local save. It
-  must ignore contribution transport errors.
-- Root CLI, `pyproject.toml`, and `.github/workflows` are not modified here.
+Capture writes ordinary Markdown and prepares its public copy locally.
+`PublishingWorker` retries records using a dedicated fork clone, pushes the
+branch before opening a PR, and records manual merge/closure without reopening
+it. No network write occurs on the capture return path.
 
-## Not verified in this delivery
+## Deferred
 
 - Live xAI Grok quality
-- Live GitHub API, Actions, or merge
 - x86-64 Windows
-- Native OpenViking instance in this worktree (adapter is present; tests use fixtures)

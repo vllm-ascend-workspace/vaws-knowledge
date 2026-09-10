@@ -3,7 +3,7 @@
 Local Markdown knowledge for vLLM-Ascend development, with CPU retrieval through
 OpenViking, public contribution review, and prebuilt OVPack distribution.
 
-This is the 0.3 development interface. Capture accepts a title and body; it no
+This is the 0.3.1 development interface. Capture accepts a title and body; it no
 longer requires the previous v2 YAML authoring schema. Older interfaces are not
 held stable while these capabilities are being developed.
 
@@ -59,9 +59,14 @@ the same. Waiting for that choice affects only the public contribution.
 vaws-knowledge contribution --help
 ```
 
-See [contribution usage](docs/contribution.md) and the
-[trusted workflow template](examples/corpus-contribution/README.md). The template
-requires deployment configuration and is not enabled by installing this package.
+Run `vaws-knowledge publishing configure --config PATH` once to reuse/create the
+public corpus fork and enable submission plus shared-version sync. Only new
+captures are queued; existing private candidates are not scanned for upload.
+The live corpus uses format/redaction checks and **human review and merge**.
+The optional Grok review module and its template remain inactive.
+
+See [publishing setup and lifecycle](docs/publishing.md) and
+[contribution usage](docs/contribution.md).
 
 ## Prebuilt distribution
 
@@ -76,11 +81,11 @@ vaws-knowledge distribution --help
 vaws-knowledge distribution pins
 ```
 
-See [distribution usage](docs/distribution.md). This batch produces and consumes
-local release directories. Live GitHub release transport and automatic lifecycle
-wiring are follow-up integration work. The native OVPack chain uses an API-key
-and tenant client; the local retrieval instance currently uses dev auth, so those
-paths still need to be joined before automatic public synchronization is enabled.
+See [distribution usage](docs/distribution.md). Build and publish complete
+GitHub Releases, or consume local directories. MCP startup and periodic checks
+perform submission retries and shared synchronization in the background.
+Local retrieval and OVPack import/export use the same private tenant key;
+credentials are kept in local state and are excluded from status output.
 
 ## Validation scope
 
@@ -89,9 +94,7 @@ capture identity, read-only dry runs, project/candidate reconciliation, contribu
 review bounds, portable switch-lock ownership, and native OVPack
 build/import/version-switch/restart with no document re-embedding during import.
 
-Windows runtime verification and release compatibility are deferred. Live
-GitHub/xAI review and the complete deployed public contribution workflow are not
-claimed by local fixture tests. Native tests require an existing model cache;
+Windows runtime verification and live xAI review are deferred. Native tests require an existing model cache;
 see `tests/test_openviking_local.py` and
 `tests/distribution/test_native_chain.py` for their environment variables.
 

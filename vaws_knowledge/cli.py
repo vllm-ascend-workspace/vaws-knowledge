@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
             "capture",
             "contribution",
             "distribution",
+            "publishing",
             "conformance",
         ),
         help="subcommand",
@@ -96,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
         from vaws_knowledge.distribution.__main__ import main as distribution_main
 
         return distribution_main(rest)
+    if command == "publishing":
+        from vaws_knowledge.publishing import main as publishing_main
+
+        return publishing_main(rest)
     if command == "conformance":
         from vaws_knowledge.conformance.runner import main as conformance_main
 

@@ -1,6 +1,6 @@
 # Knowledge distribution: OVPack build, release adaptation, local version sync
 
-Status: current (this module); the network publishing path is intentionally disabled.
+Status: current
 
 `vaws_knowledge.distribution` moves the reviewed public corpus from a fixed
 Git commit onto a client machine **without recomputing document embeddings**:
@@ -55,10 +55,11 @@ the manifest against the pinned contract, re-hashes the pack, and assembles:
 <release-dir>/<pack.file>       # the dense OVPack asset
 ```
 
-`publish_release()` raises: real GitHub Release creation and network
-publishing are disabled this round. The corpus CI template
-(`examples/corpus-distribution/corpus-release-template.yml.tmpl`) uploads the
-release directory as a workflow artifact instead.
+`publish_release(directory, repository=...)` verifies the pack and binds its
+release tag to the corpus Git SHA. It uploads both assets as a draft before
+publishing. Repeated publication verifies the existing release and never replaces
+published assets. `GitHubReleaseSource` consumes `github://owner/repository`,
+caches integrity-checked assets and verifies the source tag before importing.
 
 ## Client side (local knowledge service)
 
@@ -139,17 +140,16 @@ stdout so CI can capture it; the root key only ever arrives via the
 environment. Each command prints one JSON result; `check` exits 0 on
 `unchanged` and `switched`, 1 otherwise, with an actionable `reason`.
 
-## Integration points (owned by other tasks)
+## Lifecycle integration
 
 - The local knowledge lifecycle (local instance manager) passes its live
   OpenViking URL / tenant key and its embedding endpoint identity into
   `check_and_sync`, and queries `current_shared(state_root)["root_uri"]` for
   the shared layer. The embedding endpoint should answer `GET /health` with
   `model`, `dimension` and cumulative call counters.
-- Tenant keys: the verified research flow uses `auth_mode=api_key` with the
-  root key for account administration only and a tenant data key for content;
-  OVPack import/export under `dev` auth previously failed in research, so the
-  lifecycle should provide a data key.
+- The local instance now uses `auth_mode=api_key`, with root administration and
+  tenant content keys kept in private state. Retrieval and distribution use the
+  same tenant key.
 - Dependency wiring (`openviking==0.4.19`, `openviking-sdk==0.1.10`,
   `fastembed==0.8.0`) and root CLI/CI registration belong to the integrator;
   this module adds no entry points to `pyproject.toml`.
@@ -161,4 +161,5 @@ the real small-sample native chain — build from a fixed commit, release
 assembly, sync into an isolated instance, no re-embedding at import, version
 switch with modify/delete visibility, candidate layer preservation, and
 restart. Not verified: x86-64 Windows (no environment this round), real
-GitHub Release publishing (disabled), and 50k-scale distribution timing.
+50k-scale distribution timing. See [publishing](publishing.md) for live network
+setup and the current manual-review boundary.

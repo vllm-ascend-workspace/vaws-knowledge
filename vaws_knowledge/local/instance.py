@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -304,6 +305,7 @@ class LocalInstance:
         self.pid_path = self.state_root / "pid.json"
         self.lock_path = self.state_root / "instance.lock"
         self.config_path = self.state_root / "ov.conf"
+        self.credentials_path = self.state_root / "credentials.json"
         self.log_dir = self.state_root / "logs"
         self.data_dir = self.state_root / "ov-data"
         cache_env = os.environ.get("VAWS_KNOWLEDGE_EMBEDDING_CACHE")
@@ -351,7 +353,8 @@ class LocalInstance:
     def ensure(self) -> dict[str, Any]:
         with InstanceLock(self.lock_path):
             current = self.describe()
-            if current["live"]:
+            credentials = self._credentials()
+            if current["live"] and credentials.get("data_key"):
                 return current
             self._stop_owned(current.get("pid") or {})
             self.state_root.mkdir(parents=True, exist_ok=True)
@@ -360,6 +363,8 @@ class LocalInstance:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             embed_port = _unused_port()
             ov_port = _unused_port()
+            credentials.setdefault("root_key", secrets.token_urlsafe(32))
+            self._save_credentials(credentials)
             config = {
                 "storage": {
                     "workspace": str(self.data_dir),
@@ -384,10 +389,12 @@ class LocalInstance:
                 "server": {
                     "host": LOOPBACK,
                     "port": ov_port,
-                    "auth_mode": "dev",
+                    "auth_mode": "api_key",
+                    "root_api_key": credentials["root_key"],
                 },
             }
             self.config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+            self.config_path.chmod(0o600)
             env = loopback_env()
             env["VAWS_KNOWLEDGE_STATE"] = str(self.state_root)
             embed_log = (self.log_dir / "embedding.log").open("w", encoding="utf-8")
@@ -434,6 +441,14 @@ class LocalInstance:
                         log_path=self.log_dir / "openviking.log",
                         name="openviking-server",
                     )
+                    if not credentials.get("data_key"):
+                        from vaws_knowledge.distribution.client import provision_tenant_key
+
+                        credentials["data_key"] = provision_tenant_key(
+                            f"http://{LOOPBACK}:{ov_port}",
+                            root_key=credentials["root_key"],
+                        )
+                        self._save_credentials(credentials)
                 except Exception:
                     stop_owned_pid(ov_proc.pid, self.openviking_marker)
                     raise
@@ -454,6 +469,26 @@ class LocalInstance:
             }
             self.pid_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
             return self.describe()
+
+    def _credentials(self) -> dict[str, str]:
+        try:
+            data = json.loads(self.credentials_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_credentials(self, credentials: dict[str, str]) -> None:
+        from vaws_knowledge.distribution.manifest import atomic_write_json
+
+        atomic_write_json(self.credentials_path, credentials)
+        self.credentials_path.chmod(0o600)
+
+    def data_key(self) -> str:
+        """Private client credential; never include it in status or MCP output."""
+        key = self._credentials().get("data_key")
+        if not key:
+            raise RuntimeError("knowledge instance tenant is not initialized")
+        return key
 
     def stop(self) -> None:
         with InstanceLock(self.lock_path):

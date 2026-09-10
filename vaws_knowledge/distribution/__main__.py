@@ -16,7 +16,7 @@ from vaws_knowledge.distribution.build import build_pack
 from vaws_knowledge.distribution.client import embedding_info_from_health
 from vaws_knowledge.distribution.errors import DistributionError
 from vaws_knowledge.distribution.manifest import EMBEDDING_DIMENSION, EMBEDDING_MODEL
-from vaws_knowledge.distribution.release import make_release, source_from_location
+from vaws_knowledge.distribution.release import make_release, publish_release, source_from_location
 from vaws_knowledge.distribution.sync import check_and_sync, current_shared
 from vaws_knowledge.distribution.pack import inspect_pack, verify_pack
 from vaws_knowledge.distribution.manifest import ExpectedContract
@@ -39,7 +39,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
         info = {"model": args.embedding_model, "dimension": args.embedding_dimension}
     result = check_and_sync(
         Path(args.state_root),
-        source_from_location(args.source),
+        source_from_location(args.source, cache_dir=Path(args.state_root) / "release-downloads"),
         embedding_info=info,
         openviking_url=args.openviking_url,
         api_key=args.api_key,
@@ -89,6 +89,45 @@ def _cmd_make_release(args: argparse.Namespace) -> int:
         out_dir=Path(args.out),
     )
     _print({"release_dir": str(out)})
+    return 0
+
+
+def _cmd_publish(args: argparse.Namespace) -> int:
+    _print(publish_release(Path(args.release), repository=args.repository))
+    return 0
+
+
+def _cmd_build_release(args: argparse.Namespace) -> int:
+    """CI entry: own one temporary CPU instance, build and validate both assets."""
+    import tempfile
+    from vaws_knowledge.local.instance import LocalInstance
+    from vaws_knowledge.distribution.client import connect_client
+    from vaws_knowledge.corpus_check import validate_corpus
+
+    checked = validate_corpus(Path(args.repo))
+    if not checked["ok"]:
+        _print(checked)
+        return 1
+
+    with tempfile.TemporaryDirectory(prefix="vaws-corpus-build-") as temporary:
+        instance = LocalInstance(Path(temporary))
+        if args.model_cache:
+            instance.cache_dir = Path(args.model_cache)
+        try:
+            status = instance.ensure()
+            client = connect_client(status["openviking_url"], api_key=instance.data_key())
+            try:
+                built = build_pack(
+                    repo=Path(args.repo), out_dir=Path(temporary) / "build", client=client,
+                    expected_sha=args.sha, corpus_subdir="corpus", model_cache=instance.cache_dir,
+                )
+                directory = make_release(pack_path=built.pack_path, build_manifest=built.manifest_path,
+                                         out_dir=Path(args.out))
+            finally:
+                client.close()
+        finally:
+            instance.stop()
+    _print({"status": "built", "release_dir": str(directory)})
     return 0
 
 
@@ -165,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("check", help="one periodic sync check against a release source")
     p.add_argument("--state-root", required=True)
-    p.add_argument("--source", required=True, help="local release directory (network disabled)")
+    p.add_argument("--source", required=True, help="local release directory or github://owner/repository")
     p.add_argument("--openviking-url", default=None)
     p.add_argument("--api-key", default=None)
     p.add_argument("--embedding-health-url", default=None)
@@ -192,6 +231,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--manifest", required=True)
     p.add_argument("--out", required=True)
     p.set_defaults(func=_cmd_make_release)
+
+    p = sub.add_parser("build-release", help="build a complete release with a temporary local CPU instance")
+    p.add_argument("--repo", required=True)
+    p.add_argument("--sha", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--model-cache")
+    p.set_defaults(func=_cmd_build_release)
+
+    p = sub.add_parser("publish", help="publish a validated release directory to GitHub")
+    p.add_argument("--release", required=True)
+    p.add_argument("--repository", required=True)
+    p.set_defaults(func=_cmd_publish)
 
     p = sub.add_parser("verify", help="offline-verify a release directory")
     p.add_argument("--release", required=True)

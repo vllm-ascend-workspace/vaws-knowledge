@@ -42,8 +42,13 @@ def connect_client(url: str, *, api_key: str | None = None) -> Any:
     kwargs: dict[str, Any] = {"url": url}
     if api_key:
         kwargs["api_key"] = api_key
-    client = SyncHTTPClient(**kwargs)
-    client.initialize()
+    from vaws_knowledge.local.instance import without_proxies
+
+    # The SDK captures proxy settings when creating its HTTP client. This
+    # connection is loopback-only; GitHub transport keeps the user's proxy.
+    with without_proxies():
+        client = SyncHTTPClient(**kwargs)
+        client.initialize()
     return client
 
 

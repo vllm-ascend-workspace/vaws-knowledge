@@ -1,4 +1,4 @@
-"""Release adaptation: local release directories and disabled publishing."""
+"""Release adaptation and public GitHub source validation."""
 
 from __future__ import annotations
 
@@ -74,6 +74,6 @@ def test_network_sources_are_disabled(tmp_path):
     assert isinstance(local, LocalReleaseSource)
 
 
-def test_publish_is_disabled(tmp_path):
-    with pytest.raises(ReleaseError, match="disabled"):
-        publish_release(tmp_path)
+def test_publish_requires_a_valid_complete_directory(tmp_path):
+    with pytest.raises(SourceUnavailable):
+        publish_release(tmp_path, repository="example/corpus")

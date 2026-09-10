@@ -27,6 +27,8 @@ PENDING_STATUSES = (
     "pr_open",
     "closed_duplicate",
     "awaiting_decision",
+    "merged",
+    "closed",
 )
 
 STATUS_PENDING = "pending"

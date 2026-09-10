@@ -18,7 +18,7 @@ from vaws_knowledge.contribution.documents import (
     public_filename,
 )
 from vaws_knowledge.contribution.errors import DocumentRejected, TransportError
-from vaws_knowledge.contribution.gitops import commit_public_file
+from vaws_knowledge.contribution.gitops import commit_public_file, run_git
 from vaws_knowledge.contribution.github import GitHubTransport, create_pull
 from vaws_knowledge.contribution.pending import (
     STATUS_AWAITING,
@@ -37,6 +37,7 @@ class SubmitConfig:
     fork: str
     default_branch: str = "main"
     knowledge_prefix: str = "corpus"
+    push_remote: str | None = None
 
 
 def prepare_candidate(
@@ -75,7 +76,7 @@ def prepare_candidate(
         return save_pending(state_root, record)
     document = copy.document
     existing = load_pending(state_root, document.digest)
-    if existing is not None and existing.status in {STATUS_PR_OPEN, STATUS_AWAITING, "submitted"}:
+    if existing is not None and existing.status in {STATUS_PR_OPEN, STATUS_AWAITING, "submitted", "merged", "closed"}:
         return existing
     relpath = copy.path.name
     record = existing or PendingRecord(
@@ -126,16 +127,29 @@ def submit_pending(
         record.last_error = "public copy is missing"
         return save_pending(state_root, record)
     text = public_file.read_text(encoding="utf-8")
+    public_copy = prepare_public_copy(text, public_root=public_root)
+    if public_copy.blocked or public_copy.document.digest != record.content_digest:
+        record.status = STATUS_BLOCKED
+        record.last_error = "public copy changed or failed redaction; prepare the candidate again"
+        return save_pending(state_root, record)
     repo_relpath = f"{config.knowledge_prefix.rstrip('/')}/{public_filename(record.content_digest, record.title)}"
     try:
+        if run_git(git_repo, ["status", "--porcelain"]).stdout.strip():
+            raise TransportError("contribution checkout has uncommitted changes")
+        start_ref = config.default_branch
+        if config.push_remote:
+            run_git(git_repo, ["fetch", "upstream", config.default_branch])
+            start_ref = "FETCH_HEAD"
         head = commit_public_file(
             git_repo,
             branch=record.branch or branch_for_digest(record.content_digest),
             relpath=repo_relpath,
             content=text,
             message=f"Contribute: {record.title}",
-            start_ref=config.default_branch,
+            start_ref=start_ref,
         )
+        if config.push_remote:
+            run_git(git_repo, ["push", config.push_remote, f"HEAD:refs/heads/{record.branch}"])
         pull = create_pull(
             github,
             upstream=config.upstream,

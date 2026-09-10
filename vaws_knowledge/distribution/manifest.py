@@ -80,6 +80,34 @@ def hash_tree(root: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def hash_model_tree(root: Path) -> list[dict[str, Any]]:
+    """Pin model snapshots, excluding machine-specific download cache state.
+
+    Hugging Face stores the actual model/tokenizer under snapshots; blobs are
+    duplicate storage and may be absent when Windows cannot create symlinks.
+    refs/main selects the downloaded revision, not every historical snapshot.
+    A flat model directory is also accepted by the build API.
+    """
+    root = Path(root)
+    repositories = sorted(root.glob("models--*"))
+    if not repositories:
+        return hash_tree(root)
+    entries: list[dict[str, Any]] = []
+    for repository in repositories:
+        ref = repository / "refs" / "main"
+        revision = ref.read_text(encoding="utf-8").strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise CorruptPack("model cache main ref is not a Git revision")
+        snapshot = repository / "snapshots" / revision
+        if not snapshot.is_dir():
+            raise CorruptPack("model cache active snapshot is missing")
+        prefix = snapshot.relative_to(root).as_posix()
+        entries.extend({**item, "path": f"{prefix}/{item['path']}"} for item in hash_tree(snapshot))
+    if not entries:
+        raise CorruptPack("model cache contains no model files")
+    return entries
+
+
 def content_digest(entries: Iterable[Mapping[str, Any]]) -> str:
     """One digest over ``path + sha256`` lines; a content fingerprint, not an identity."""
 
