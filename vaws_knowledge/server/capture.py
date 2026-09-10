@@ -102,6 +102,7 @@ def capture(
     conditions: Mapping[str, Any] | None = None,
     evidence: Any = None,
     dry_run: bool = False,
+    index: bool = True,
     **_ignored: Any,
 ) -> dict[str, Any]:
     """Save one candidate document. Required inputs are title and content."""
@@ -169,8 +170,8 @@ def capture(
         captured_at=utc_now(),
     )
 
-    backend = backend_for_config(config)
-    ok, detail = backend.available()
+    backend = backend_for_config(config) if index else None
+    ok, detail = backend.available() if backend is not None else (False, "indexing deferred to retrieval")
     indexed = False
     index_error = None
     if ok:
@@ -201,6 +202,9 @@ def capture(
     if not indexed:
         payload["index_detail"] = index_error
         payload["degraded"] = True
+    from vaws_knowledge.publishing import queue_capture
+
+    payload["contribution"] = queue_capture(config, document.path)
     return payload
 
 

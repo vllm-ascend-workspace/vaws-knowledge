@@ -187,6 +187,7 @@ class ServiceConfig:
     backend: str = "openviking"
     state_root: Path | None = None
     retrieval: Any = None
+    publishing: dict[str, Any] = field(default_factory=dict)
 
     def mount(self, layer: str) -> Mount:
         return self.mounts.get(layer, Mount(layer=layer, absent_reason="unknown layer"))
@@ -583,6 +584,7 @@ def load_config(
         warnings=warnings,
         backend=backend,
         state_root=state_root,
+        publishing=dict(data["publishing"]) if isinstance(data.get("publishing"), Mapping) else {},
     )
 
 

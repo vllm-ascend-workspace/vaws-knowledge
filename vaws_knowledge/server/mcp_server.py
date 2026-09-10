@@ -541,7 +541,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(service.server_info(), indent=2, ensure_ascii=False))
         return 0
 
-    return serve(service=service)
+    from vaws_knowledge.publishing import PublishingWorker
+
+    worker = PublishingWorker(service.config)
+    worker.start()
+    try:
+        return serve(service=service)
+    finally:
+        worker.stop()
 
 
 if __name__ == "__main__":  # pragma: no cover
