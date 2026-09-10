@@ -1,0 +1,167 @@
+"""OVPack verification: integrity, archive safety, dense contract, content."""
+
+from __future__ import annotations
+
+import json
+import sys
+import zipfile
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from distribution.helpers import GIT_SHA, make_corpus, make_manifest, make_pack
+
+from vaws_knowledge.distribution.errors import CorruptPack, IncompatiblePack
+from vaws_knowledge.distribution.manifest import ExpectedContract, validate_release_manifest
+from vaws_knowledge.distribution.pack import inspect_pack, verify_model_files, verify_pack
+
+
+def _verified_inputs(tmp_path: Path, **pack_kwargs):
+    entries = make_corpus()
+    pack_path = tmp_path / "corpus.ovpack"
+    index = make_pack(pack_path, entries, **pack_kwargs)
+    manifest = validate_release_manifest(
+        make_manifest(pack_path, entries, index), expected=ExpectedContract()
+    )
+    return pack_path, manifest
+
+
+def test_good_pack_verifies(tmp_path):
+    pack_path, manifest = _verified_inputs(tmp_path)
+    info = verify_pack(pack_path, manifest, expected=ExpectedContract())
+    assert info.root_name == "v" + GIT_SHA[:12]
+    assert info.dense["dimensions"] == 384
+
+
+def test_size_mismatch_rejected(tmp_path):
+    pack_path, manifest = _verified_inputs(tmp_path)
+    manifest.data["pack"]["size"] += 1
+    with pytest.raises(CorruptPack, match="size"):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_sha_mismatch_rejected(tmp_path):
+    pack_path, manifest = _verified_inputs(tmp_path)
+    manifest.data["pack"]["sha256"] = "0" * 64
+    with pytest.raises(CorruptPack, match="sha256"):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_non_zip_rejected(tmp_path):
+    pack_path, manifest = _verified_inputs(tmp_path)
+    broken = tmp_path / "broken.ovpack"
+    broken.write_bytes(b"not a zip at all")
+    manifest.data["pack"]["size"] = broken.stat().st_size
+    import hashlib
+
+    manifest.data["pack"]["sha256"] = hashlib.sha256(broken.read_bytes()).hexdigest()
+    with pytest.raises(CorruptPack, match="zip"):
+        verify_pack(broken, manifest, expected=ExpectedContract())
+
+
+@pytest.mark.parametrize(
+    "member",
+    ["../escape.md", "/abs/escape.md", "C:/win/escape.md", "root/../escape.md", "root\\escape.md"],
+)
+def test_unsafe_members_rejected(tmp_path, member):
+    pack_path, manifest = _verified_inputs(tmp_path, extra_members={member: b"x"})
+    with pytest.raises(CorruptPack, match="unsafe"):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_multiple_roots_rejected(tmp_path):
+    pack_path, manifest = _verified_inputs(tmp_path, extra_members={"other/x.md": b"x"})
+    with pytest.raises(CorruptPack, match="one top-level"):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_missing_embedded_manifest_rejected(tmp_path):
+    pack_path = tmp_path / "bare.ovpack"
+    with zipfile.ZipFile(pack_path, "w") as archive:
+        archive.writestr("root/a.md", b"# A\n\nbody\n")
+    with pytest.raises(CorruptPack, match="_ovpack/manifest.json"):
+        inspect_pack(pack_path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("dimensions", 768), ("dtype", "float16"), ("byte_order", "big")],
+)
+def test_dense_contract_mismatch_rejected(tmp_path, field, value):
+    kwargs = {field: value}
+    pack_path, manifest = _verified_inputs(tmp_path, **kwargs)
+    with pytest.raises(IncompatiblePack):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_wrong_embedding_model_rejected(tmp_path):
+    entries = make_corpus()
+    pack_path = tmp_path / "corpus.ovpack"
+    index = make_pack(pack_path, entries, model="other-model")
+    # The release manifest claims the pinned model; the pack disagrees.
+    manifest = validate_release_manifest(
+        make_manifest(pack_path, entries, index), expected=ExpectedContract()
+    )
+    with pytest.raises(IncompatiblePack, match="other-model"):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_corrupt_dense_part_rejected(tmp_path):
+    pack_path, manifest = _verified_inputs(tmp_path, corrupt_dense=True)
+    with pytest.raises(CorruptPack, match="dense vectors"):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_missing_content_file_rejected(tmp_path):
+    pack_path, manifest = _verified_inputs(tmp_path, omit_entry="notes/beta.md")
+    with pytest.raises(CorruptPack, match="notes/beta.md"):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_content_tamper_rejected(tmp_path):
+    entries = make_corpus()
+    pack_path = tmp_path / "corpus.ovpack"
+    index = make_pack(pack_path, entries)
+    manifest = validate_release_manifest(
+        make_manifest(pack_path, entries, index), expected=ExpectedContract()
+    )
+    manifest.data["content"]["files"][0]["sha256"] = "f" * 64
+    with pytest.raises(CorruptPack, match="same Git content"):
+        verify_pack(pack_path, manifest, expected=ExpectedContract())
+
+
+def test_verify_model_files(tmp_path):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    model = cache / "model.onnx"
+    model.write_bytes(b"onnx-bytes")
+    import hashlib
+
+    entries = make_corpus()
+    pack_path = tmp_path / "corpus.ovpack"
+    index = make_pack(pack_path, entries)
+    manifest = validate_release_manifest(
+        make_manifest(
+            pack_path,
+            entries,
+            index,
+            model_files=[{"path": "model.onnx", "sha256": hashlib.sha256(b"onnx-bytes").hexdigest(), "size": 10}],
+        ),
+        expected=ExpectedContract(),
+    )
+    assert verify_model_files(cache, manifest) == []
+    model.write_bytes(b"different")
+    problems = verify_model_files(cache, manifest)
+    assert problems and "model.onnx" in problems[0]
+    assert verify_model_files(tmp_path / "absent", manifest)
+
+
+def test_verify_model_files_skipped_when_unpinned(tmp_path):
+    entries = make_corpus()
+    pack_path = tmp_path / "corpus.ovpack"
+    index = make_pack(pack_path, entries)
+    manifest = validate_release_manifest(
+        make_manifest(pack_path, entries, index), expected=ExpectedContract()
+    )
+    assert verify_model_files(tmp_path / "absent", manifest) == []
