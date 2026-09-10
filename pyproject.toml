@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vaws-knowledge"
-version = "0.2.0"
-description = "Federated knowledge: verified runtime facts plus sourced reference material"
+version = "0.3.0"
+description = "Local Markdown knowledge indexed through OpenViking"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -16,6 +16,8 @@ dependencies = [
   "jsonschema>=4.21",
   "packaging>=23.0",
   "PyYAML>=6.0",
+  "openviking==0.4.19",
+  "fastembed>=0.4",
 ]
 
 [project.scripts]

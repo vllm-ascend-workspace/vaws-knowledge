@@ -28,7 +28,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("server", "validate", "redact", "export", "canonical", "query", "conformance"),
+        choices=(
+            "server",
+            "validate",
+            "redact",
+            "export",
+            "canonical",
+            "query",
+            "capture",
+            "conformance",
+        ),
         help="subcommand",
     )
     parser.add_argument(
@@ -73,6 +82,10 @@ def main(argv: list[str] | None = None) -> int:
         from vaws_knowledge.server.query import main as query_main
 
         return query_main(rest)
+    if command == "capture":
+        from vaws_knowledge.server.capture_cli import main as capture_main
+
+        return _dispatch(capture_main, rest)
     if command == "conformance":
         from vaws_knowledge.conformance.runner import main as conformance_main
 

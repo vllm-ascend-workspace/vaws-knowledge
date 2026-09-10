@@ -60,6 +60,9 @@ ENV_IDENTITY = {
     "redaction_profile": "VAWS_KNOWLEDGE_REDACTION_PROFILE",
 }
 ENV_STALE_AFTER_DAYS = "VAWS_KNOWLEDGE_STALE_AFTER_DAYS"
+ENV_BACKEND = "VAWS_KNOWLEDGE_BACKEND"
+ENV_STATE = "VAWS_KNOWLEDGE_STATE"
+MARKDOWN_SUFFIXES = (".md",)
 
 CONFIG_BASENAMES = ("vaws-knowledge.json", "vaws-knowledge.yaml", "vaws-knowledge.yml")
 
@@ -181,6 +184,9 @@ class ServiceConfig:
     policy: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_POLICY))
     config_path: Path | None = None
     warnings: list[str] = field(default_factory=list)
+    backend: str = "openviking"
+    state_root: Path | None = None
+    retrieval: Any = None
 
     def mount(self, layer: str) -> Mount:
         return self.mounts.get(layer, Mount(layer=layer, absent_reason="unknown layer"))
@@ -556,12 +562,27 @@ def load_config(
     if yaml is None:
         warnings.append(YAML_MISSING_HINT)
 
+    backend = str(
+        data.get("backend") or env.get(ENV_BACKEND) or "openviking"
+    ).strip().lower() or "openviking"
+    state_raw = data.get("state_root") or env.get(ENV_STATE)
+    if state_raw:
+        state_root = _resolve(str(state_raw), base)
+    else:
+        candidate = mounts.get("candidate")
+        if candidate and candidate.roots:
+            state_root = Path(candidate.roots[0]).parent / "instance"
+        else:
+            state_root = default_candidate_root().parent / "instance"
+
     return ServiceConfig(
         mounts=mounts,
         identity=identity,
         policy=policy,
         config_path=config_path,
         warnings=warnings,
+        backend=backend,
+        state_root=state_root,
     )
 
 
@@ -621,6 +642,17 @@ def iter_document_files(mount: Mount) -> Iterator[tuple[Path, Path]]:
             continue
         for path in sorted(root.rglob("*")):
             if path.is_file() and path.suffix in DOC_SUFFIXES:
+                yield root, path
+
+
+def iter_markdown_files(mount: Mount) -> Iterator[tuple[Path, Path]]:
+    """Yield ``(root, file)`` for Markdown authority files under a mount."""
+
+    for root in mount.roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and path.suffix.lower() in MARKDOWN_SUFFIXES:
                 yield root, path
 
 

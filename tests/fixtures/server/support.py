@@ -68,6 +68,7 @@ def build_config(
     """
 
     mapping: dict[str, Any] = {
+        "backend": "memory",
         "layers": {
             "shared": _layer_spec(shared, "shared"),
             "project": _layer_spec(project, "project"),
