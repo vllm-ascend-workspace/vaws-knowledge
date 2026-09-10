@@ -52,7 +52,7 @@ def ensure_fork(upstream: str, directory: Path) -> dict[str, str]:
     if fork != upstream:
         existing = gh(["api", f"repos/{fork}"], check=False)
         if existing.returncode:
-            gh(["repo", "fork", upstream, "--clone=false", "--remote=false"])
+            gh(["repo", "fork", upstream, "--clone=false"])
             metadata = api(f"repos/{fork}")
         else:
             metadata = json.loads(existing.stdout)

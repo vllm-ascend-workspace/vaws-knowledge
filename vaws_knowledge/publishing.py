@@ -137,11 +137,13 @@ class PublishingWorker:
             self.thread.start()
 
     def _run(self) -> None:
+        startup = True
         while not self.closed.is_set():
             try:
-                run_once(self.config)
+                run_once(self.config, force=startup)
             except Exception:  # a failure never terminates the stdio tool service
                 pass
+            startup = False
             self.closed.wait(10)
 
     def stop(self) -> None:
