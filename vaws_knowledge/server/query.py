@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 
 from vaws_knowledge import package_version
 from vaws_knowledge.local.backend import Hit, backend_for_config
+from vaws_knowledge.local.reconcile import reconcile_markdown
 from vaws_knowledge.markdown import Document, iter_markdown_files, layer_from_uri, load_document
 from vaws_knowledge.server.layers import LAYERS, ServiceConfig, shared_source
 
@@ -85,9 +86,10 @@ def load_layer_documents(config: ServiceConfig, layers: Sequence[str]) -> list[D
         if not mount.present:
             continue
         for root in mount.roots:
-            for path in iter_markdown_files(Path(root)):
+            base = Path(root)
+            for path in iter_markdown_files(base):
                 try:
-                    documents.append(load_document(path, layer=layer))
+                    documents.append(load_document(path, layer=layer, root=base))
                 except (OSError, UnicodeDecodeError):
                     continue
     return documents
@@ -212,6 +214,13 @@ def query(
             layers_absent=consulted["layers_absent"],
         )
 
+    report = reconcile_markdown(config, wanted_layers)
+    if report.errors:
+        notes.append(
+            "markdown index reconciliation failed; files on disk were left unchanged "
+            "and this search may be incomplete"
+        )
+
     fetch = max(int(limit or 8) * 4, 16)
     hits = backend.search(text or "", layers=wanted_layers, limit=fetch)
     catalog = documents_by_uri(config, wanted_layers)
@@ -228,7 +237,7 @@ def query(
     kept.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("uri") or "")))
     return QueryResponse(
         results=kept[:cap],
-        degraded=consulted["degraded"],
+        degraded=consulted["degraded"] or report.degraded,
         unavailable=False,
         index_detail=detail,
         notes=notes,

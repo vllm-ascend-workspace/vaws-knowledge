@@ -7,6 +7,7 @@ file stays ordinary prose. Unknown values are omitted, never invented.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -21,6 +22,7 @@ _TITLE_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 
 LAYERS = ("shared", "project", "candidate")
 URI_ROOT = "viking://resources"
+_TITLE_DIGEST_LEN = 12
 
 
 def utc_now() -> str:
@@ -28,12 +30,43 @@ def utc_now() -> str:
 
 
 def slugify(text: str) -> str:
+    """ASCII filename helper. Not a unique document identity."""
+
     slug = _SLUG_UNSAFE.sub("-", (text or "").strip().lower()).strip("-")
     return slug[:80] or "captured-entry"
 
 
-def uri_for(layer: str, slug: str) -> str:
-    name = slug if slug.endswith(".md") else f"{slug}.md"
+def title_digest(text: str) -> str:
+    return hashlib.sha256((text or "").strip().encode("utf-8")).hexdigest()[:_TITLE_DIGEST_LEN]
+
+
+def document_slug(title: str) -> str:
+    """Stable, collision-resistant identity derived only from the title."""
+
+    heading = (title or "").strip()
+    digest = title_digest(heading)
+    readable = slugify(heading)
+    if readable == "captured-entry":
+        return f"entry-{digest}"
+    return f"{readable}-{digest}"
+
+
+def relative_posix(path: Path, root: Path | None = None) -> str:
+    if root is not None:
+        try:
+            return path.resolve().relative_to(Path(root).resolve()).as_posix()
+        except ValueError:
+            try:
+                return Path(os.path.relpath(path, root)).as_posix()
+            except ValueError:
+                pass
+    return Path(path).name
+
+
+def uri_for(layer: str, relative: str) -> str:
+    name = str(relative or "").replace("\\", "/").lstrip("/")
+    if not name.endswith(".md"):
+        name = f"{name}.md"
     return f"{URI_ROOT}/{layer}/{name}"
 
 
@@ -151,10 +184,11 @@ def meta_path(markdown_path: Path) -> Path:
     return markdown_path.with_suffix(".meta.json")
 
 
-def load_document(path: Path, *, layer: str) -> Document:
+def load_document(path: Path, *, layer: str, root: Path | None = None) -> Document:
     text = path.read_text(encoding="utf-8")
     title, content = parse_markdown(text)
-    slug = path.stem
+    rel = relative_posix(path, root)
+    rel_slug = rel[:-3] if rel.lower().endswith(".md") else rel
     meta: dict[str, Any] = {}
     sidecar = meta_path(path)
     if sidecar.is_file():
@@ -175,15 +209,36 @@ def load_document(path: Path, *, layer: str) -> Document:
         layer=layer,
         title=str(meta.get("title") or title),
         content=content,
-        slug=str(meta.get("slug") or slug),
+        slug=str(meta.get("slug") or rel_slug),
         path=path,
-        uri=str(meta.get("uri") or uri_for(layer, slug)),
+        uri=str(meta.get("uri") or uri_for(layer, rel)),
         status=str(meta.get("status") or "unverified"),
         source=source,
         conditions=conditions,
         evidence=meta.get("evidence"),
         captured_at=meta.get("captured_at") if isinstance(meta.get("captured_at"), str) else None,
     )
+
+
+def find_by_title(root: Path, title: str, *, layer: str) -> Document | None:
+    heading = (title or "").strip()
+    if not heading or not root.is_dir():
+        return None
+    matches: list[Document] = []
+    for path in iter_markdown_files(root):
+        try:
+            document = load_document(path, layer=layer, root=root)
+        except (OSError, UnicodeDecodeError):
+            continue
+        if document.title.strip() == heading:
+            matches.append(document)
+    if not matches:
+        return None
+    wanted = document_slug(heading)
+    for document in matches:
+        if document.slug == wanted or document.path.stem == wanted:
+            return document
+    return matches[0]
 
 
 def save_document(
@@ -193,6 +248,7 @@ def save_document(
     title: str,
     content: str,
     slug: str | None = None,
+    path: Path | None = None,
     status: str = "unverified",
     source: Mapping[str, Any] | None = None,
     conditions: Mapping[str, Any] | None = None,
@@ -205,9 +261,21 @@ def save_document(
         raise ValueError("title is required")
     if not body:
         raise ValueError("content is required")
-    ident = slugify(slug or heading)
-    path = root / f"{ident}.md"
-    _atomic_write_text(path, render_markdown(heading, body))
+    if path is not None:
+        target = Path(path)
+        ident = target.stem
+    else:
+        ident = slug or document_slug(heading)
+        target = root / f"{ident}.md"
+        if target.is_file():
+            try:
+                existing = load_document(target, layer=layer, root=root)
+            except (OSError, UnicodeDecodeError):
+                existing = None
+            if existing is not None and existing.title.strip() != heading:
+                ident = f"{ident}-{title_digest(heading + ident)}"
+                target = root / f"{ident}.md"
+    _atomic_write_text(target, render_markdown(heading, body))
     cleaned_source = _clean_mapping(source)
     cleaned_conditions: dict[str, str] = {}
     if isinstance(conditions, Mapping):
@@ -215,12 +283,13 @@ def save_document(
             text_value = str(value).strip()
             if text_value and text_value.lower() != "unknown":
                 cleaned_conditions[str(key)] = text_value
+    rel = relative_posix(target, root)
     meta: dict[str, Any] = {
         "slug": ident,
         "title": heading,
         "layer": layer,
         "status": status or "unverified",
-        "uri": uri_for(layer, ident),
+        "uri": uri_for(layer, rel),
         "captured_at": captured_at or utc_now(),
     }
     if cleaned_source:
@@ -229,8 +298,8 @@ def save_document(
         meta["conditions"] = cleaned_conditions
     if evidence is not None:
         meta["evidence"] = evidence
-    _atomic_write_text(meta_path(path), json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
-    return load_document(path, layer=layer)
+    _atomic_write_text(meta_path(target), json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
+    return load_document(target, layer=layer, root=root)
 
 
 def delete_document(path: Path) -> None:

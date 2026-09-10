@@ -14,12 +14,16 @@ from typing import Any, Mapping, Sequence
 from vaws_knowledge.canonical import canonical_json
 from vaws_knowledge.canonical import content_hash as packaged_content_hash
 from vaws_knowledge.local.backend import backend_for_config
+from vaws_knowledge.local.reconcile import remember_document
 from vaws_knowledge.markdown import (
     delete_document,
+    document_slug,
+    find_by_title,
     iter_markdown_files,
     load_document,
+    relative_posix,
     save_document,
-    slugify,
+    uri_for,
     utc_now,
 )
 from vaws_knowledge.server.layers import WRITABLE_LAYERS, ServiceConfig, load_config
@@ -53,13 +57,23 @@ def builtin_content_hash(entry: Mapping[str, Any]) -> str:
     return packaged_content_hash(entry)
 
 
-def candidate_root(config: ServiceConfig) -> Path:
+def candidate_root(config: ServiceConfig, *, create: bool = True) -> Path:
     mount = config.mount("candidate")
     if not mount.roots:
         raise CaptureRefused("candidate layer is not configured", layer="candidate")
     root = Path(mount.roots[0])
-    root.mkdir(parents=True, exist_ok=True)
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _proposed_identity(root: Path, heading: str) -> tuple[str, str, Path, bool]:
+    existing = find_by_title(root, heading, layer="candidate")
+    if existing is not None:
+        return existing.slug, existing.uri, existing.path, True
+    ident = document_slug(heading)
+    path = root / f"{ident}.md"
+    return ident, uri_for("candidate", relative_posix(path, root)), path, False
 
 
 def _title_and_content(
@@ -126,33 +140,34 @@ def capture(
             extra_evidence = entry.get("evidence")
 
     config = config or load_config()
-    root = candidate_root(config)
+    root = candidate_root(config, create=not dry_run)
+    ident, uri, path, updating = _proposed_identity(root, heading)
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "title": heading,
+            "slug": ident,
+            "uri": uri,
+            "path": str(path),
+            "layer": "candidate",
+            "index": "skipped",
+            "would_update": updating,
+        }
+
     document = save_document(
         root,
         layer="candidate",
         title=heading,
         content=body,
-        slug=slugify(heading),
+        path=path if updating else None,
+        slug=None if updating else ident,
         status="unverified",
         source=extra_source,
         conditions=extra_conditions,
         evidence=extra_evidence,
         captured_at=utc_now(),
     )
-    if dry_run:
-        document.path.unlink(missing_ok=True)
-        from vaws_knowledge.markdown import meta_path
-
-        meta_path(document.path).unlink(missing_ok=True)
-        return {
-            "ok": True,
-            "dry_run": True,
-            "title": document.title,
-            "slug": document.slug,
-            "uri": document.uri,
-            "layer": "candidate",
-            "index": "skipped",
-        }
 
     backend = backend_for_config(config)
     ok, detail = backend.available()
@@ -162,6 +177,7 @@ def capture(
         try:
             backend.upsert(document.uri, document.path.read_text(encoding="utf-8"), layer="candidate")
             indexed = True
+            remember_document(config, document)
         except Exception as exc:  # noqa: BLE001 - Markdown is already saved
             index_error = f"{type(exc).__name__}: {exc}"
     else:
@@ -199,7 +215,7 @@ def delete(
     root = candidate_root(config)
     target = None
     for path in iter_markdown_files(root):
-        document = load_document(path, layer="candidate")
+        document = load_document(path, layer="candidate", root=root)
         if ref in {document.uri, document.slug, str(document.path), document.path.name}:
             target = document
             break

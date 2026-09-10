@@ -125,3 +125,113 @@ class QueryMarkdown(unittest.TestCase):
             self.assertIn("project", layers)
             self.assertTrue(all(item["role"] == "reference" for item in payload["results"]))
             self.assertTrue(any("reference" in note.lower() for note in payload["notes"]))
+
+    def test_mounted_project_markdown_is_indexed_without_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            project = root / "project"
+            candidate = root / "candidate"
+            project.mkdir()
+            candidate.mkdir()
+            note = project / "project-note.md"
+            note.write_text(
+                "# Project graph knowledge\n\nProject graph padding uses a unique canary named projectquartz.\n",
+                encoding="utf-8",
+            )
+            config = support.build_config(
+                candidate=str(candidate), project=str(project), shared=False
+            )
+            config.retrieval = MemoryBackend()
+            payload = query(
+                config, text="project graph padding projectquartz", layers=["project"]
+            ).to_dict()
+            self.assertEqual(1, payload["count"], payload)
+            self.assertFalse(payload["unavailable"])
+            self.assertTrue(explain(config, str(note), layers=["project"])["found"])
+            again = query(
+                config, text="project graph padding projectquartz", layers=["project"]
+            ).to_dict()
+            self.assertEqual(1, again["count"])
+            self.assertEqual(1, len(config.retrieval.documents))
+
+    def test_deleted_markdown_is_dropped_from_the_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _config(tmp)
+            saved = capture(
+                title="candidate control",
+                content="Candidate graph padding canary named candidateamber.",
+                config=config,
+            )
+            pathlib.Path(saved["path"]).unlink()
+            after = query(config, text="candidate graph padding", layers=["candidate"]).to_dict()
+            self.assertEqual(0, after["count"], after)
+
+    def test_pending_capture_is_indexed_once_the_engine_returns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _config(tmp)
+            config.retrieval = UnavailableBackend("down")
+            pending = capture(
+                title="offline pending note",
+                content="Written while the index was down, unique token pendingonyx.",
+                config=config,
+            )
+            self.assertEqual("pending", pending["index"])
+            self.assertTrue(pathlib.Path(pending["path"]).is_file())
+            config.retrieval = MemoryBackend()
+            found = query(config, text="pendingonyx").to_dict()
+            self.assertEqual(1, found["count"], found)
+            self.assertFalse(found["unavailable"])
+
+    def test_reconcile_failure_keeps_markdown_and_degrades(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            project = root / "project"
+            candidate = root / "candidate"
+            project.mkdir()
+            candidate.mkdir()
+            path = project / "keep-me.md"
+            path.write_text("# Keep me\n\nunique token keepmequartz\n", encoding="utf-8")
+            config = support.build_config(
+                candidate=str(candidate), project=str(project), shared=False
+            )
+
+            class Boom(MemoryBackend):
+                def upsert(self, uri, content, *, layer, wait=True):
+                    del uri, content, layer, wait
+                    raise RuntimeError("embed failed")
+
+            config.retrieval = Boom()
+            payload = query(config, text="keepmequartz", layers=["project"]).to_dict()
+            self.assertTrue(path.is_file())
+            self.assertTrue(payload["degraded"])
+            self.assertEqual([], payload["results"])
+
+    def test_shared_markdown_is_not_swept_into_the_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            shared = root / "shared"
+            project = root / "project"
+            candidate = root / "candidate"
+            shared.mkdir()
+            project.mkdir()
+            candidate.mkdir()
+            (shared / "public.md").write_text(
+                "# Shared only\n\nunique token sharedonyx\n", encoding="utf-8"
+            )
+            config = support.build_config(
+                shared=str(shared), project=str(project), candidate=str(candidate)
+            )
+            backend = MemoryBackend()
+            upserts: list[str] = []
+            original = backend.upsert
+
+            def tracking(uri, content, *, layer, wait=True):
+                upserts.append(uri)
+                return original(uri, content, layer=layer, wait=wait)
+
+            backend.upsert = tracking  # type: ignore[method-assign]
+            config.retrieval = backend
+            payload = query(config, text="sharedonyx", layers=["shared"]).to_dict()
+            self.assertEqual([], upserts)
+            self.assertEqual(0, payload["count"])
+            self.assertNotIn("viking://resources/shared/public.md", backend.documents)

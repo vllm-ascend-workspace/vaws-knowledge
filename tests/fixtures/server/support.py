@@ -79,6 +79,8 @@ def build_config(
         mapping["identity"] = dict(identity)
     if policy:
         mapping["policy"] = dict(policy)
+    if isinstance(candidate, (str, pathlib.Path)):
+        mapping["state_root"] = str(pathlib.Path(candidate) / "instance")
     return load_config(mapping, env=dict(env or {}), base_dir=FIXTURES)
 
 

@@ -33,15 +33,18 @@ class LiveOpenViking(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
         candidate = root / "candidate"
+        project = root / "project"
         candidate.mkdir()
+        project.mkdir()
         state = root / "instance"
+        self.project = project
         self.config = load_config(
             {
                 "backend": "openviking",
                 "state_root": str(state),
                 "layers": {
                     "shared": {"enabled": False},
-                    "project": {"enabled": False},
+                    "project": {"root": str(project)},
                     "candidate": {"root": str(candidate)},
                 },
             },
@@ -89,3 +92,39 @@ class LiveOpenViking(unittest.TestCase):
         delete(updated["uri"], config=self.config)
         missing = query(self.config, text="slot mapping").to_dict()
         self.assertEqual([], missing["results"])
+
+    def test_project_add_edit_delete_and_pending_recovery(self) -> None:
+        note = self.project / "project-note.md"
+        note.write_text(
+            "# Project graph knowledge\n\nProject graph padding uses a unique canary named projectquartz.\n",
+            encoding="utf-8",
+        )
+        found = query(
+            self.config, text="project graph padding projectquartz", layers=["project"]
+        ).to_dict()
+        self.assertGreaterEqual(found["count"], 1, found)
+        self.assertFalse(found.get("unavailable"))
+        self.assertFalse(found.get("degraded"))
+        self.assertTrue(explain(self.config, str(note), layers=["project"]).get("found"))
+
+        note.write_text(
+            "# Project graph knowledge\n\nUpdated project padding canary named projectonyx.\n",
+            encoding="utf-8",
+        )
+        edited = query(self.config, text="projectonyx", layers=["project"]).to_dict()
+        self.assertGreaterEqual(edited["count"], 1, edited)
+        body = explain(self.config, str(note), layers=["project"])
+        self.assertIn("projectonyx", body["content"])
+        self.assertNotIn("projectquartz", body["content"])
+
+        note.unlink()
+        removed = query(self.config, text="projectonyx", layers=["project"]).to_dict()
+        self.assertEqual(0, removed["count"], removed)
+
+        pending_path = Path(self.config.mount("candidate").roots[0]) / "offline-pending.md"
+        pending_path.write_text(
+            "# Offline pending\n\nPending recovery canary named pendingonyx.\n",
+            encoding="utf-8",
+        )
+        recovered = query(self.config, text="pendingonyx", layers=["candidate"]).to_dict()
+        self.assertGreaterEqual(recovered["count"], 1, recovered)
