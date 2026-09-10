@@ -34,7 +34,7 @@ from vaws_knowledge.distribution.manifest import (
     RELEASE_SCHEMA,
     atomic_write_json,
     content_digest,
-    hash_tree,
+    hash_model_tree,
     is_git_sha,
     sha256_file,
     utc_now,
@@ -313,7 +313,7 @@ def build_pack(
         cache = Path(model_cache)
         if not cache.is_dir():
             raise BuildError(f"model cache {cache} is missing; cannot pin model file checksums")
-        manifest["embedding"]["model_files"] = hash_tree(cache)
+        manifest["embedding"]["model_files"] = hash_model_tree(cache)
 
     manifest_path = out_dir / f"{name}-{version_id}.release.json"
     atomic_write_json(manifest_path, manifest)

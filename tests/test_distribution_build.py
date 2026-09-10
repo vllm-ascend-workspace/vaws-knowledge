@@ -153,6 +153,30 @@ def test_build_pins_model_files(tmp_path):
     assert model_files == {"model.onnx", "tokenizer.json"}
 
 
+def test_model_pins_ignore_download_metadata_and_historical_snapshots(tmp_path):
+    from vaws_knowledge.distribution.manifest import hash_model_tree
+
+    caches = [tmp_path / "linux", tmp_path / "macos"]
+    revision = "a" * 40
+    for cache in caches:
+        repo = cache / "models--example--model"
+        snapshot = repo / "snapshots" / revision
+        snapshot.mkdir(parents=True)
+        (snapshot / "model.onnx").write_bytes(b"same-model")
+        (snapshot / "tokenizer.json").write_bytes(b"same-tokenizer")
+        (repo / "refs").mkdir()
+        (repo / "refs/main").write_text(revision)
+        (repo / "files_metadata.json").write_text(cache.name)
+    old = caches[1] / "models--example--model/snapshots" / ("b" * 40)
+    old.mkdir()
+    (old / "model.onnx").write_bytes(b"old-unused-model")
+    assert hash_model_tree(caches[0]) == hash_model_tree(caches[1])
+    assert len(hash_model_tree(caches[0])) == 2
+    active = caches[1] / "models--example--model/snapshots" / revision / "model.onnx"
+    active.write_bytes(b"changed-model")
+    assert hash_model_tree(caches[0]) != hash_model_tree(caches[1])
+
+
 def test_markdown_contract_directly():
     check_markdown_contract("a.md", "# Title\n\nBody.\n")
     check_markdown_contract("a.md", "Title line\n\nBody.\n")
