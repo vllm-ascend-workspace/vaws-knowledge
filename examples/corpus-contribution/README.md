@@ -12,7 +12,8 @@ not a live corpus and are not sent anywhere.
 | `conflict.md` | Opposite claim under the same conditions |
 | `insufficient-evidence.md` | Strong metric without evidence |
 | `related/graph-mode.md` | Already-published comparison target |
-| `trusted-review.yml` | CI template, not enabled |
+| `trusted-review.yml.tmpl` | CI template, not enabled (`.tmpl` keeps it out of YAML corpus gates) |
 
 `python -m vaws_knowledge.contribution` is the package entry. Do not copy
-`trusted-review.yml` into `.github/workflows` from this tree.
+the template into `.github/workflows` from this tree. The integrator must
+replace `<pin>` placeholders and supply OpenViking before enabling it.

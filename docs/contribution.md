@@ -94,13 +94,23 @@ Waiting for a reply blocks only that public contribution.
 
 ## Trusted CI template
 
-`examples/corpus-contribution/trusted-review.yml` is a template. It is not
-enabled in this repository and must not be copied live without the
-integrator pinning the trusted package version.
+`examples/corpus-contribution/trusted-review.yml.tmpl` is a template. The
+`.tmpl` suffix keeps it out of this package's YAML load/schema/redaction
+gates. It is not enabled here.
+
+Activation still requires the integrator to: copy it to the knowledge-content
+repository as a real workflow, drop the suffix, replace every `<pin>` with a
+reviewed action and `vaws-knowledge` version, configure OpenViking
+(`OPENVIKING_URL`) and xAI credentials, and enable the workflow on the
+default branch. Until those pins exist, live GitHub Actions is unverified.
 
 The secret-bearing job checks out the repository default branch, never the
-PR head, never installs or executes fork code, and fetches PR Markdown as
-data. Permission and provider errors are explicit.
+PR head, never installs or executes fork code, and reviews the immutable
+base→head change set. Unchanged README files are not selected as the
+contribution. Every knowledge Markdown change is classified. Unsupported
+paths (workflows, installable files, root README edits) refuse automatic
+merge. Missing, truncated, or unavailable recall/diff evidence does not
+permit publish. Permission and provider errors are explicit.
 
 ## Join points (Grok 1 / integrator)
 

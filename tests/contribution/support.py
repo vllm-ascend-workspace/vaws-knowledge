@@ -172,7 +172,13 @@ class FakeContributionGitHub:
         self.comments.append(item)
         return item
 
-    def add_markdown_tree(self, head: str, files: Mapping[str, bytes]) -> None:
+    def add_markdown_tree(
+        self,
+        head: str,
+        files: Mapping[str, bytes],
+        *,
+        truncated: bool = False,
+    ) -> None:
         tree = []
         for path, data in files.items():
             blob = encode_blob(data)
@@ -181,7 +187,7 @@ class FakeContributionGitHub:
             if path.endswith(".py") or path.endswith(".sh"):
                 mode = "100644"
             tree.append({"path": path, "mode": mode, "type": "blob", "sha": blob["sha"], "size": len(data)})
-        self.trees[head] = {"tree": tree, "truncated": False}
+        self.trees[head] = {"tree": tree, "truncated": truncated}
 
     def _fail(self, path: str) -> None:
         if self.network_down:
@@ -215,7 +221,7 @@ class FakeContributionGitHub:
         if "/git/trees/" in bare:
             sha = bare.rsplit("/git/trees/", 1)[-1]
             if sha not in self.trees:
-                raise GitHubError(404, path, "no tree")
+                return {"tree": [], "truncated": False}
             return dict(self.trees[sha])
         if "/git/blobs/" in bare:
             sha = bare.rsplit("/git/blobs/", 1)[-1]

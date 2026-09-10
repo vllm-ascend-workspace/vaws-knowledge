@@ -63,6 +63,66 @@ class Recall(Protocol):
     def related(self, query: str, *, limit: int = 8) -> RecallResult: ...
 
 
+class UnavailableRecall:
+    """Configured recall is missing, mismatched, or cannot be queried."""
+
+    def __init__(self, reason: str = "OpenViking recall is not configured") -> None:
+        self.reason = reason
+        self.corpus_git_sha: str | None = None
+
+    def related(self, query: str, *, limit: int = 8) -> RecallResult:
+        del query, limit
+        return RecallResult(ok=False, reason=self.reason, documents=[])
+
+
+def production_recall(
+    *,
+    base_sha: str,
+    environ: Any | None = None,
+    url: str | None = None,
+    client: Any | None = None,
+    corpus_sha: str | None = None,
+) -> Recall:
+    """Build the live OpenViking recall adapter. Never returns FixtureRecall.
+
+    A verified empty find result (ok=True, no hits) is distinct from this
+    unavailable adapter (ok=False). Missing URL/SDK, init failure, or a
+    corpus SHA that does not match the review base all fail closed.
+    """
+
+    import os
+
+    try:
+        expected_base = require_git_sha(base_sha)
+    except IdentityError:
+        return UnavailableRecall("review base is not a git identity")
+    if corpus_sha:
+        try:
+            expected_corpus = require_git_sha(corpus_sha)
+        except IdentityError:
+            return UnavailableRecall("recall corpus SHA is not a git identity")
+        if expected_corpus != expected_base:
+            return UnavailableRecall("recall corpus SHA does not match review base")
+    env = environ if environ is not None else os.environ
+    endpoint = (url or env.get("OPENVIKING_URL") or env.get("VAWS_OPENVIKING_URL") or "").strip()
+    live = client
+    if live is None:
+        if not endpoint:
+            return UnavailableRecall("OpenViking URL is not configured")
+        try:
+            from openviking_sdk import SyncHTTPClient
+        except ImportError as exc:
+            return UnavailableRecall(f"openviking_sdk is not installed: {exc}")
+        try:
+            live = SyncHTTPClient(url=endpoint)
+            initialize = getattr(live, "initialize", None)
+            if callable(initialize):
+                initialize()
+        except Exception as exc:  # noqa: BLE001
+            return UnavailableRecall(f"OpenViking client unavailable: {type(exc).__name__}: {exc}")
+    return OpenVikingRecall(live, corpus_git_sha=expected_base)
+
+
 class FixtureRecall:
     """In-memory recall for tests and offline fixtures."""
 
