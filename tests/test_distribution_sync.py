@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -23,6 +24,7 @@ from distribution.helpers import (
     metrics_reader_from,
 )
 
+from vaws_knowledge.distribution.errors import SwitchInProgress
 from vaws_knowledge.distribution.manifest import version_id_from_sha
 from vaws_knowledge.distribution.sync import (
     DistributionState,
@@ -263,24 +265,111 @@ def test_modified_and_deleted_content_follow_the_new_version(tmp_path):
 def test_busy_lock_blocks_second_switcher(tmp_path):
     state = tmp_path / "state"
     release = make_release_dir(tmp_path / "rel")
-    dist = DistributionState(state)
-    dist.root.mkdir(parents=True, exist_ok=True)
-    dist.lock_path.write_text(json.dumps({"pid": os.getpid(), "at": time.time()}))
-    result = _sync(state, release, FakeClient())
-    assert result.status == "busy"
-    assert "in progress" in result.reason
-    assert current_shared(state) is None
+    holder = SwitchLock(DistributionState(state).lock_path)
+    holder.acquire()
+    try:
+        result = _sync(state, release, FakeClient())
+        assert result.status == "busy"
+        assert "in progress" in result.reason
+        assert current_shared(state) is None
+    finally:
+        holder.release()
+    # After the holder finishes, the next check proceeds normally.
+    assert _sync(state, release, FakeClient()).status == "switched"
 
 
-def test_stale_lock_is_reclaimed(tmp_path):
-    state = tmp_path / "state"
-    release = make_release_dir(tmp_path / "rel")
-    dist = DistributionState(state)
-    dist.root.mkdir(parents=True, exist_ok=True)
-    dist.lock_path.write_text(json.dumps({"pid": os.getpid(), "at": time.time() - 3600}))
-    result = _sync(state, release, FakeClient(), lock_max_age_s=0.0)
-    assert result.status == "switched", result.reason
-    assert not dist.lock_path.exists()
+def test_aged_live_holder_keeps_lock(tmp_path):
+    """Review repro: a long valid import must never lose the lock to age."""
+
+    path = tmp_path / "sync.lock"
+    first = SwitchLock(path)
+    second = SwitchLock(path)
+    first.acquire()
+    old = time.time() - 7200
+    os.utime(path, (old, old))  # two hours old, but the owner is alive and holds it
+    with pytest.raises(SwitchInProgress):
+        second.acquire()
+    assert first.acquired and not second.acquired
+    first.release()
+    second.acquire()  # only after a real release
+    second.release()
+
+
+def test_partial_payload_window_stays_busy(tmp_path):
+    """A half-written/unreadable payload while another process holds the lock
+    is proof of activity, never of death."""
+
+    path = tmp_path / "sync.lock"
+    holder = SwitchLock(path)
+    holder.acquire()
+    try:
+        try:
+            fd = os.open(path, os.O_WRONLY)
+            try:
+                os.ftruncate(fd, 0)
+                os.write(fd, b"{partial")  # simulate the create->write window
+            finally:
+                os.close(fd)
+        except OSError:
+            pass  # Windows enforces the byte lock against tampering — also fine
+        with pytest.raises(SwitchInProgress):
+            SwitchLock(path).acquire()
+    finally:
+        holder.release()
+
+
+def test_old_owner_release_cannot_drop_replacement(tmp_path):
+    """After A releases and B acquires, a stale A.release() must be a no-op."""
+
+    path = tmp_path / "sync.lock"
+    first, second, third = SwitchLock(path), SwitchLock(path), SwitchLock(path)
+    first.acquire()
+    first.release()
+    second.acquire()
+    first.release()  # stale extra release from the old owner
+    with pytest.raises(SwitchInProgress):
+        third.acquire()
+    assert second.acquired and path.exists()
+    second.release()
+    third.acquire()
+    third.release()
+
+
+def test_real_subprocess_contention_and_crash_reclaim(tmp_path):
+    """Real cross-process proof: contention while held, reclaim after a crash."""
+
+    path = tmp_path / "sync.lock"
+    repo_root = Path(__file__).resolve().parent.parent
+    helper = (
+        "import time\n"
+        "from vaws_knowledge.distribution.sync import SwitchLock\n"
+        f"lock = SwitchLock({str(path)!r})\n"
+        "lock.acquire()\n"
+        "print('acquired', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    env = dict(os.environ, PYTHONPATH=str(repo_root))
+    proc = subprocess.Popen(
+        [sys.executable, "-c", helper],
+        stdout=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        assert proc.stdout is not None
+        assert proc.stdout.readline().strip() == "acquired"
+        with pytest.raises(SwitchInProgress):
+            SwitchLock(path).acquire()
+        proc.kill()  # crash: no release() runs, no payload cleanup
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+    # The OS released the crashed holder's lock: reclaim immediately.
+    reclaimed = SwitchLock(path)
+    reclaimed.acquire()
+    reclaimed.release()
 
 
 def test_concurrent_checks_have_one_switcher(tmp_path):

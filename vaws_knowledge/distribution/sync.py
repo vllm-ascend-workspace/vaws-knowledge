@@ -143,88 +143,93 @@ def current_shared(state_root: Path) -> dict[str, str] | None:
     }
 
 
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
+def _lock_file_nb(fd: int) -> None:
+    """Non-blocking exclusive lock on the open file; raises OSError when held."""
 
-        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        kernel32.CloseHandle(handle)
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 class SwitchLock:
-    """Single-active-switcher lock: atomic create, liveness + age staleness."""
+    """Single-active-switcher lock anchored on one persistent file.
 
-    def __init__(self, path: Path, *, max_age_s: float = 1800.0):
+    The lock itself is OS-managed (``fcntl.flock`` on POSIX, ``msvcrt.locking``
+    on Windows) and the OS releases it when the holder exits or crashes, so a
+    live holder stays exclusive for *any* duration and there is no stale
+    metadata to heuristically reclaim. The file is deliberately never
+    unlinked: an old owner's ``release`` only closes its own descriptor and
+    cannot delete a later acquisition. The JSON payload is diagnostic only —
+    liveness is never inferred from it, so a half-written payload during
+    another process's create→write window just yields a conservative ``busy``.
+    """
+
+    def __init__(self, path: Path):
         self.path = Path(path)
-        self.max_age_s = max_age_s
         self.acquired = False
+        self._fd: int | None = None
 
     def acquire(self) -> None:
+        if self.acquired:
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if os.name == "nt" and os.fstat(fd).st_size == 0:
+                os.write(fd, b" ")  # msvcrt.locking needs byte 0 to exist
+            _lock_file_nb(fd)
+        except OSError:
+            os.close(fd)
+            holder = read_json(self.path) or {}
+            raise SwitchInProgress(
+                "another switch is in progress "
+                f"(pid {holder.get('pid', '?')} since {holder.get('at', '?')}); "
+                "the next periodic check will retry"
+            ) from None
         payload = json.dumps(
-            {"pid": os.getpid(), "host": os.uname().nodename if hasattr(os, "uname") else "", "at": time.time()}
+            {
+                "pid": os.getpid(),
+                "host": os.uname().nodename if hasattr(os, "uname") else "",
+                "at": time.time(),
+            }
         )
-        for _attempt in range(2):
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                if self._steal_if_stale():
-                    continue
-                holder = read_json(self.path) or {}
-                raise SwitchInProgress(
-                    "another switch is in progress "
-                    f"(pid {holder.get('pid', '?')} since {holder.get('at', '?')}); "
-                    "the next periodic check will retry"
-                )
-            else:
-                with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                    stream.write(payload)
-                self.acquired = True
-                return
-        holder = read_json(self.path) or {}
-        raise SwitchInProgress(
-            f"another switch is in progress (pid {holder.get('pid', '?')}); retry later"
-        )
-
-    def _steal_if_stale(self) -> bool:
         try:
-            age = time.time() - self.path.stat().st_mtime
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, payload.encode("utf-8"))
         except OSError:
-            return False
-        holder = read_json(self.path) or {}
-        pid = holder.get("pid")
-        alive = isinstance(pid, int) and _pid_alive(pid)
-        if alive and age < self.max_age_s:
-            return False
-        try:
-            self.path.unlink()
-        except OSError:
-            return False
-        return True
+            pass  # diagnostic only; the OS lock is what excludes
+        self._fd = fd
+        self.acquired = True
 
     def release(self) -> None:
         if not self.acquired:
             return
+        fd, self._fd = self._fd, None
+        self.acquired = False
         try:
-            self.path.unlink()
+            _unlock_file(fd)
         except OSError:
             pass
-        self.acquired = False
+        os.close(fd)
 
     def __enter__(self) -> "SwitchLock":
         self.acquire()
@@ -340,7 +345,6 @@ def check_and_sync(
     metrics_reader: MetricsReader | None = None,
     model_cache: Path | None = None,
     keep_inactive: int = 1,
-    lock_max_age_s: float = 1800.0,
     smoke_query: str | None = None,
 ) -> SyncResult:
     """One periodic check: fetch -> verify -> import new version -> switch.
@@ -401,7 +405,7 @@ def check_and_sync(
                 )
             )
 
-    lock = SwitchLock(state.lock_path, max_age_s=lock_max_age_s)
+    lock = SwitchLock(state.lock_path)
     try:
         lock.acquire()
     except SwitchInProgress as exc:

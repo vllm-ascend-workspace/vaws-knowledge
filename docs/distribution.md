@@ -103,11 +103,16 @@ Behavior contract:
   non-active versions beyond `keep_inactive` (default 1, i.e. the previous
   version stays as a rollback window). `project`/`candidate` layers are never
   read or removed by sync.
-- **Concurrency**: one active switcher per state root, via an atomically
-  created lock file with PID liveness + age staleness (no POSIX-only flock,
-  no fork). A concurrent check returns `busy` and the next period retries.
-  No database file is overwritten in place, so Windows file locking is not an
-  issue: a new version is a new URI subtree.
+- **Concurrency**: one active switcher per state root via an OS-managed lock
+  on a persistent anchor file (`fcntl.flock` on POSIX, `msvcrt.locking` on
+  Windows — both stdlib, no fork, no POSIX-only semantics). A live holder
+  stays exclusive for any duration; the OS releases the lock when the holder
+  exits or crashes, so there is no stale-metadata guessing, and the anchor is
+  never unlinked, so an old owner's `release` cannot delete a later
+  acquisition. The JSON payload in the file is diagnostic only. A concurrent
+  check returns `busy` and the next period retries. No database file is
+  overwritten in place, so Windows file locking is not an issue: a new
+  version is a new URI subtree.
 
 `current_shared(state_root)` returns `None` or
 `{source_git_sha, root_uri, manifest_path}` — the local backend searches only
