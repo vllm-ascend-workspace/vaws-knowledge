@@ -183,8 +183,10 @@ def process_command(pid: int) -> str:
                 timeout=5,
             )
         else:
+            # Ownership markers can follow long executable/config paths.
+            # Ignore terminal width so a live owned process is not missed.
             completed = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "command="],
+                ["ps", "-ww", "-p", str(pid), "-o", "command="],
                 capture_output=True,
                 text=True,
                 timeout=5,

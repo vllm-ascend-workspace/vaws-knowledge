@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from vaws_knowledge.local.instance import (
     InstanceLock,
@@ -21,6 +22,22 @@ from vaws_knowledge.local.shared import current_shared, shared_search_uri
 
 
 class ProcessOwnership(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX process command width")
+    def test_marker_after_long_arguments_survives_narrow_terminal(self) -> None:
+        marker = "vaws-knowledge-long-command-marker"
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)", "x" * 512, marker],
+        )
+        try:
+            with mock.patch.dict(os.environ, {"COLUMNS": "40"}):
+                self.assertTrue(owned_process(proc.pid, marker))
+                self.assertFalse(owned_process(proc.pid, "unrelated-marker"))
+                self.assertTrue(stop_owned_pid(proc.pid, marker))
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=5)
+
     def test_owned_process_requires_command_marker(self) -> None:
         marker = "vaws-knowledge-ownership-marker"
         proc = subprocess.Popen(
