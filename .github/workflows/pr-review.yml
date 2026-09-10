@@ -60,6 +60,10 @@ jobs:
           '
           "${RUNNER_TEMP}/pkg/bin/vaws-knowledge" --help
           "${RUNNER_TEMP}/pkg/bin/python" -I -m vaws_knowledge --help
+          "${RUNNER_TEMP}/pkg/bin/python" -I -m vaws_knowledge skill > "${RUNNER_TEMP}/skill.md"
+          "${RUNNER_TEMP}/pkg/bin/python" -I -m vaws_knowledge skill --install-dir "${RUNNER_TEMP}/client-skills"
+          cmp "${RUNNER_TEMP}/skill.md" "${RUNNER_TEMP}/client-skills/curate-knowledge/SKILL.md"
+          test -s "${RUNNER_TEMP}/client-skills/curate-knowledge/agents/openai.yaml"
 
       - name: Contract suite
         run: python -m pytest -q tests

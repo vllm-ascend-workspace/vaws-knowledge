@@ -3,7 +3,7 @@
 Local Markdown knowledge for vLLM-Ascend development, with CPU retrieval through
 OpenViking, public contribution review, and prebuilt OVPack distribution.
 
-This is the 0.3.1 development interface. Capture accepts a title and body; it no
+This is the 0.3.2 development interface. Capture accepts a title and body; it no
 longer requires the previous v2 YAML authoring schema. Older interfaces are not
 held stable while these capabilities are being developed.
 
@@ -41,6 +41,14 @@ embedding. A model cache can be supplied through
 `VAWS_KNOWLEDGE_CONFIG` selects the layer/backend configuration.
 `VAWS_KNOWLEDGE_STATE` selects local runtime state. The MCP tools are
 `knowledge_query`, `knowledge_explain`, and `knowledge_capture`.
+
+For an explicit knowledge-editing task, read the package's optional skill with
+`vaws-knowledge skill`. It adds guidance on comparing conditions and conflicting
+observations; ordinary query and capture need no skill. Native clients can
+install the same packaged resource with
+`vaws-knowledge skill --install-dir <client-skill-directory>`.
+Reinstalling identical files is safe; use `--force` only to replace a differing
+installed copy. No workspace checkout is required.
 
 ## Public contribution
 
