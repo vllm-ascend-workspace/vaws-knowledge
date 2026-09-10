@@ -1,0 +1,56 @@
+# TEMPLATE ONLY. Not enabled.
+# Integrator copies this to the knowledge-content repository and pins
+# vaws-knowledge to a reviewed package version. Do not place this file in
+# this package's .github/workflows from the contribution worktree.
+#
+# Secret-bearing jobs check out the default branch, never the pull-request
+# head. PR Markdown is fetched as data. Fork code is not installed or executed.
+
+name: Trusted knowledge review
+
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      XAI_MODEL: ${{ vars.XAI_MODEL }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout trusted default branch only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the trusted knowledge package (pinned, never the PR)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "vaws-knowledge==0.2.0"
+
+      - name: Review PR markdown as data
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+        run: |
+          set -euo pipefail
+          python -m vaws_knowledge.contribution ci \
+            --event "$GITHUB_EVENT_PATH" \
+            --checkout-ref "${{ github.event.repository.default_branch }}" \
+            --json review.json
+          test -s review.json
