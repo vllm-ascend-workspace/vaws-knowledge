@@ -176,6 +176,16 @@ def test_model_pins_ignore_download_metadata_and_historical_snapshots(tmp_path):
     active.write_bytes(b"changed-model")
     assert hash_model_tree(caches[0]) != hash_model_tree(caches[1])
 
+    # Keeping old files must not let a client serving another revision pass.
+    from types import SimpleNamespace
+    from vaws_knowledge.distribution.pack import verify_model_files
+
+    manifest = SimpleNamespace(embedding={"model_files": hash_model_tree(caches[0])})
+    active.write_bytes(b"same-model")
+    assert verify_model_files(caches[1], manifest) == []
+    (caches[1] / "models--example--model/refs/main").write_text("b" * 40)
+    assert "active embedding model revision" in verify_model_files(caches[1], manifest)[0]
+
 
 def test_markdown_contract_directly():
     check_markdown_contract("a.md", "# Title\n\nBody.\n")
