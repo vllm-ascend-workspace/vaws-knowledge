@@ -29,7 +29,7 @@ jobs:
       - name: Install the package
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install -e '.[test]'
 
       - name: Build, install, and import the wheel outside the checkout
         run: |
@@ -62,7 +62,7 @@ jobs:
           "${RUNNER_TEMP}/pkg/bin/python" -I -m vaws_knowledge --help
 
       - name: Contract suite
-        run: python -m unittest discover -s tests
+        run: python -m pytest -q tests
 
       - name: Run the gates
         id: gates

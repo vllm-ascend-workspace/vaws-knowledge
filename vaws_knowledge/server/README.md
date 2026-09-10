@@ -5,9 +5,10 @@ plus a write path that can only ever touch the local one.
 
 ```
 layers.py      mount the three layers; absence is a reported state
-query.py       retrieval + coordinate matching + labelling
-capture.py     the write path (candidate layer only) and content_hash
+query.py       OpenViking retrieval over Markdown; known conditions optional
+capture.py     title + content Markdown write path (candidate layer only)
 mcp_server.py  stdio JSON-RPC MCP server, newline-delimited framing
+OpenViking     native storage/search; FastEmbed CPU embeddings on loopback
 ```
 
 Runtime dependency: the installed `vaws-knowledge` package (PyYAML is

@@ -50,7 +50,7 @@ from .layers import (
     load_config,
     shared_source,
 )
-from .query import READER_DIMENSIONS, SCOPE_DIMENSIONS, explain, query
+from .query import CONDITION_KEYS, explain, query
 
 SERVER_NAME = "vaws-knowledge"
 MCP_PROTOCOL_VERSION = "2025-11-25"
@@ -110,74 +110,44 @@ def read_message(stream: BinaryIO) -> dict[str, Any] | None:
 # tool schemas
 # --------------------------------------------------------------------------
 
-_COORDINATE_SCHEMA = {
+_CONDITION_SCHEMA = {
     "type": "object",
     "description": (
-        "The reader's own build. Every dimension you omit comes back as "
-        "'unchecked' on each result -- omission narrows nothing."
+        "Optional known conditions. Omitted or unknown keys stay unknown and "
+        "do not drop related experience."
     ),
-    "properties": {dim: {"type": "string"} for dim in SCOPE_DIMENSIONS},
-    "additionalProperties": False,
+    "properties": {name: {"type": "string"} for name in CONDITION_KEYS},
+    "additionalProperties": True,
 }
 
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "knowledge_query",
         "description": (
-            "Search the mounted knowledge layers. Default result set: shared + "
-            "project at status verified, plus stale (labelled with a warning) and "
-            "resolved (with its fix reference). Sourced references in those layers "
-            "are included even when unverified, labelled by source and trust, not "
-            "as local observations. Operational unverified rules and measurements "
-            "remain opt-in. Runtime entries whose scope does not cover the supplied "
-            "reader coordinate are dropped, not silently returned."
+            "Search local Markdown knowledge. Shared, project, and candidate are "
+            "returned together as reference material. Required input is text. "
+            "Known conditions may exclude explicit mismatches after retrieval. "
+            "Review status is a label, not a filter. An unavailable index is "
+            "labelled degraded and is never an authoritative no."
         ),
         "inputSchema": {
             "type": "object",
+            "required": ["text"],
             "properties": {
                 "text": {"type": "string", "description": "Free-text symptom or question."},
-                "fingerprint": {
-                    "type": "string",
-                    "description": "An observed signature, matched against rule.fingerprints.",
-                },
-                "reader_coordinate": _COORDINATE_SCHEMA,
+                "conditions": _CONDITION_SCHEMA,
+                "reader_coordinate": _CONDITION_SCHEMA,
                 "layers": {
                     "type": "array",
                     "items": {"enum": list(LAYERS)},
                     "description": "Override which layers are consulted.",
                 },
-                "statuses": {
-                    "type": "array",
-                    "items": {
-                        "enum": ["verified", "unverified", "stale", "deprecated", "resolved"]
-                    },
-                    "description": "Explicit status filter; replaces the default set.",
-                },
-                "include_unverified": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": (
-                        "Opt in to operational unverified rules and measurements, "
-                        "and to the candidate layer that holds them. Sourced "
-                        "references in shared/project are already in the default "
-                        "result set."
-                    ),
-                },
                 "include_non_matching": {
                     "type": "boolean",
                     "default": False,
-                    "description": (
-                        "Also return entries whose scope excludes the reader, "
-                        "labelled applies=false with the mismatching dimensions."
-                    ),
+                    "description": "Also return explicit condition mismatches, labelled applies=false.",
                 },
-                "kind": {"type": "string"},
-                "bodies": {
-                    "type": "array",
-                    "items": {"enum": ["rule", "measurement", "reference"]},
-                    "description": "Payload variants to return. Default: all supported bodies.",
-                },
-                "limit": {"type": "integer", "default": 20, "minimum": 1},
+                "limit": {"type": "integer", "default": 8, "minimum": 1},
             },
             "additionalProperties": False,
         },
@@ -185,24 +155,19 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "knowledge_capture",
         "description": (
-            "Write one entry into the candidate layer. Refuses any other layer: "
-            "shared and project are review-gated. Stamps provenance and computes "
-            "content_hash per docs/federation.md."
+            "Save one local candidate as Markdown. Required inputs are title and "
+            "content. Optional source, conditions, and evidence are kept when known. "
+            "Only the candidate layer is writable."
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["entry"],
+            "required": ["title", "content"],
             "properties": {
-                "entry": {
-                    "type": "object",
-                    "description": (
-                        "A schema v2 entry. Runtime bodies (rule/measurement) still "
-                        "require all twelve scope dimensions. A sourced reference "
-                        "body must not invent those coordinates. uuid, content_hash, "
-                        "provenance and lifecycle dates are stamped when absent."
-                    ),
-                },
-                "kind": {"type": "string", "default": "known-failure-signatures"},
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "source": {"type": "object"},
+                "conditions": _CONDITION_SCHEMA,
+                "evidence": {},
                 "layer": {
                     "enum": list(LAYERS),
                     "default": "candidate",
@@ -216,16 +181,16 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "knowledge_explain",
         "description": (
-            "Expand one entry by uuid into its full record: complete scope "
-            "coordinate, verification evidence, concrete verified_against "
-            "environment, lifecycle and conflicts."
+            "Expand one document by ref (URI, slug, or path) into its Markdown "
+            "body plus any stored source, conditions, and review status."
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["uuid"],
             "properties": {
-                "uuid": {"type": "string"},
-                "reader_coordinate": _COORDINATE_SCHEMA,
+                "ref": {"type": "string"},
+                "uuid": {"type": "string", "description": "Accepted as an alias of ref."},
+                "conditions": _CONDITION_SCHEMA,
+                "reader_coordinate": _CONDITION_SCHEMA,
                 "layers": {"type": "array", "items": {"enum": list(LAYERS)}},
             },
             "additionalProperties": False,
@@ -298,9 +263,9 @@ class KnowledgeService:
                 "degradation_contract": DEGRADATION_CONTRACT,
                 "official_mcp_sdk_importable": _sdk_available(),
                 "framing": "newline-delimited JSON-RPC (MCP stdio; SDK not required)",
-                "reader_coordinate_dimensions": list(READER_DIMENSIONS),
-                "scope_dimensions": list(SCOPE_DIMENSIONS),
+                "condition_keys": list(CONDITION_KEYS),
                 "writable_layers": ["candidate"],
+                "capture_required": ["title", "content"],
             }
         )
         return info
@@ -308,37 +273,36 @@ class KnowledgeService:
     # -- tools ------------------------------------------------------------
 
     def knowledge_query(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        text = str(args.get("text") or "").strip()
+        if not text:
+            raise ValueError("text is required")
         response = query(
             self.config,
-            text=args.get("text"),
-            fingerprint=args.get("fingerprint"),
-            reader_coordinate=args.get("reader_coordinate"),
+            text=text,
+            conditions=args.get("conditions") or args.get("reader_coordinate"),
             layers=args.get("layers"),
-            statuses=args.get("statuses"),
-            include_unverified=bool(args.get("include_unverified", False)),
             include_non_matching=bool(args.get("include_non_matching", False)),
-            kind=args.get("kind"),
-            bodies=args.get("bodies"),
-            limit=int(args.get("limit", 20) or 20),
-            today=self.today,
+            limit=int(args.get("limit", 8) or 8),
         )
         payload = response.to_dict()
         payload.update(self.envelope())
-        if not payload["results"]:
+        if payload.get("unavailable"):
+            payload["answer"] = "unknown"
+            payload["answer_detail"] = payload["no_result_meaning"]
+        elif not payload["results"]:
             payload["answer"] = "unknown"
             payload["answer_detail"] = payload["no_result_meaning"]
         return payload
 
     def knowledge_explain(self, args: Mapping[str, Any]) -> dict[str, Any]:
-        uuid = str(args.get("uuid") or "").strip()
-        if not uuid:
-            raise ValueError("uuid is required")
+        ident = str(args.get("ref") or args.get("uuid") or "").strip()
+        if not ident:
+            raise ValueError("ref is required")
         payload = explain(
             self.config,
-            uuid,
-            reader_coordinate=args.get("reader_coordinate"),
+            ident,
+            reader_coordinate=args.get("conditions") or args.get("reader_coordinate"),
             layers=args.get("layers"),
-            today=self.today,
         )
         payload.update(self.envelope())
         if not payload.get("found"):
@@ -346,15 +310,14 @@ class KnowledgeService:
         return payload
 
     def knowledge_capture(self, args: Mapping[str, Any]) -> dict[str, Any]:
-        entry = args.get("entry")
-        if not isinstance(entry, Mapping):
-            raise ValueError("entry must be an object")
         payload = capture(
-            entry,
-            kind=str(args.get("kind") or "known-failure-signatures"),
+            title=str(args.get("title") or ""),
+            content=str(args.get("content") or ""),
             layer=str(args.get("layer") or "candidate"),
             config=self.config,
-            today=self.today,
+            source=args.get("source") if isinstance(args.get("source"), Mapping) else None,
+            conditions=args.get("conditions") if isinstance(args.get("conditions"), Mapping) else None,
+            evidence=args.get("evidence"),
             dry_run=bool(args.get("dry_run", False)),
         )
         payload.update(self.envelope())
@@ -460,7 +423,7 @@ def handle_message(service: KnowledgeService, message: Mapping[str, Any]) -> dic
                     "experimental": {
                         "vaws-knowledge": {
                             "version": package_version(),
-                            "bodies": ["rule", "measurement", "reference"],
+                            "capture_required": ["title", "content"],
                         },
                     },
                 },

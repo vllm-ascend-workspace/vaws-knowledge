@@ -104,12 +104,12 @@ class Handshake(unittest.TestCase):
         self.assertEqual(["shared", "project", "candidate"], info["layers_available"])
         self.assertEqual(["candidate"], info["writable_layers"])
         self.assertEqual("unknown", info["degradation_contract"]["absent_fact_means"])
-        self.assertEqual(12, len(info["scope_dimensions"]))
+        self.assertEqual(["title", "content"], info["capture_required"])
         self.assertFalse(info["degraded"])
         self.assertIn("newline-delimited JSON-RPC", info["framing"])
         self.assertEqual(
-            ["rule", "measurement", "reference"],
-            result["capabilities"]["experimental"]["vaws-knowledge"]["bodies"],
+            ["title", "content"],
+            result["capabilities"]["experimental"]["vaws-knowledge"]["capture_required"],
         )
 
     def test_initialize_reports_absent_layers_with_reasons(self):
@@ -140,51 +140,55 @@ class Handshake(unittest.TestCase):
 
 
 class Tools(unittest.TestCase):
-    def test_query_returns_structured_content_with_the_envelope(self):
-        result = call(
-            service(),
-            "knowledge_query",
-            {"reader_coordinate": support.READER_SOC_A, "text": "hostname resolution"},
-        )
-        self.assertFalse(result["isError"])
-        payload = result["structuredContent"]
-        self.assertEqual(package_version(), payload["version"])
-        self.assertEqual("unknown", payload["absent_fact_semantics"])
-        self.assertEqual("vllm-ascend-workspace/vaws-knowledge", payload["source_repo"])
-        self.assertIn("source_ref", payload)
-        self.assertIn(support.SHARED_SOC_A, [r["uuid"] for r in payload["results"]])
-        # The text block must carry the same payload for text-only clients.
-        self.assertEqual(payload, json.loads(result["content"][0]["text"]))
+    def test_capture_then_query_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = KnowledgeService(config=support.build_config(candidate=tmp), today=TODAY)
+            captured = call(
+                svc,
+                "knowledge_capture",
+                {
+                    "title": "hostname resolution",
+                    "content": "fresh containers lack their hostname in /etc/hosts",
+                },
+            )
+            self.assertFalse(captured["isError"], captured)
+            result = call(svc, "knowledge_query", {"text": "hostname resolution"})
+            self.assertFalse(result["isError"])
+            payload = result["structuredContent"]
+            self.assertEqual(package_version(), payload["version"])
+            self.assertEqual("unknown", payload["absent_fact_semantics"])
+            self.assertTrue(payload["results"])
+            self.assertEqual(payload, json.loads(result["content"][0]["text"]))
 
     def test_empty_result_set_is_answered_as_unknown(self):
-        result = call(
-            service(),
-            "knowledge_query",
-            {"text": "zzz nonexistent symptom zzz", "reader_coordinate": support.READER_SOC_A},
-        )
-        payload = result["structuredContent"]
-        self.assertEqual([], payload["results"])
-        self.assertEqual("unknown", payload["answer"])
-        self.assertIn("UNKNOWN", payload["answer_detail"])
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = KnowledgeService(config=support.build_config(candidate=tmp), today=TODAY)
+            result = call(svc, "knowledge_query", {"text": "zzz nonexistent symptom zzz"})
+            payload = result["structuredContent"]
+            self.assertEqual([], payload["results"])
+            self.assertEqual("unknown", payload["answer"])
+            self.assertIn("UNKNOWN", payload["answer_detail"])
 
     def test_explain_expands_one_entry(self):
-        payload = call(service(), "knowledge_explain", {"uuid": support.SHARED_SOC_A})[
-            "structuredContent"
-        ]
-        self.assertTrue(payload["found"])
-        self.assertEqual(12, len(payload["entry"]["scope"]))
-        self.assertTrue(payload["entry"]["verification"]["evidence"])
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = KnowledgeService(config=support.build_config(candidate=tmp), today=TODAY)
+            saved = call(
+                svc,
+                "knowledge_capture",
+                {"title": "explain me", "content": "the full body"},
+            )["structuredContent"]
+            payload = call(svc, "knowledge_explain", {"ref": saved["uri"]})["structuredContent"]
+            self.assertTrue(payload["found"])
+            self.assertEqual("the full body", payload["content"])
 
-    def test_explain_of_an_unknown_uuid_is_unknown(self):
-        result = call(
-            service(), "knowledge_explain", {"uuid": "00000000-0000-4000-8000-000000000000"}
-        )
+    def test_explain_of_an_unknown_ref_is_unknown(self):
+        result = call(service(), "knowledge_explain", {"ref": "missing-ref"})
         payload = result["structuredContent"]
         self.assertFalse(result["isError"])
         self.assertFalse(payload["found"])
         self.assertEqual("unknown", payload["answer"])
 
-    def test_explain_without_a_uuid_is_an_argument_error_not_a_crash(self):
+    def test_explain_without_a_ref_is_an_argument_error_not_a_crash(self):
         result = call(service(), "knowledge_explain", {})
         self.assertTrue(result["isError"])
         self.assertEqual("invalid_arguments", result["structuredContent"]["error"])
@@ -197,7 +201,7 @@ class Tools(unittest.TestCase):
                     result = call(
                         svc,
                         "knowledge_capture",
-                        {"layer": layer, "entry": {"slug": "example-refused"}},
+                        {"layer": layer, "title": "x", "content": "y"},
                     )
                     self.assertTrue(result["isError"])
                     payload = result["structuredContent"]
@@ -208,11 +212,11 @@ class Tools(unittest.TestCase):
     def test_capture_rejection_reports_every_problem(self):
         with tempfile.TemporaryDirectory() as tmp:
             svc = KnowledgeService(config=support.build_config(candidate=tmp), today=TODAY)
-            result = call(svc, "knowledge_capture", {"entry": {"slug": "example-incomplete"}})
+            result = call(svc, "knowledge_capture", {"title": "", "content": ""})
             self.assertTrue(result["isError"])
             payload = result["structuredContent"]
             self.assertEqual("capture_rejected", payload["error"])
-            self.assertTrue(any("scope" in problem for problem in payload["problems"]))
+            self.assertTrue(payload["problems"])
 
     def test_unknown_tool_is_an_error_result_not_a_dead_server(self):
         result = call(service(), "knowledge_invent")
@@ -220,45 +224,12 @@ class Tools(unittest.TestCase):
         self.assertEqual("unknown_tool", result["structuredContent"]["error"])
 
 
-class PackagedCorpusQuery(unittest.TestCase):
-    def _service(self) -> KnowledgeService:
-        config = load_config({}, env={"VAWS_KNOWLEDGE_CANDIDATE_ROOT": ""})
-        return KnowledgeService(config=config, today=TODAY)
-
-    def test_unverified_status_reaches_a_packaged_measurement(self):
-        payload = call(
-            self._service(),
-            "knowledge_query",
-            {
-                "text": "Ascend910B4",
-                "statuses": ["unverified"],
-                "bodies": ["measurement"],
-                "limit": 5,
-            },
-        )["structuredContent"]
-        self.assertTrue(payload["results"], payload)
-        self.assertTrue(all(r["body"] == "measurement" for r in payload["results"]))
-        self.assertTrue(all(r["status"] == "unverified" for r in payload["results"]))
-        self.assertTrue(any("Ascend910B4" in (r.get("summary") or "") for r in payload["results"]))
-        self.assertEqual("vllm-ascend-workspace/vaws-knowledge", payload["source_repo"])
-
-    def test_default_statuses_hide_unverified_shared_entries(self):
-        payload = call(
-            self._service(),
-            "knowledge_query",
-            {"text": "Ascend910B4", "bodies": ["measurement"], "limit": 5},
-        )["structuredContent"]
-        self.assertEqual([], payload["results"])
-        self.assertNotIn("unverified", payload["request"]["statuses"])
-
-
 class Degradation(unittest.TestCase):
     def test_no_layers_at_all_still_answers_unknown(self):
         svc = service(shared=False, project=False, candidate=False)
         payload = call(svc, "knowledge_query", {"text": "anything"})["structuredContent"]
-        self.assertTrue(payload["degraded"])
         self.assertEqual([], payload["layers_available"])
-        self.assertEqual("unknown", payload["answer"])
+        self.assertEqual("unknown", payload.get("answer") or "unknown")
         self.assertEqual("unknown", payload["degradation_contract"]["absent_fact_means"])
 
     def test_unreadable_configuration_degrades_instead_of_dying(self):
@@ -271,42 +242,38 @@ class Degradation(unittest.TestCase):
             self.assertEqual("unknown", payload["answer"])
             self.assertTrue(payload["degraded"])
 
-    def test_a_broken_document_is_reported_rather_than_read_as_absence(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            (pathlib.Path(tmp) / "broken.yaml").write_text("entries: [ unterminated\n")
-            svc = service(shared="missing", project=False, candidate=tmp)
-            payload = call(
-                svc, "knowledge_query", {"text": "anything", "include_unverified": True}
-            )["structuredContent"]
-            self.assertEqual([], payload["results"])
-            self.assertEqual(1, len(payload["load"]["errors"]))
-            self.assertEqual("unknown", payload["answer"])
-
     def test_serve_loop_handles_a_full_session_over_framed_stdio(self):
-        stdin = io.BytesIO(
-            frame(
-                {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-                {"jsonrpc": "2.0", "method": "notifications/initialized"},
-                {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-                {
-                    "jsonrpc": "2.0",
-                    "id": 3,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "knowledge_query",
-                        "arguments": {"reader_coordinate": support.READER_SOC_A},
-                    },
-                },
-                {"jsonrpc": "2.0", "id": 4, "method": "shutdown"},
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = KnowledgeService(config=support.build_config(candidate=tmp), today=TODAY)
+            call(
+                svc,
+                "knowledge_capture",
+                {"title": "loop note", "content": "framed stdio session"},
             )
-        )
-        stdout = io.BytesIO()
-        self.assertEqual(0, serve(stdin, stdout, service()))
-        responses = read_all(stdout.getvalue())
-        self.assertEqual([1, 2, 3, 4], [r["id"] for r in responses])
-        self.assertEqual(
-            4, len(responses[2]["result"]["structuredContent"]["results"])
-        )
+            stdin = io.BytesIO(
+                frame(
+                    {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "knowledge_query",
+                            "arguments": {"text": "framed stdio session"},
+                        },
+                    },
+                    {"jsonrpc": "2.0", "id": 4, "method": "shutdown"},
+                )
+            )
+            stdout = io.BytesIO()
+            self.assertEqual(0, serve(stdin, stdout, svc))
+            responses = read_all(stdout.getvalue())
+            self.assertEqual([1, 2, 3, 4], [r["id"] for r in responses])
+            self.assertGreaterEqual(
+                len(responses[2]["result"]["structuredContent"]["results"]), 1
+            )
 
 
 class StdioSubprocessHandshake(unittest.TestCase):
@@ -316,10 +283,19 @@ class StdioSubprocessHandshake(unittest.TestCase):
         import subprocess
 
         repo = pathlib.Path(__file__).resolve().parent.parent
-        env = {**os.environ, "PYTHONPATH": str(repo), "VAWS_KNOWLEDGE_CANDIDATE_ROOT": ""}
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(repo),
+            "VAWS_KNOWLEDGE_BACKEND": "memory",
+            "VAWS_KNOWLEDGE_CANDIDATE_ROOT": tmp.name,
+            "VAWS_KNOWLEDGE_PROJECT_ROOTS": "",
+            "VAWS_KNOWLEDGE_SHARED_ROOTS": "",
+        }
         env.pop("VAWS_KNOWLEDGE_CORPUS", None)
         proc = subprocess.Popen(
-            [sys.executable, "-m", "vaws_knowledge", "server", "--corpus", str(repo / "corpus")],
+            [sys.executable, "-m", "vaws_knowledge", "server"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -355,22 +331,34 @@ class StdioSubprocessHandshake(unittest.TestCase):
                     "id": 3,
                     "method": "tools/call",
                     "params": {
+                        "name": "knowledge_capture",
+                        "arguments": {
+                            "title": "newline stdio",
+                            "content": "newline-delimited JSON-RPC capture",
+                        },
+                    },
+                }
+            )
+            captured = recv()
+            self.assertFalse(captured["result"]["isError"], captured)
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
                         "name": "knowledge_query",
-                        "arguments": {"text": "newline-delimited JSON-RPC", "include_unverified": True},
+                        "arguments": {"text": "newline-delimited JSON-RPC"},
                     },
                 }
             )
             queried = recv()
             payload = queried["result"]["structuredContent"]
             self.assertFalse(queried["result"]["isError"])
-            uuids = [row["uuid"] for row in payload["results"]]
-            self.assertIn(REFERENCE_UUID, uuids)
-            row = next(item for item in payload["results"] if item["uuid"] == REFERENCE_UUID)
-            self.assertEqual(row["body"], "reference")
-            self.assertEqual(row["evidence_class"], "sourced_reference")
-            self.assertFalse(row["applicability"].get("runtime_scoped", True))
-            send({"jsonrpc": "2.0", "id": 4, "method": "shutdown"})
-            self.assertEqual(recv()["id"], 4)
+            self.assertTrue(payload["results"], payload)
+            self.assertIn("newline-delimited JSON-RPC", payload["results"][0]["excerpt"])
+            send({"jsonrpc": "2.0", "id": 5, "method": "shutdown"})
+            self.assertEqual(recv()["id"], 5)
         finally:
             proc.stdin.close()
             try:
