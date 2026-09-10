@@ -1,0 +1,7 @@
+interface:
+  display_name: "Curate Knowledge"
+  short_description: "Review Markdown knowledge and preserve its conditions"
+  default_prompt: "Use $curate-knowledge to review related Markdown, consolidate compatible observations, and preserve unresolved differences."
+
+policy:
+  allow_implicit_invocation: false
