@@ -401,8 +401,9 @@ def _dir_gate_files(src: Path) -> list[Path]:
 
 def _safe_rel_parts(original_rel: str) -> tuple[str, ...]:
     parts: list[str] = []
-    for part in Path(original_rel).parts:
-        if part in ("", "."):
+    original = Path(original_rel)
+    for part in original.parts:
+        if part in ("", ".", original.anchor):
             continue
         if part == "..":
             parts.append("_up_")
@@ -798,9 +799,12 @@ def run_advisory(
         path = Path(raw)
         leaf = path if path.is_absolute() else (root / path)
         if leaf.is_symlink():
-            shown = os.path.relpath(os.path.abspath(str(leaf)), os.path.abspath(str(root))).replace(
-                os.sep, "/"
-            )
+            try:
+                shown = os.path.relpath(os.path.abspath(str(leaf)), os.path.abspath(str(root))).replace(
+                    os.sep, "/"
+                )
+            except ValueError:  # Different Windows drives; retain the link spelling.
+                shown = leaf.absolute().as_posix()
             return _artifact(
                 status="error",
                 paths=[shown],

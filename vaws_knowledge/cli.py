@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Callable
 
@@ -20,6 +21,10 @@ def _dispatch(handler: Callable[[list[str]], int], argv: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if os.name == "nt":
+        for stream in (sys.stdin, sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8")
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
         prog="vaws-knowledge",

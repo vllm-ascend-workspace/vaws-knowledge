@@ -82,9 +82,9 @@ class Proposal:
 
     def display_path(self, path: pathlib.Path) -> str:
         try:
-            return str(path.resolve().relative_to(pathlib.Path(self.plan.corpus_root).resolve().parent))
+            return path.resolve().relative_to(pathlib.Path(self.plan.corpus_root).resolve().parent).as_posix()
         except ValueError:
-            return str(path)
+            return path.as_posix()
 
     def branch_name(self) -> str:
         origin = re.sub(r"[^a-z0-9._-]+", "-", self.origin.lower()).strip("-") or "unknown-origin"

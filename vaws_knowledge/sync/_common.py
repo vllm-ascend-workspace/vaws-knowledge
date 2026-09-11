@@ -505,6 +505,8 @@ Runner = Callable[..., subprocess.CompletedProcess]
 def default_runner(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
+    if kwargs["text"]:
+        kwargs.setdefault("encoding", "utf-8")
     kwargs.setdefault("check", False)
     try:
         return subprocess.run(cmd, **kwargs)

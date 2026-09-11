@@ -341,17 +341,19 @@ def test_real_subprocess_contention_and_crash_reclaim(tmp_path):
     path = tmp_path / "sync.lock"
     repo_root = Path(__file__).resolve().parent.parent
     helper = (
-        "import time\n"
+        "import os, sys\n"
         "from vaws_knowledge.distribution.sync import SwitchLock\n"
         f"lock = SwitchLock({str(path)!r})\n"
         "lock.acquire()\n"
         "print('acquired', flush=True)\n"
-        "time.sleep(30)\n"
+        "sys.stdin.read(1)\n"
+        "os._exit(99)\n"
     )
     env = dict(os.environ, PYTHONPATH=str(repo_root))
     proc = subprocess.Popen(
         [sys.executable, "-c", helper],
         stdout=subprocess.PIPE,
+        stdin=subprocess.PIPE,
         text=True,
         env=env,
     )
@@ -360,8 +362,10 @@ def test_real_subprocess_contention_and_crash_reclaim(tmp_path):
         assert proc.stdout.readline().strip() == "acquired"
         with pytest.raises(SwitchInProgress):
             SwitchLock(path).acquire()
-        proc.kill()  # crash: no release() runs, no payload cleanup
-        proc.wait(timeout=10)
+        # Crash the actual lock holder, including behind a Windows venv
+        # redirector. Killing only the launcher does not prove holder exit.
+        proc.communicate("x", timeout=10)
+        assert proc.returncode == 99  # no release() or payload cleanup ran
     finally:
         if proc.poll() is None:
             proc.kill()

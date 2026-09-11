@@ -9,6 +9,11 @@ the first of those.
 
 The contract is therefore a CLI one:
 
+Commands accept either a shell command in the host shell's syntax or a JSON
+array of argument strings. Prefer the array form for generated commands: it
+preserves paths, Unicode and special characters on Windows and POSIX. Child
+Python streams use UTF-8, matching the protocol's input and output encoding.
+
   hash command      reads one entry on stdin, prints `sha256:<64 hex>` on
                     stdout, exits 0. Anything on stderr is ignored.
 
@@ -167,14 +172,24 @@ class CommandResult:
 
 def run_command(command: str, stdin_bytes: bytes, timeout: float):
     """Run one implementation command. Returns a CommandResult."""
+    argv = command
+    if command.lstrip().startswith("["):
+        try:
+            argv = json.loads(command)
+            if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv):
+                raise ValueError("command argv must be a non-empty array of strings")
+        except ValueError as exc:
+            return CommandResult(None, b"", str(exc).encode("utf-8"), "oserror")
     try:
         proc = subprocess.Popen(  # noqa: S602 - a command supplied by the caller
-            command,
-            shell=True,
+            argv,
+            shell=isinstance(argv, str),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
     except OSError as exc:
         return CommandResult(None, b"", str(exc).encode(), "oserror")
@@ -182,8 +197,13 @@ def run_command(command: str, stdin_bytes: bytes, timeout: float):
         stdout, stderr = proc.communicate(input=stdin_bytes, timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except OSError:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                               capture_output=True, timeout=8, check=False,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (OSError, subprocess.TimeoutExpired):
             proc.kill()
         try:
             stdout, stderr = proc.communicate(timeout=1)

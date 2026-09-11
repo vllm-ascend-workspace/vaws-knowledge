@@ -152,6 +152,7 @@ def bound_body(run_id: int = RUN_ID, head: str = SOURCE_SHA, pr: int = 5) -> str
     )
 
 
+@unittest.skipIf(os.name == "nt", "historical GitHub Actions bash fixture; current publisher is tested below")
 class OriginalShellRedControls(unittest.TestCase):
     """The exact 9cf5f779 comment shell, against an inert local gh."""
 

@@ -44,7 +44,7 @@ def write_yaml(path: Path, doc: Any) -> Path:
 def run_tool(name: str, *args: str, python: str | None = None) -> subprocess.CompletedProcess:
     """Run ``python -m vaws_knowledge <name> ARGS`` from the repo root."""
     cmd = [python or sys.executable, "-m", "vaws_knowledge", name, *args]
-    return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -142,7 +142,7 @@ class EnvironmentTests(unittest.TestCase):
             "from vaws_knowledge.cli import main\n"
             f"raise SystemExit(main(['validate', {str(EXAMPLE_ENTRY)!r}]))\n"
         )
-        proc = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True)
+        proc = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("jsonschema", proc.stderr)
         self.assertIn("pip install -e .", proc.stderr)

@@ -116,7 +116,7 @@ def json_pointer(path: Iterable[Any]) -> str:
 
 def relpath(path: Path) -> str:
     try:
-        return str(path.resolve().relative_to(Path.cwd()))
+        return path.resolve().relative_to(Path.cwd()).as_posix()
     except ValueError:
         return str(path)
 
@@ -131,5 +131,4 @@ def run_cli(main) -> None:
     except KeyboardInterrupt:
         code = 130
     sys.exit(code)
-
 

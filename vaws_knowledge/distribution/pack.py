@@ -30,6 +30,8 @@ _OVPACK_MANIFEST_SUFFIX = "/_ovpack/manifest.json"
 def _unsafe_member_reason(name: str) -> str | None:
     """Return why a zip member name is unsafe to unpack, else ``None``."""
 
+    if "\x00" in name:
+        return "NUL in member name"
     if not name or name.startswith("/") or name.startswith("\\"):
         return "absolute path"
     if "\\" in name:
@@ -92,7 +94,10 @@ def inspect_pack(pack_path: Path) -> PackInfo:
         names = archive.namelist()
         if not names:
             raise CorruptPack(f"{pack_path.name} is an empty archive")
-        for name in names:
+        # ZipInfo.filename normalizes backslashes on Windows and truncates
+        # NULs. Validate the raw archive spelling before using normalized names.
+        for info in archive.infolist():
+            name = info.orig_filename
             reason = _unsafe_member_reason(name)
             if reason:
                 raise CorruptPack(f"pack member {name!r} is unsafe to unpack: {reason}")

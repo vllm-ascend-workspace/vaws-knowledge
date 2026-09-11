@@ -525,15 +525,15 @@ class CollectControls(synctest.SyncTestCase):
         (fault / "jsonschema.py").write_text('raise RuntimeError("assembled-document validator crash")\n')
 
         def runner(cmd, **kw):
-            assembled = any("/exports/assembled/" in str(x) for x in cmd)
-            validate_script = any(str(x).endswith("/validate.py") for x in cmd)
+            assembled = any("/exports/assembled/" in str(x).replace("\\", "/") for x in cmd)
+            validate_script = any(str(x).replace("\\", "/").endswith("/validate.py") for x in cmd)
             validate_module = (
                 len(cmd) >= 4 and list(cmd[1:4]) == ["-m", "vaws_knowledge", "validate"]
             )
             if assembled and (validate_script or validate_module):
                 env = dict(os.environ)
                 env["PYTHONPATH"] = str(fault)
-                return subprocess.run(cmd, **kw, env=env, text=True, capture_output=True)
+                return subprocess.run(cmd, **kw, env=env, text=True, encoding="utf-8", capture_output=True)
             return synctest._common.default_runner(cmd, **kw)
 
         handoff = self.stash / "handoff"

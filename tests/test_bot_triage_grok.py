@@ -850,8 +850,14 @@ class UnsupportedSymlinks(unittest.TestCase):
         self.assertEqual(1, len(transport.calls))
 
     def test_ordinary_file_through_tmp_parent_alias_is_allowed(self):
-        with tempfile.TemporaryDirectory(prefix="vaws-advisory-alias-", dir="/tmp") as tmp:
-            path = _write_valid_yaml(pathlib.Path(tmp) / "entry.yaml")
+        with tempfile.TemporaryDirectory(prefix="vaws-advisory-alias-") as tmp:
+            physical = pathlib.Path(tmp) / "physical"
+            physical.mkdir()
+            alias = pathlib.Path(tmp) / "alias"
+            alias.symlink_to(physical, target_is_directory=True)
+            path = _write_valid_yaml(alias / "entry.yaml")
+            self.assertTrue(alias.is_symlink())
+            self.assertFalse(path.is_symlink())
             transport = FakeTransport(response=_load_response("empty-candidates.json"))
             artifact = _run([str(path)], transport=transport)
         _require_provider_path(artifact, transport)
@@ -860,9 +866,15 @@ class UnsupportedSymlinks(unittest.TestCase):
         self.assertFalse(path.is_symlink())
 
     def test_ordinary_directory_through_tmp_parent_alias_is_allowed(self):
-        with tempfile.TemporaryDirectory(prefix="vaws-advisory-alias-", dir="/tmp") as tmp:
-            root = pathlib.Path(tmp)
+        with tempfile.TemporaryDirectory(prefix="vaws-advisory-alias-") as tmp:
+            physical = pathlib.Path(tmp) / "physical"
+            physical.mkdir()
+            alias = pathlib.Path(tmp) / "alias"
+            alias.symlink_to(physical, target_is_directory=True)
+            root = alias / "selected"
             _write_valid_yaml(root / "entry.yaml")
+            self.assertTrue(alias.is_symlink())
+            self.assertFalse(root.is_symlink())
             transport = FakeTransport(response=_load_response("empty-candidates.json"))
             artifact = _run([str(root)], transport=transport)
         _require_provider_path(artifact, transport)

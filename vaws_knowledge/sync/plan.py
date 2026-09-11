@@ -319,9 +319,9 @@ def compute_plan(exports: list[dict], corpus: Corpus, *, day: str | None = None)
         # Paths are reported relative to the corpus parent (`corpus/<layer>/…`)
         # so plans and PR bodies never carry a machine-specific prefix.
         try:
-            return str(pathlib.Path(path).resolve().relative_to(corpus.root.resolve().parent))
+            return pathlib.Path(path).resolve().relative_to(corpus.root.resolve().parent).as_posix()
         except ValueError:
-            return str(path)
+            return pathlib.Path(path).as_posix()
 
     # First pass: detect uuids repeated inside the export set itself.
     seen_in_export: dict[str, int] = {}

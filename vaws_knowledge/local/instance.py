@@ -154,17 +154,22 @@ def pid_alive(pid: int) -> bool:
 
 def _windows_pid_alive(pid: int) -> bool:
     import ctypes
+    from ctypes import wintypes
 
-    process_query_limited = 0x1000
-    synchronize = 0x00100000
-    still_active = 259
-    handle = ctypes.windll.kernel32.OpenProcess(process_query_limited | synchronize, False, pid)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000, False, pid)
     if not handle:
-        return False
-    code = ctypes.c_ulong()
-    ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-    ctypes.windll.kernel32.CloseHandle(handle)
-    return bool(ok) and int(code.value) == still_active
+        return ctypes.get_last_error() == 5
+    try:
+        return kernel.WaitForSingleObject(handle, 0) == 0x102
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def process_command(pid: int) -> str:
@@ -177,11 +182,14 @@ def process_command(pid: int) -> str:
                     "powershell",
                     "-NoProfile",
                     "-Command",
+                    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
                     f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine",
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         else:
             # Ownership markers can follow long executable/config paths.
@@ -221,19 +229,20 @@ def stop_owned_pid(pid: int, marker: str) -> bool:
             )
         else:
             os.kill(pid, signal.SIGTERM)
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
-    try:
-        os.waitpid(pid, os.WNOHANG)
-    except (ChildProcessError, OSError):
-        pass
+    def reap():
+        if os.name != "nt":
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except (ChildProcessError, OSError):
+                pass
+
+    reap()
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline and pid_alive(pid):
         time.sleep(0.1)
-        try:
-            os.waitpid(pid, os.WNOHANG)
-        except (ChildProcessError, OSError):
-            pass
+        reap()
     if pid_alive(pid) and owned_process(pid, marker):
         try:
             if os.name == "nt":
@@ -245,12 +254,13 @@ def stop_owned_pid(pid: int, marker: str) -> bool:
                 )
             elif hasattr(signal, "SIGKILL"):
                 os.kill(pid, signal.SIGKILL)
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             return False
-    try:
-        os.waitpid(pid, 0)
-    except (ChildProcessError, OSError):
-        pass
+    deadline = time.monotonic() + 5
+    while pid_alive(pid) and time.monotonic() < deadline:
+        reap()
+        time.sleep(0.1)
+    reap()
     return not pid_alive(pid)
 
 
@@ -397,8 +407,6 @@ class LocalInstance:
             self.config_path.chmod(0o600)
             env = loopback_env()
             env["VAWS_KNOWLEDGE_STATE"] = str(self.state_root)
-            embed_log = (self.log_dir / "embedding.log").open("w", encoding="utf-8")
-            ov_log = (self.log_dir / "openviking.log").open("w", encoding="utf-8")
             embed_cmd = [
                 sys.executable,
                 "-m",
@@ -419,9 +427,10 @@ class LocalInstance:
                     f"OpenViking {OPENVIKING_VERSION}"
                 )
             ov_cmd = [ov_bin, "--config", str(self.config_path)]
-            embed_proc = subprocess.Popen(
-                embed_cmd, env=env, stdout=embed_log, stderr=subprocess.STDOUT, **_popen_kwargs()
-            )
+            with (self.log_dir / "embedding.log").open("ab") as embed_log:
+                embed_proc = subprocess.Popen(
+                    embed_cmd, env=env, stdout=embed_log, stderr=subprocess.STDOUT, **_popen_kwargs()
+                )
             try:
                 self._wait_proc_health(
                     embed_proc,
@@ -430,9 +439,10 @@ class LocalInstance:
                     log_path=self.log_dir / "embedding.log",
                     name="embedding server",
                 )
-                ov_proc = subprocess.Popen(
-                    ov_cmd, env=env, stdout=ov_log, stderr=subprocess.STDOUT, **_popen_kwargs()
-                )
+                with (self.log_dir / "openviking.log").open("ab") as ov_log:
+                    ov_proc = subprocess.Popen(
+                        ov_cmd, env=env, stdout=ov_log, stderr=subprocess.STDOUT, **_popen_kwargs()
+                    )
                 try:
                     self._wait_proc_health(
                         ov_proc,
@@ -497,10 +507,14 @@ class LocalInstance:
     def _stop_owned(self, record: dict[str, Any]) -> None:
         ov_pid = record.get("openviking_pid")
         embed_pid = record.get("embedding_pid")
-        if isinstance(ov_pid, int):
-            stop_owned_pid(ov_pid, self.openviking_marker)
-        if isinstance(embed_pid, int):
-            stop_owned_pid(embed_pid, self.embedding_marker)
+        pending = []
+        for pid, marker in ((ov_pid, self.openviking_marker), (embed_pid, self.embedding_marker)):
+            if isinstance(pid, int):
+                stopped = stop_owned_pid(pid, marker)
+                if not stopped and owned_process(pid, marker):
+                    pending.append(pid)
+        if pending:
+            raise RuntimeError(f"knowledge processes did not stop: {pending}; ownership record preserved")
         if self.pid_path.exists():
             try:
                 self.pid_path.unlink()

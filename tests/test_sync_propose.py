@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "sync"))
 
@@ -260,9 +261,14 @@ class OpenPullRequestOffline(synctest.SyncTestCase):
 
     def test_creates_branch_commit_and_pr_without_force(self):
         e = self.new_entry("pr-one")
-        tmp_root = pathlib.Path(synctest.tempfile.gettempdir()).resolve()
-        worktrees_before = set(tmp_root.glob("vaws-sync-*"))
-        result = self._open(self.make_export([e]))
+        created = []
+        original = propose_mod.tempfile.mkdtemp
+        def temporary(*args, **kwargs):
+            path = original(*args, **kwargs)
+            created.append(pathlib.Path(path))
+            return path
+        with mock.patch.object(propose_mod.tempfile, "mkdtemp", side_effect=temporary):
+            result = self._open(self.make_export([e]))
         self.assertEqual("created", result.status, result.detail)
         self.assertEqual("https://example.invalid/pr/1", result.url)
         create = [c for c in self.gh_calls if c[1:3] == ["pr", "create"]]
@@ -284,7 +290,8 @@ class OpenPullRequestOffline(synctest.SyncTestCase):
         # the caller's working tree and main are untouched
         self.assertEqual("main", subprocess.run(["git", "-C", str(self.repo), "branch", "--show-current"],
                                                 capture_output=True, text=True).stdout.strip())
-        self.assertEqual(worktrees_before, set(tmp_root.glob("vaws-sync-*")), "worktree cleaned up")
+        self.assertTrue(created)
+        self.assertFalse(any(path.exists() for path in created), "owned worktrees cleaned up")
 
     def test_reopening_the_same_proposal_reports_the_existing_pr(self):
         e = self.new_entry("pr-two")

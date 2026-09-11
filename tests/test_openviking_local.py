@@ -55,10 +55,7 @@ class LiveOpenViking(unittest.TestCase):
     def tearDown(self) -> None:
         from vaws_knowledge.local.instance import instance_for_config
 
-        try:
-            instance_for_config(self.config).stop()
-        except Exception:  # noqa: BLE001
-            pass
+        instance_for_config(self.config).stop()
 
     def test_capture_query_update_delete_and_restart(self) -> None:
         first = capture(

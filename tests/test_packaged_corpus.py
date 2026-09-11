@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -106,11 +107,20 @@ class WheelShipsCorpus(unittest.TestCase):
 
             venv = tmp / "venv"
             subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-            python = venv / "bin" / "python"
+            python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             subprocess.run(
-                [str(python), "-m", "pip", "install", "--quiet", str(wheel)],
+                [str(python), "-m", "pip", "install", "--quiet", "--no-deps", "--no-index", str(wheel)],
                 check=True,
             )
+            # This checks wheel contents, not dependency resolution. Reuse only
+            # the existing YAML parser to avoid downloading the entire engine
+            # stack again; the package under test still comes from the wheel.
+            import yaml
+            purelib = Path(subprocess.check_output(
+                [str(python), "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
+                text=True,
+            ).strip())
+            shutil.copytree(Path(yaml.__file__).parent, purelib / "yaml")
             script = r"""
 import json
 from pathlib import Path
@@ -132,7 +142,7 @@ print(json.dumps({
     "file_count": len(files),
     "files": files,
     "hashes": hashes,
-    "packaged": "site-packages" in str(root) and "/data/corpus" in str(root),
+    "packaged": "site-packages" in root.as_posix() and "/data/corpus" in root.as_posix(),
 }))
 """
             proc = subprocess.run(
