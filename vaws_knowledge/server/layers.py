@@ -135,8 +135,21 @@ class ServiceConfig:
     def mount(self, layer: str) -> Mount:
         return self.mounts.get(layer, Mount(layer=layer, absent_reason="unknown layer"))
 
+    def _layer_available(self, layer: str) -> bool:
+        mount = self.mount(layer)
+        if mount.present:
+            return True
+        # Explicitly disabled layers have no roots. An enabled shared source
+        # may disappear after its independent OVPack has been imported.
+        if layer != "shared" or not mount.roots:
+            return False
+        from vaws_knowledge.local.instance import instance_for_config
+        from vaws_knowledge.local.shared import current_shared
+
+        return bool(current_shared(instance_for_config(self).state_root))
+
     def available_layers(self) -> list[str]:
-        return [name for name in LAYERS if self.mounts.get(name, Mount(name)).present]
+        return [name for name in LAYERS if self._layer_available(name)]
 
     def absent_layers(self, layers: Sequence[str] | None = None) -> dict[str, str]:
         wanted = [name for name in (layers or LAYERS) if name in LAYERS]
@@ -145,7 +158,7 @@ class ServiceConfig:
             mount = self.mounts.get(name)
             if mount is None:
                 out[name] = "not configured"
-            elif not mount.present:
+            elif not self._layer_available(name):
                 out[name] = mount.absent_reason or "not present"
         return out
 
@@ -159,10 +172,11 @@ class ServiceConfig:
 
     def consulted(self, layers: Sequence[str] | None = None) -> dict[str, Any]:
         wanted = [name for name in (layers or LAYERS) if name in LAYERS]
+        absent = self.absent_layers(wanted)
         return {
-            "layers_available": [name for name in wanted if self.mount(name).present],
-            "layers_absent": self.absent_layers(wanted),
-            "degraded": self.degraded(wanted),
+            "layers_available": [name for name in wanted if name not in absent],
+            "layers_absent": absent,
+            "degraded": bool(absent),
         }
 
     def describe(self) -> dict[str, Any]:

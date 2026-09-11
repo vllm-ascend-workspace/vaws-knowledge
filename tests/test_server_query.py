@@ -236,6 +236,63 @@ class QueryMarkdown(unittest.TestCase):
 
 
 class SharedReferenceRoundTrip(unittest.TestCase):
+    def _index_shared_pack(self, config):
+        from vaws_knowledge.distribution.sync import CURRENT_SCHEMA, DistributionState
+
+        root_uri = "viking://resources/shared/current-version"
+        ref = root_uri + "/corpus/context.md"
+        config.retrieval = MemoryBackend()
+        config.retrieval.upsert(
+            ref, "# Shared observation\n\npackcanary: Only observed once; cause unknown.\n",
+            layer="shared",
+        )
+        DistributionState(config.state_root).write_current({
+            "schema": CURRENT_SCHEMA,
+            "version_id": "current-version",
+            "source_git_sha": "a" * 40,
+            "root_uri": root_uri,
+            "manifest_path": str(config.state_root / "manifest.json"),
+        })
+        return ref
+
+    def test_active_pack_remains_queryable_when_source_directory_is_missing(self):
+        from vaws_knowledge.server.mcp_server import KnowledgeService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            config = support.build_config(
+                shared=str(root / "retired-source"), candidate=str(root / "candidate"),
+            )
+            ref = self._index_shared_pack(config)
+            service = KnowledgeService(config=config)
+            self.assertFalse(config.mount("shared").present)
+            self.assertIn("shared", config.available_layers())
+            self.assertNotIn("shared", config.absent_layers())
+            found, error = service.call_tool("knowledge_query", {"text": "packcanary"})
+            self.assertFalse(error, found)
+            self.assertFalse(found["degraded"], found)
+            self.assertEqual([ref], [item["ref"] for item in found["results"]])
+            original, error = service.call_tool("knowledge_explain", {"ref": ref})
+            self.assertFalse(error, original)
+            self.assertTrue(original["found"], original)
+            self.assertFalse(original["degraded"], original)
+            self.assertIn("cause unknown", original["content"])
+            self.assertEqual("a" * 40, original["source_git_sha"])
+
+    def test_active_pack_does_not_reenable_explicitly_disabled_shared_layer(self):
+        cases = (
+            (False, {}),
+            ("missing", {"VAWS_KNOWLEDGE_SHARED_ROOTS": ""}),
+            ("missing", {"VAWS_KNOWLEDGE_LAYERS": "project,candidate"}),
+        )
+        for shared, env in cases:
+            with self.subTest(shared=shared, env=env), tempfile.TemporaryDirectory() as tmp:
+                config = support.build_config(shared=shared, candidate=tmp, env=env)
+                ref = self._index_shared_pack(config)
+                self.assertNotIn("shared", config.available_layers())
+                self.assertEqual([], query(config, text="packcanary", layers=["shared"]).results)
+                self.assertFalse(explain(config, ref, layers=["shared"])["found"])
+
     def test_mounted_shared_markdown_is_searchable_without_a_pack(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
