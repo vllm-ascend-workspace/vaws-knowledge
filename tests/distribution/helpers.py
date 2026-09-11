@@ -97,7 +97,10 @@ def make_pack(
                 {"kind": "file", "path": entry["path"], "sha256": entry["sha256"], "size": entry["size"]}
             )
         for name, data in (extra_members or {}).items():
-            archive.writestr(name, data)
+            info = zipfile.ZipInfo(name)
+            # Preserve intentionally malformed raw spellings on Windows too.
+            info.filename = name
+            archive.writestr(info, data)
         embedded = {
             "content_sha256": "0" * 64,
             "entries": manifest_entries,

@@ -102,9 +102,17 @@ capture identity, read-only dry runs, project/candidate reconciliation, contribu
 review bounds, portable switch-lock ownership, and native OVPack
 build/import/version-switch/restart with no document re-embedding during import.
 
-Windows runtime verification and live xAI review are deferred. Native tests require an existing model cache;
-see `tests/test_openviking_local.py` and
+Native Windows regression coverage includes UTF-8 CLI pipes, conformance commands,
+cross-drive paths, distribution locks and the live OpenViking capture/query/update/
+delete/restart lifecycle. Use `.venv/Scripts/python.exe -m pytest tests` after
+installing the test extra. The dense distribution chain requires an existing model
+cache; see `tests/test_openviking_local.py` and
 `tests/distribution/test_native_chain.py` for their environment variables.
+Live xAI review remains outside these local tests.
+
+Generated conformance commands can use a JSON array of argument strings to
+preserve paths and special characters on Windows and POSIX. Plain command strings
+still use the host shell's syntax. The implementation subprocess protocol is UTF-8.
 
 The repository still contains corpus validation/redaction and v2 corpus data.
 Those maintenance tools do not impose the old authoring schema or trust ranking

@@ -120,7 +120,7 @@ def _launch(cmd: list[str], log_path: Path, owned: list[subprocess.Popen]) -> su
     with log_path.open("w", encoding="utf-8") as log:
         kwargs: dict = {"stdout": log, "stderr": subprocess.STDOUT, "env": env}
         if os.name == "nt":
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         else:
             kwargs["start_new_session"] = True
         proc = subprocess.Popen(cmd, **kwargs)
@@ -134,7 +134,9 @@ def _stop_all(owned: list[subprocess.Popen]) -> None:
             continue
         try:
             if os.name == "nt":
-                proc.terminate()
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                               capture_output=True, timeout=10, check=False,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
             else:
                 os.killpg(proc.pid, signal.SIGTERM)
         except OSError:
@@ -196,7 +198,7 @@ def _data_client(port: int, root_key: str):
 
 
 def _git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()
 

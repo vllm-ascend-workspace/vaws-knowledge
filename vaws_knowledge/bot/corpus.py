@@ -293,7 +293,11 @@ def relpath(path: Path, root: Path) -> str:
     try:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
-        return os.path.relpath(path.resolve(), root.resolve()).replace(os.sep, "/")
+        try:
+            return os.path.relpath(path.resolve(), root.resolve()).replace(os.sep, "/")
+        except ValueError:
+            # A caller may select a document from a different Windows drive.
+            return path.resolve().as_posix()
 
 
 def discover_yaml(paths: Iterable[str | Path], root: Path) -> list[Path]:

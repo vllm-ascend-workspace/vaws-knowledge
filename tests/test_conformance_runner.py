@@ -21,7 +21,8 @@ merely from the code that produced them.
 """
 
 import pathlib
-import shlex
+import json
+import os
 import subprocess
 import sys
 import unittest
@@ -48,6 +49,7 @@ def run_runner(*args, timeout=180):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
         timeout=timeout,
         cwd=REPO,
     )
@@ -55,7 +57,7 @@ def run_runner(*args, timeout=180):
 
 def impl(name, *extra):
     parts = [PY, str(FIXTURES / name), *extra]
-    return " ".join(shlex.quote(part) for part in parts)
+    return json.dumps(parts)
 
 
 def status_of(output, vector_id):
@@ -68,7 +70,7 @@ def status_of(output, vector_id):
 
 class HashVectors(unittest.TestCase):
     def test_reference_implementation_passes_every_vector(self):
-        result = run_runner("--hash-cmd", f"{PY} {REFERENCE}")
+        result = run_runner("--hash-cmd", json.dumps([PY, str(REFERENCE)]))
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertNotIn("FAIL", result.stdout)
         self.assertIn("conformance PASSED", result.stdout)
@@ -263,21 +265,21 @@ class RunnerContract(unittest.TestCase):
         self.assertIn("[group: anchor-scope-rule]", result.stdout)
 
     def test_skipping_a_gate_is_not_passing_it(self):
-        result = run_runner("--hash-cmd", f"{PY} {REFERENCE}")
+        result = run_runner("--hash-cmd", json.dumps([PY, str(REFERENCE)]))
         self.assertEqual(0, result.returncode)
         self.assertIn("SKIP  schema-valid-control", result.stdout)
         self.assertIn("skipped", result.stdout)
 
     def test_running_nothing_at_all_is_a_failure(self):
         result = run_runner(
-            "--hash-cmd", f"{PY} {REFERENCE}", "--only", "no-such-vector-id"
+            "--hash-cmd", json.dumps([PY, str(REFERENCE)]), "--only", "no-such-vector-id"
         )
         self.assertEqual(1, result.returncode)
         self.assertIn("nothing was actually run", result.stdout)
 
     def test_a_missing_vector_directory_is_reported_not_raised(self):
         result = run_runner(
-            "--hash-cmd", f"{PY} {REFERENCE}", "--vectors", "/nonexistent/vectors"
+            "--hash-cmd", json.dumps([PY, str(REFERENCE)]), "--vectors", "/nonexistent/vectors"
         )
         self.assertEqual(2, result.returncode)
         self.assertIn("no such vector directory", result.stderr)
@@ -461,13 +463,14 @@ class GateVerdictContract(unittest.TestCase):
             REJECT_VECTOR,
         )
         self._assert_protocol_failure(result)
-        self.assertRegex(result.stdout, r"exit 12[67]")
+        self.assertRegex(result.stdout, r"exit: 1\b" if os.name == "nt" else r"exit 12[67]")
 
     def test_signal_termination_is_a_protocol_failure(self):
         result = run_protocol("--signal", "15")
         self._assert_protocol_failure(result)
         self.assertTrue(
-            "signal" in result.stdout or "exit 143" in result.stdout,
+            "signal" in result.stdout or "exit 143" in result.stdout or
+            (os.name == "nt" and "exit 15" in result.stdout),
             result.stdout,
         )
 
@@ -592,12 +595,11 @@ class RealToolAdapter(unittest.TestCase):
         except ImportError:
             self.skipTest("vaws_knowledge.validate is not importable")
         fault = FIXTURES / "fault_jsonschema"
-        cmd = (
-            "env PYTHONPATH="
-            + shlex.quote(str(fault))
-            + " "
-            + impl("gate_tools_adapter.py", "schema")
-        )
+        cmd = json.dumps([
+            PY, "-c", "import runpy,sys;sys.path.insert(0,sys.argv.pop(1));"
+            "script=sys.argv.pop(1);sys.argv[0]=script;runpy.run_path(script,run_name='__main__')",
+            str(fault), str(FIXTURES / "gate_tools_adapter.py"), "schema",
+        ])
         result = run_runner("--schema-cmd", cmd, "--only", REJECT_VECTOR)
         combined = result.stdout + result.stderr
         self.assertEqual(1, result.returncode, combined)

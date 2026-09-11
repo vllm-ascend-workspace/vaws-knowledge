@@ -20,6 +20,7 @@ def run_git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.Co
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

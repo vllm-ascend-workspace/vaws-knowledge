@@ -122,9 +122,9 @@ def entries_below(corpus: Corpus, target: str) -> tuple[list[Located], int]:
 
 def _rel(corpus: Corpus, path: pathlib.Path) -> str:
     try:
-        return str(pathlib.Path(path).resolve().relative_to(corpus.root.resolve().parent))
+        return pathlib.Path(path).resolve().relative_to(corpus.root.resolve().parent).as_posix()
     except ValueError:
-        return str(path)
+        return pathlib.Path(path).as_posix()
 
 
 def _remediation(corpus: Corpus, loc: Located, target: str) -> list[str]:

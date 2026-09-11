@@ -1,0 +1,35 @@
+name: Native Windows contracts
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+          activate-environment: false
+      - name: Install the complete local knowledge backend
+        run: |
+          uv venv
+          uv pip install -e '.[test]'
+      - name: Native capture, query, distribution, CLI and OpenViking lifecycle
+        env:
+          HOME: ${{ runner.temp }}/knowledge-test-home
+          USERPROFILE: ${{ runner.temp }}/knowledge-test-home
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null
+          .venv/Scripts/python.exe -m pytest -q tests --junitxml=windows-knowledge.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-knowledge-results
+          path: windows-knowledge.xml
