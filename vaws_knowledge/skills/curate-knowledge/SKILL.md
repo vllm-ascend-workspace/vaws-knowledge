@@ -1,16 +1,18 @@
 ---
 name: curate-knowledge
-description: Review and consolidate Markdown knowledge when asked to organize experience, resolve conflicting notes, or prepare a public contribution. Ordinary lookup and capture use the knowledge tools directly.
+description: Organize Markdown notes when explicitly asked to clean up knowledge, combine duplicate experience, or prepare a public contribution. Keep conditions and uncertainty; ordinary lookup and capture use the tools directly.
 ---
 
 # Curate knowledge
 
-Make the requested knowledge easier to reuse while preserving the conditions,
-sources, counterexamples and uncertainty actually recorded. A public review
-decision does not establish a hardware fact.
+Make the requested notes easier to reuse. Use ordinary Markdown with a title and
+body; retain conditions, sources, evidence, counterexamples and uncertainty already
+recorded. No fixed headings, labels, coordinates or extra report are needed.
+Knowledge is reference material; review or publication does not establish a fact.
 
-Query related material with `knowledge_query` and read relevant documents with
-`knowledge_explain`. Compare the claims before editing:
+Start from the relevant material already available. If more context would help,
+`knowledge_query(text)` finds related notes and `knowledge_explain(ref)` reads the
+original. Query failure does not prevent independent edits. Useful judgments:
 
 - Merge duplicates only when they describe the same behavior under compatible
   conditions. Keep differing versions, topologies or observations visible.
@@ -20,9 +22,11 @@ Query related material with `knowledge_query` and read relevant documents with
   unconditional support. Link an unresolved conflict rather than choosing a
   winner without evidence.
 
-Edit the requested project or candidate Markdown. Shared releases are read-only;
-changes to shared content go through its contribution workflow. Normal lookup,
-capture and development do not require this skill or a second summary.
+Edit the requested project or local Markdown directly. Shared releases are
+read-only; changes to shared content use an authorized public contribution.
+`knowledge_capture(title, content)` can retain a useful existing finding.
+Lookup, capture and normal task completion do not require this skill or a second
+summary. Storage locations are not a required promotion workflow.
 
 ## Public contributions
 
@@ -37,9 +41,9 @@ in the background. Do not submit the same candidate again or wait for its PR
 from an unrelated development task. Existing private candidates are not an
 implicit authorization to upload them.
 
-The current public corpus uses human review and merge. Optional automated review
-is used only when actually configured; do not prescribe its CLI as a mandatory
-step. A transport failure leaves the pending contribution for retry.
+The current public corpus uses human review and merge. The package handles
+configured transport retries; an unavailable public path does not block local
+work. Internal publishing formats and states are not Agent authoring inputs.
 
 Report the substantive edits, any unresolved differences, and contribution
 status when relevant. Reuse the existing summary instead of authoring another

@@ -6,14 +6,12 @@ pipeline. It contains:
 - `corpus/` — two sample knowledge documents in the minimal public format
   (a `#` title and a non-empty body, no frontmatter).
 - `corpus-release-template.yml.tmpl` — an opt-in GitHub Actions template for
-  the corpus repository (the `.tmpl` suffix keeps it out of this repo's
-  corpus-YAML gates; drop the suffix when copying it into
+  the corpus repository (drop the `.tmpl` suffix when copying it into
   `.github/workflows/`). It builds a dense OVPack from the exact pushed
   commit, assembles a local release directory, verifies it, and uploads it as
   a workflow artifact. Real Release creation is commented out on purpose.
   Action references carry `<pin>` placeholders: replace them with reviewed
-  revisions before enabling (this also keeps login-shaped strings out of the
-  host repo's redaction gate). Pinned model/version values are read from the
+  revisions before enabling. Pinned model/version values are read from the
   installed package via `python -m vaws_knowledge.distribution pins`.
 - `sync-client-example.ps1` — the client-side sync wrapper for native
   PowerShell 5.1/7. PREPARED, NOT VERIFIED: no real Windows environment ran

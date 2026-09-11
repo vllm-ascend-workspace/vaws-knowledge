@@ -27,6 +27,6 @@ def main(argv: list[str]) -> int:
     content = args.content
     if args.content_file:
         content = Path(args.content_file).read_text(encoding="utf-8")
-    payload = capture(title=args.title, content=content, config=config)
+    payload = capture(title=args.title, content=content, config=config, index=False)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0

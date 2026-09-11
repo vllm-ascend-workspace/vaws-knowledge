@@ -15,8 +15,6 @@ from pathlib import Path
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _PACKAGED_ROOT = _PACKAGE_DIR / "data" / "corpus"
 _CHECKOUT_ROOT = _PACKAGE_DIR.parent / "corpus"
-_YAML_SUFFIXES = (".yaml", ".yml")
-DEFAULT_SUBSETS = ("verified", "unverified")
 
 
 def corpus_root() -> Path:
@@ -29,23 +27,13 @@ def corpus_root() -> Path:
     return _PACKAGED_ROOT
 
 
-def iter_entry_files(
-    subsets: tuple[str, ...] = DEFAULT_SUBSETS,
-) -> Iterator[Path]:
-    """Yield YAML entry files under ``corpus_root() / subset``, sorted."""
-
+def iter_entry_files() -> Iterator[Path]:
+    """Yield bundled Markdown reference files, sorted by path."""
     root = corpus_root()
-    files: list[Path] = []
-    for subset in subsets:
-        directory = root / subset
-        if not directory.is_dir():
-            continue
-        files.extend(
-            path
-            for path in directory.rglob("*")
-            if path.is_file() and path.suffix in _YAML_SUFFIXES
-        )
-    yield from sorted(files)
+    yield from sorted(
+        path for path in root.rglob("*.md")
+        if path.is_file() and not any(part.startswith(".") for part in path.relative_to(root).parts)
+    )
 
 
 def installed_commit() -> str | None:

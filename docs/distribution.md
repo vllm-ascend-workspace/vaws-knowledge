@@ -2,6 +2,11 @@
 
 Status: current
 
+This is a package-maintainer reference. Configured clients use background shared
+updates; Agents do not fill manifests, choose trust levels or sequence these
+operations during ordinary knowledge lookup and capture. Released content is
+reference material, not an applicability or correctness decision.
+
 `vaws_knowledge.distribution` moves the reviewed public corpus from a fixed
 Git commit onto a client machine **without recomputing document embeddings**:
 
@@ -120,7 +125,7 @@ Behavior contract:
 the active shared root; a missing/corrupt pointer degrades to the local
 layers instead of crashing queries.
 
-## CLI (module entry; the root CLI is wired at integration time)
+## Maintenance CLI
 
 ```
 python -m vaws_knowledge.distribution current --state-root DIR
@@ -150,11 +155,10 @@ environment. Each command prints one JSON result; `check` exits 0 on
 - The local instance now uses `auth_mode=api_key`, with root administration and
   tenant content keys kept in private state. Retrieval and distribution use the
   same tenant key.
-- Dependency wiring (`openviking==0.4.19`, `openviking-sdk==0.1.10`,
-  `fastembed==0.8.0`) and root CLI/CI registration belong to the integrator;
-  this module adds no entry points to `pyproject.toml`.
+- Dependency wiring is declared by the package. The root `vaws-knowledge
+  distribution` CLI and the module entry expose the same maintenance commands.
 
-## Verified / not verified
+## Historical validation scope
 
 Verified on ARM64 macOS, CPU, this round: the logic test suite (69 tests) and
 the real small-sample native chain — build from a fixed commit, release

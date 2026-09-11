@@ -1,7 +1,7 @@
 """Title + body Markdown for public contribution.
 
 This is a join point with local capture, not a second document store.
-Capture (Grok 1) writes ordinary Markdown whose first heading is the title.
+Capture writes ordinary Markdown; contribution uses the same parser.
 Contribution reads that shape and writes the same shape to the public copy.
 Path + Git SHA identify published content. The content digest is only for
 idempotency, de-duplication, and integrity — it must not be passed off as a
@@ -14,50 +14,17 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from vaws_knowledge.bot.publish_comment import _sha
+from vaws_knowledge.markdown import parse_markdown, render_markdown
 from vaws_knowledge.contribution.errors import DocumentRejected, IdentityError
 
 _SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
 DIGEST_PREFIX = "sha256:"
 
 
-def parse_title_body(text: str) -> tuple[str, str]:
-    """Return ``(title, body)``. Title is the first ATX heading, else the first line."""
-
-    raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
-    lines = raw.split("\n")
-    index = 0
-    while index < len(lines) and not lines[index].strip():
-        index += 1
-    if index >= len(lines):
-        return "", ""
-    first = lines[index].strip()
-    if first.startswith("# "):
-        title = first[2:].strip()
-        body = "\n".join(lines[index + 1 :]).strip()
-        return title, body
-    return first, "\n".join(lines[index + 1 :]).strip()
-
-
-def render_markdown(title: str, body: str) -> str:
-    heading = (title or "").strip()
-    content = (body or "").strip()
-    if not heading:
-        raise DocumentRejected(["title is required"])
-    if not content:
-        raise DocumentRejected(["content is required"])
-    return f"# {heading}\n\n{content}\n"
-
-
 def require_title_body(text: str) -> tuple[str, str]:
-    title, body = parse_title_body(text)
-    problems: list[str] = []
-    if not title:
-        problems.append("title is required")
+    title, body = parse_markdown(text)
     if not body:
-        problems.append("content is required")
-    if problems:
-        raise DocumentRejected(problems)
+        raise DocumentRejected(["content is required"])
     return title, body
 
 
@@ -89,10 +56,9 @@ def digest_token(digest: str) -> str:
 
 
 def require_git_sha(value: object) -> str:
-    sha = _sha(value)
-    if sha is None:
-        raise IdentityError("content digest cannot stand in for git identity")
-    return sha
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", value):
+        raise IdentityError("expected a Git commit SHA")
+    return value.lower()
 
 
 def branch_for_digest(digest: str) -> str:
@@ -103,27 +69,6 @@ def branch_for_digest(digest: str) -> str:
 def public_filename(digest: str, title: str) -> str:
     token = digest_token(digest)
     return f"{token[:12]}-{slugify(title)}.md"
-
-
-@dataclass(frozen=True)
-class ContentIdentity:
-    """Published-content identity: a path at a Git object."""
-
-    path: str
-    git_sha: str
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "git_sha", require_git_sha(self.git_sha))
-        path = str(self.path or "").replace("\\", "/").strip().lstrip("/")
-        if not path or ".." in path.split("/") or path.startswith(DIGEST_PREFIX):
-            raise IdentityError("invalid content path")
-        object.__setattr__(self, "path", path)
-
-    def as_dict(self) -> dict[str, str]:
-        return {"path": self.path, "git_sha": self.git_sha}
-
-    def label(self) -> str:
-        return f"{self.path}@{self.git_sha}"
 
 
 @dataclass(frozen=True)

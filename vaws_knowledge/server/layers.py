@@ -1,26 +1,8 @@
-"""Mount configuration for the three knowledge layers.
+"""Locate the shared, project and candidate Markdown directories.
 
-The trust model in README.md has three layers, and a reader must be able to
-tell which one an answer came from:
-
-    shared     the packaged corpus (verified/ and unverified/), read-only
-    project    a business repo's own knowledge, e.g. .agents/knowledge/
-    candidate  a developer's untracked local capture directory
-
-A layer is a trust source. Each entry carries its own ``status``; default
-visibility is ``policy.default_statuses``. Unverified shared entries stay
-hidden until a caller passes ``statuses`` or changes that policy.
-
-A layer that is not configured, or a shared/project path that does not exist,
-is *absent*. Candidate is different: it is a local write target, so a
-configured root that has not been created yet is an empty mounted layer, not
-a missing one. A candidate path that exists but cannot be read is still
-absent. Every absence is reported with a reason so that a caller can tell
-"this layer said nothing" apart from "this layer was not consulted".
-
-Nothing here validates entries against schemas/knowledge-v2.schema.json --
-that is the contributing fork's job (CONTRIBUTING.md) and the review bot's
-job. This module only locates documents and reads them without raising.
+Layers label where reference material comes from; they do not rank its truth
+or decide whether a task may proceed. Shared material is read-only. Capture
+writes to the local candidate directory, which may start empty.
 """
 
 from __future__ import annotations
@@ -29,22 +11,17 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
-try:  # PyYAML is the only soft dependency of this package.
+try:  # Only YAML configuration files need this optional import.
     import yaml  # type: ignore
 except ImportError:  # pragma: no cover - exercised only on a bare interpreter
     yaml = None  # type: ignore
 
-#: Ordered by trust, most trusted first. Also the tie-break order for
-#: duplicate uuids: a reviewed shared entry shadows a local copy of itself.
 LAYERS: tuple[str, ...] = ("shared", "project", "candidate")
-LAYER_PRECEDENCE: dict[str, int] = {name: i for i, name in enumerate(LAYERS)}
 
 #: The write path exists for exactly one layer. See capture.py.
 WRITABLE_LAYERS = frozenset({"candidate"})
-
-DOC_SUFFIXES = (".yaml", ".yml", ".json")
 
 ENV_CONFIG = "VAWS_KNOWLEDGE_CONFIG"
 ENV_CORPUS = "VAWS_KNOWLEDGE_CORPUS"
@@ -57,67 +34,34 @@ ENV_ENABLED_LAYERS = "VAWS_KNOWLEDGE_LAYERS"
 ENV_IDENTITY = {
     "contributor": "VAWS_KNOWLEDGE_CONTRIBUTOR",
     "origin_repo": "VAWS_KNOWLEDGE_ORIGIN_REPO",
-    "redaction_profile": "VAWS_KNOWLEDGE_REDACTION_PROFILE",
 }
-ENV_STALE_AFTER_DAYS = "VAWS_KNOWLEDGE_STALE_AFTER_DAYS"
 ENV_BACKEND = "VAWS_KNOWLEDGE_BACKEND"
 ENV_STATE = "VAWS_KNOWLEDGE_STATE"
-MARKDOWN_SUFFIXES = (".md",)
 
 CONFIG_BASENAMES = ("vaws-knowledge.json", "vaws-knowledge.yaml", "vaws-knowledge.yml")
 
 YAML_MISSING_HINT = (
-    "PyYAML is not importable, so YAML knowledge documents cannot be read. "
-    "Install it with: python3 -m pip install vaws-knowledge "
-    "(JSON documents still load.)"
+    "PyYAML is required to read this YAML configuration. "
+    "Use a JSON configuration or install PyYAML."
 )
 
 DEFAULT_IDENTITY = {
     "contributor": "anonymous",
     "origin_repo": "local/unpublished",
-    "redaction_profile": "r1",
 }
 
-#: docs/lifecycle.md: verified and stale are returned by default, stale with a
-#: warning; resolved is returned by default with its fix reference; unverified
-#: and deprecated are not.
-DEFAULT_STATUSES: tuple[str, ...] = ("verified", "stale", "resolved")
-OPT_IN_STATUSES: tuple[str, ...] = ("unverified",)
-SHARED_SUBSETS: tuple[str, ...] = ("verified", "unverified")
 SOURCE_REPO = "vllm-ascend-workspace/vaws-knowledge"
-
-DEFAULT_POLICY: dict[str, Any] = {
-    # docs/lifecycle.md leaves the horizon to policy. This only *labels* an
-    # entry whose last_verified_at is older; it never rewrites status, because
-    # the staleness sweep owns that transition.
-    "stale_after_days": 180,
-    "default_statuses": list(DEFAULT_STATUSES),
-}
 
 
 class ConfigError(Exception):
     """Raised only for a config file that cannot be interpreted at all."""
 
 
-def repo_root() -> Path:
-    """Directory containing this package. Not a corpus checkout."""
-
-    return Path(__file__).resolve().parent.parent
-
-
 def resolve_shared_from_corpus(raw: str | Path) -> tuple[Path, ...]:
-    """Map a corpus root or repo checkout to shared subset directories.
-
-    Returns every existing ``verified/`` and ``unverified/`` child. Layer is
-    the trust source; entry ``status`` is a separate axis.
-    """
+    """Accept a corpus directory or a checkout containing ``corpus/``."""
 
     path = Path(raw).expanduser()
-    for base in (path, path / "corpus"):
-        roots = tuple(base / subset for subset in SHARED_SUBSETS if (base / subset).is_dir())
-        if roots:
-            return roots
-    return (path / "verified",)
+    return (path / "corpus" if (path / "corpus").is_dir() else path,)
 
 
 def default_shared_roots(env: Mapping[str, str] | None = None) -> tuple[Path, ...]:
@@ -181,7 +125,6 @@ class ServiceConfig:
 
     mounts: dict[str, Mount] = field(default_factory=dict)
     identity: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_IDENTITY))
-    policy: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_POLICY))
     config_path: Path | None = None
     warnings: list[str] = field(default_factory=list)
     backend: str = "openviking"
@@ -192,17 +135,30 @@ class ServiceConfig:
     def mount(self, layer: str) -> Mount:
         return self.mounts.get(layer, Mount(layer=layer, absent_reason="unknown layer"))
 
+    def _layer_available(self, layer: str) -> bool:
+        mount = self.mount(layer)
+        if mount.present:
+            return True
+        # Explicitly disabled layers have no roots. An enabled shared source
+        # may disappear after its independent OVPack has been imported.
+        if layer != "shared" or not mount.roots:
+            return False
+        from vaws_knowledge.local.instance import instance_for_config
+        from vaws_knowledge.local.shared import current_shared
+
+        return bool(current_shared(instance_for_config(self).state_root))
+
     def available_layers(self) -> list[str]:
-        return [name for name in LAYERS if self.mounts.get(name, Mount(name)).present]
+        return [name for name in LAYERS if self._layer_available(name)]
 
     def absent_layers(self, layers: Sequence[str] | None = None) -> dict[str, str]:
-        wanted = [name for name in (layers or LAYERS) if name in LAYER_PRECEDENCE]
+        wanted = [name for name in (layers or LAYERS) if name in LAYERS]
         out: dict[str, str] = {}
         for name in wanted:
             mount = self.mounts.get(name)
             if mount is None:
                 out[name] = "not configured"
-            elif not mount.present:
+            elif not self._layer_available(name):
                 out[name] = mount.absent_reason or "not present"
         return out
 
@@ -215,11 +171,12 @@ class ServiceConfig:
         return bool(self.absent_layers(layers))
 
     def consulted(self, layers: Sequence[str] | None = None) -> dict[str, Any]:
-        wanted = [name for name in (layers or LAYERS) if name in LAYER_PRECEDENCE]
+        wanted = [name for name in (layers or LAYERS) if name in LAYERS]
+        absent = self.absent_layers(wanted)
         return {
-            "layers_available": [name for name in wanted if self.mount(name).present],
-            "layers_absent": self.absent_layers(wanted),
-            "degraded": self.degraded(wanted),
+            "layers_available": [name for name in wanted if name not in absent],
+            "layers_absent": absent,
+            "degraded": bool(absent),
         }
 
     def describe(self) -> dict[str, Any]:
@@ -233,31 +190,10 @@ class ServiceConfig:
             "layers_absent": self.absent_layers(),
             "degraded": self.degraded(),
             "identity": dict(self.identity),
-            "policy": dict(self.policy),
-            "yaml_available": yaml is not None,
             "warnings": list(self.warnings),
         }
         out.update(shared_source())
         return out
-
-    @property
-    def stale_after_days(self) -> int:
-        try:
-            return int(self.policy.get("stale_after_days", 180))
-        except (TypeError, ValueError):
-            return 180
-
-    @property
-    def default_statuses(self) -> tuple[str, ...]:
-        raw = self.policy.get("default_statuses") or DEFAULT_STATUSES
-        if isinstance(raw, str):
-            raw = [raw]
-        return tuple(str(item) for item in raw)
-
-
-# --------------------------------------------------------------------------
-# config loading
-# --------------------------------------------------------------------------
 
 
 def _read_structured(path: Path) -> Any:
@@ -386,10 +322,8 @@ def load_config(
     """Build a :class:`ServiceConfig`.
 
     Precedence, lowest first: built-in defaults, config file, ``mapping``,
-    environment variables. Relative paths resolve against the config file's
-    directory when there is one, otherwise against ``base_dir`` or the
-    checkout root -- never against the process cwd, which changes under a
-    server.
+    environment variables. Relative paths resolve against ``base_dir`` when
+    supplied, otherwise the config file's directory or the process cwd.
 
     Never raises for a missing or absent layer. Only a config file that cannot
     be parsed at all raises :class:`ConfigError`.
@@ -437,25 +371,16 @@ def load_config(
     elif config_path is not None:
         base = config_path.parent
     else:
-        base = repo_root()
+        base = Path.cwd()
 
     identity = dict(DEFAULT_IDENTITY)
-    for key, value in (data.get("identity") or {}).items():
+    for key in DEFAULT_IDENTITY:
+        value = (data.get("identity") or {}).get(key)
         if value is not None:
-            identity[str(key)] = str(value)
+            identity[key] = str(value)
     for key, var in ENV_IDENTITY.items():
         if env.get(var):
             identity[key] = env[var]
-
-    policy = dict(DEFAULT_POLICY)
-    for key, value in (data.get("policy") or {}).items():
-        if value is not None:
-            policy[str(key)] = value
-    if env.get(ENV_STALE_AFTER_DAYS):
-        try:
-            policy["stale_after_days"] = int(env[ENV_STALE_AFTER_DAYS])
-        except ValueError:
-            warnings.append(f"{ENV_STALE_AFTER_DAYS} is not an integer; keeping {policy['stale_after_days']}")
 
     layers_cfg_raw = data.get("layers") or {}
     if not isinstance(layers_cfg_raw, Mapping):
@@ -528,8 +453,8 @@ def load_config(
             roots = tuple(_resolve(item, base) for item in roots_raw)
 
         existing = tuple(p for p in roots if p.is_dir())
-        # shared is read-only by contract; docs/federation.md forbids a fork
-        # writing into verified/. candidate is the only writable layer.
+        # Capture writes only to candidate; shared and project are read-only
+        # through the service.
         read_only = bool(spec.get("read_only", layer not in WRITABLE_LAYERS))
         if layer != "candidate":
             read_only = True
@@ -560,9 +485,6 @@ def load_config(
                 absent_reason="path does not exist: " + ", ".join(str(p) for p in roots),
             )
 
-    if yaml is None:
-        warnings.append(YAML_MISSING_HINT)
-
     backend = str(
         data.get("backend") or env.get(ENV_BACKEND) or "openviking"
     ).strip().lower() or "openviking"
@@ -579,162 +501,9 @@ def load_config(
     return ServiceConfig(
         mounts=mounts,
         identity=identity,
-        policy=policy,
         config_path=config_path,
         warnings=warnings,
         backend=backend,
         state_root=state_root,
         publishing=dict(data["publishing"]) if isinstance(data.get("publishing"), Mapping) else {},
     )
-
-
-# --------------------------------------------------------------------------
-# document loading
-# --------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class LoadedEntry:
-    """One entry, plus where it came from."""
-
-    layer: str
-    entry: Mapping[str, Any]
-    kind: str
-    document_layer: str
-    document_updated_at: str | None
-    root: str
-    source: str  # path relative to its root, so results stay portable
-
-    @property
-    def uuid(self) -> str:
-        return str(self.entry.get("uuid", ""))
-
-    @property
-    def status(self) -> str:
-        return str(self.entry.get("status", "unverified"))
-
-    def origin(self) -> dict[str, Any]:
-        return {
-            "layer": self.layer,
-            "kind": self.kind,
-            "document_layer": self.document_layer,
-            "file": self.source,
-        }
-
-
-@dataclass
-class LoadReport:
-    entries: list[LoadedEntry] = field(default_factory=list)
-    errors: list[dict[str, str]] = field(default_factory=list)
-    scanned_files: int = 0
-
-    def describe(self) -> dict[str, Any]:
-        return {
-            "entries": len(self.entries),
-            "scanned_files": self.scanned_files,
-            "errors": list(self.errors),
-        }
-
-
-def iter_document_files(mount: Mount) -> Iterator[tuple[Path, Path]]:
-    """Yield ``(root, file)`` for every knowledge document under a mount."""
-
-    for root in mount.roots:
-        if not root.is_dir():
-            continue
-        for path in sorted(root.rglob("*")):
-            if path.is_file() and path.suffix in DOC_SUFFIXES:
-                yield root, path
-
-
-def iter_markdown_files(mount: Mount) -> Iterator[tuple[Path, Path]]:
-    """Yield ``(root, file)`` for Markdown authority files under a mount."""
-
-    for root in mount.roots:
-        if not root.is_dir():
-            continue
-        for path in sorted(root.rglob("*")):
-            if path.is_file() and path.suffix.lower() in MARKDOWN_SUFFIXES:
-                yield root, path
-
-
-def load_entries(
-    config: ServiceConfig,
-    layers: Sequence[str] | None = None,
-) -> LoadReport:
-    """Read every entry from the requested (and present) layers.
-
-    A malformed document is recorded in ``report.errors`` and skipped. One bad
-    file must not take the service down, and it must not silently disappear
-    either -- a caller that cannot see the error would read an incomplete
-    result set as "no such fact".
-    """
-
-    wanted = [name for name in (layers or LAYERS) if name in LAYER_PRECEDENCE]
-    report = LoadReport()
-
-    for layer in wanted:
-        mount = config.mount(layer)
-        if not mount.present:
-            continue
-        for root, path in iter_document_files(mount):
-            report.scanned_files += 1
-            rel = str(path.relative_to(root))
-            try:
-                doc = _read_structured(path)
-            except ConfigError as exc:
-                report.errors.append({"layer": layer, "file": rel, "error": str(exc)})
-                continue
-            except Exception as exc:  # noqa: BLE001 - one bad file is not fatal
-                report.errors.append(
-                    {"layer": layer, "file": rel, "error": f"{type(exc).__name__}: {exc}"}
-                )
-                continue
-
-            if not isinstance(doc, Mapping):
-                report.errors.append(
-                    {"layer": layer, "file": rel, "error": "document root is not a mapping"}
-                )
-                continue
-            # Frozen v1 documents (and any whole file with no uuid-bearing
-            # entries) are not this reader's contract. Skip them quietly so a
-            # mixed project directory does not look like a load failure.
-            if doc.get("schema_version") in (1, "1"):
-                continue
-            entries = doc.get("entries")
-            if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes, Mapping)):
-                report.errors.append(
-                    {"layer": layer, "file": rel, "error": "document has no 'entries' list"}
-                )
-                continue
-            mapping_entries = [item for item in entries if isinstance(item, Mapping)]
-            if mapping_entries and not any(item.get("uuid") for item in mapping_entries):
-                continue
-
-            kind = str(doc.get("kind", "unknown"))
-            document_layer = str(doc.get("layer", "unknown"))
-            updated_at = doc.get("updated_at")
-            for item in entries:
-                if not isinstance(item, Mapping):
-                    report.errors.append(
-                        {"layer": layer, "file": rel, "error": "entry is not a mapping"}
-                    )
-                    continue
-                if not item.get("uuid"):
-                    report.errors.append(
-                        {"layer": layer, "file": rel, "error": "entry has no uuid; skipped"}
-                    )
-                    continue
-                report.entries.append(
-                    LoadedEntry(
-                        layer=layer,
-                        entry=item,
-                        kind=kind,
-                        document_layer=document_layer,
-                        document_updated_at=str(updated_at) if updated_at else None,
-                        root=str(root),
-                        source=rel,
-                    )
-                )
-
-    return report

@@ -11,8 +11,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from vaws_knowledge.canonical import canonical_json
-from vaws_knowledge.canonical import content_hash as packaged_content_hash
 from vaws_knowledge.local.backend import backend_for_config
 from vaws_knowledge.local.reconcile import remember_document
 from vaws_knowledge.markdown import (
@@ -45,22 +43,12 @@ class CaptureRejected(Exception):
         self.problems = list(problems)
 
 
-def canonical_payload(entry: Mapping[str, Any]) -> str:
-    """YAML-corpus helper kept for review/conformance; not used by Markdown capture."""
-
-    return canonical_json(entry)
-
-
-def builtin_content_hash(entry: Mapping[str, Any]) -> str:
-    """YAML-corpus helper kept for review/conformance; not used by Markdown capture."""
-
-    return packaged_content_hash(entry)
-
-
 def candidate_root(config: ServiceConfig, *, create: bool = True) -> Path:
     mount = config.mount("candidate")
     if not mount.roots:
         raise CaptureRefused("candidate layer is not configured", layer="candidate")
+    if mount.read_only:
+        raise CaptureRefused("candidate layer is read-only", layer="candidate")
     root = Path(mount.roots[0])
     if create:
         root.mkdir(parents=True, exist_ok=True)
@@ -76,26 +64,10 @@ def _proposed_identity(root: Path, heading: str) -> tuple[str, str, Path, bool]:
     return ident, uri_for("candidate", relative_posix(path, root)), path, False
 
 
-def _title_and_content(
-    *,
-    title: str | None,
-    content: str | None,
-    entry: Mapping[str, Any] | None,
-) -> tuple[str, str]:
-    heading = (title or "").strip()
-    body = (content or "").strip()
-    if (not heading or not body) and isinstance(entry, Mapping):
-        heading = heading or str(entry.get("title") or "").strip()
-        body = body or str(entry.get("content") or "").strip()
-    return heading, body
-
-
 def capture(
-    entry: Mapping[str, Any] | None = None,
     *,
     title: str | None = None,
     content: str | None = None,
-    kind: str = "note",
     layer: str = "candidate",
     config: ServiceConfig | None = None,
     source: Mapping[str, Any] | None = None,
@@ -103,22 +75,20 @@ def capture(
     evidence: Any = None,
     dry_run: bool = False,
     index: bool = True,
-    **_ignored: Any,
 ) -> dict[str, Any]:
     """Save one candidate document. Required inputs are title and content."""
 
-    del kind
     if layer != "candidate":
-        known = "shared/project are review-gated; " if layer in ("shared", "project") else ""
         raise CaptureRefused(
             f"refusing to write into layer {layer!r}: capture only ever writes the "
-            f"candidate layer. {known}public contribution is a later, separate step.",
+            f"candidate layer. Public contribution is a separate step.",
             layer=layer,
         )
     if layer not in WRITABLE_LAYERS:
         raise CaptureRefused(f"layer {layer!r} is not writable", layer=layer)
 
-    heading, body = _title_and_content(title=title, content=content, entry=entry)
+    heading = (title or "").strip()
+    body = (content or "").strip()
     problems: list[str] = []
     if not heading:
         problems.append("title is required")
@@ -126,19 +96,6 @@ def capture(
         problems.append("content is required")
     if problems:
         raise CaptureRejected(problems)
-
-    extra_source = source
-    extra_conditions = conditions
-    extra_evidence = evidence
-    if isinstance(entry, Mapping):
-        extra_source = extra_source or (
-            entry.get("source") if isinstance(entry.get("source"), Mapping) else None
-        )
-        extra_conditions = extra_conditions or (
-            entry.get("conditions") if isinstance(entry.get("conditions"), Mapping) else None
-        )
-        if extra_evidence is None:
-            extra_evidence = entry.get("evidence")
 
     config = config or load_config()
     root = candidate_root(config, create=not dry_run)
@@ -163,10 +120,9 @@ def capture(
         content=body,
         path=path if updating else None,
         slug=None if updating else ident,
-        status="unverified",
-        source=extra_source,
-        conditions=extra_conditions,
-        evidence=extra_evidence,
+        source=source,
+        conditions=conditions,
+        evidence=evidence,
         captured_at=utc_now(),
     )
 
@@ -191,17 +147,16 @@ def capture(
         "ref": document.uri,
         "path": str(document.path),
         "layer": "candidate",
-        "status": document.status,
         "index": "ready" if indexed else "pending",
         "document": document.to_dict(),
     }
-    if extra_source:
-        payload["source"] = dict(extra_source)
+    if document.source:
+        payload["source"] = dict(document.source)
     if document.conditions:
         payload["conditions"] = dict(document.conditions)
     if not indexed:
         payload["index_detail"] = index_error
-        payload["degraded"] = True
+        payload["degraded"] = bool(index)
     from vaws_knowledge.publishing import queue_capture
 
     payload["contribution"] = queue_capture(config, document.path)

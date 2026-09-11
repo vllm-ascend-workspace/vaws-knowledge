@@ -29,11 +29,3 @@ class TransportError(ContributionError):
     def __init__(self, message: str, *, status: int | None = None) -> None:
         self.status = status
         super().__init__(message)
-
-
-class MergeBusy(ContributionError):
-    """Another merge holds the serialization lock for this base SHA."""
-
-
-class MergeRefused(ContributionError):
-    """Merge was not performed (stale binding, policy hold, or API error)."""

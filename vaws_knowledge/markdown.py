@@ -89,9 +89,8 @@ def parse_markdown(text: str) -> tuple[str, str]:
         title = match.group(1).strip()
         body = (raw[: match.start()] + raw[match.end() :]).strip()
         return title, body
-    lines = raw.split("\n")
-    title = (lines[0] if lines else "").strip() or "untitled"
-    body = "\n".join(lines[1:]).strip()
+    body = raw.strip()
+    title = next((line.strip() for line in raw.splitlines() if line.strip()), "untitled")
     return title, body
 
 
@@ -146,7 +145,7 @@ class Document:
     slug: str
     path: Path
     uri: str
-    status: str = "unverified"
+    status: str | None = None
     source: dict[str, Any] | None = None
     conditions: dict[str, str] = field(default_factory=dict)
     evidence: Any = None
@@ -166,9 +165,10 @@ class Document:
             "slug": self.slug,
             "path": str(self.path),
             "uri": self.uri,
-            "status": self.status,
             "ref": self.uri,
         }
+        if self.status:
+            payload["status"] = self.status
         if self.source:
             payload["source"] = dict(self.source)
         if self.conditions:
@@ -212,7 +212,7 @@ def load_document(path: Path, *, layer: str, root: Path | None = None) -> Docume
         slug=str(meta.get("slug") or rel_slug),
         path=path,
         uri=str(meta.get("uri") or uri_for(layer, rel)),
-        status=str(meta.get("status") or "unverified"),
+        status=str(meta["status"]) if meta.get("status") else None,
         source=source,
         conditions=conditions,
         evidence=meta.get("evidence"),
@@ -249,7 +249,7 @@ def save_document(
     content: str,
     slug: str | None = None,
     path: Path | None = None,
-    status: str = "unverified",
+    status: str | None = None,
     source: Mapping[str, Any] | None = None,
     conditions: Mapping[str, Any] | None = None,
     evidence: Any = None,
@@ -275,6 +275,14 @@ def save_document(
             if existing is not None and existing.title.strip() != heading:
                 ident = f"{ident}-{title_digest(heading + ident)}"
                 target = root / f"{ident}.md"
+    previous: dict[str, Any] = {}
+    if meta_path(target).is_file():
+        try:
+            loaded = json.loads(meta_path(target).read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                previous = loaded
+        except (OSError, json.JSONDecodeError):
+            pass
     _atomic_write_text(target, render_markdown(heading, body))
     cleaned_source = _clean_mapping(source)
     cleaned_conditions: dict[str, str] = {}
@@ -285,17 +293,25 @@ def save_document(
                 cleaned_conditions[str(key)] = text_value
     rel = relative_posix(target, root)
     meta: dict[str, Any] = {
+        **previous,
         "slug": ident,
         "title": heading,
         "layer": layer,
-        "status": status or "unverified",
         "uri": uri_for(layer, rel),
         "captured_at": captured_at or utc_now(),
     }
-    if cleaned_source:
-        meta["source"] = cleaned_source
-    if cleaned_conditions:
-        meta["conditions"] = cleaned_conditions
+    if status is not None:
+        meta["status"] = status
+    if source is not None:
+        if cleaned_source:
+            meta["source"] = cleaned_source
+        else:
+            meta.pop("source", None)
+    if conditions is not None:
+        if cleaned_conditions:
+            meta["conditions"] = cleaned_conditions
+        else:
+            meta.pop("conditions", None)
     if evidence is not None:
         meta["evidence"] = evidence
     _atomic_write_text(meta_path(target), json.dumps(meta, ensure_ascii=False, indent=2) + "\n")

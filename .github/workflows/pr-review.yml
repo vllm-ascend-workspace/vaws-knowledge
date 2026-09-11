@@ -1,103 +1,27 @@
-name: Review gates
-
-# Runs the deterministic gates on a proposal. Passing every gate permits
-# corpus/unverified/ and nothing more. This workflow is unprivileged: it
-# checks out pull request code with contents:read, no write token, and
-# persist-credentials=false. A separate trusted workflow publishes the
-# comment; GitHub will not run a workflow_run listener that names itself.
+name: Package checks
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  gates:
+  checks:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install the package
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e '.[test]'
-
-      - name: Build, install, and import the wheel outside the checkout
-        run: |
-          set -euo pipefail
-          python -m pip wheel --no-deps -w "${RUNNER_TEMP}/dist" .
-          shopt -s nullglob
-          wheels=("${RUNNER_TEMP}/dist"/vaws_knowledge-*.whl)
-          test "${#wheels[@]}" -eq 1
-          wheel="${wheels[0]}"
-          python -m venv "${RUNNER_TEMP}/pkg"
-          "${RUNNER_TEMP}/pkg/bin/python" -m pip install --upgrade pip
-          "${RUNNER_TEMP}/pkg/bin/python" -m pip install "${wheel}"
-          cd "${RUNNER_TEMP}"
-          "${RUNNER_TEMP}/pkg/bin/python" -I -c '
-          from vaws_knowledge import corpus, package_version
-          root = corpus.corpus_root()
-          files = list(corpus.iter_entry_files())
-          if not root.is_dir():
-              raise SystemExit(f"corpus root missing: {root}")
-          packed = "site-packages" in str(root) and "data/corpus" in str(root)
-          if not packed:
-              raise SystemExit(f"corpus is not the packaged tree: {root}")
-          if not files:
-              raise SystemExit("packaged corpus has no entries")
-          print("version", package_version())
-          print("corpus_root", root)
-          print("entry_files", len(files))
-          '
-          "${RUNNER_TEMP}/pkg/bin/vaws-knowledge" --help
-          "${RUNNER_TEMP}/pkg/bin/python" -I -m vaws_knowledge --help
-          "${RUNNER_TEMP}/pkg/bin/python" -I -m vaws_knowledge skill > "${RUNNER_TEMP}/skill.md"
-          "${RUNNER_TEMP}/pkg/bin/python" -I -m vaws_knowledge skill --install-dir "${RUNNER_TEMP}/client-skills"
-          cmp "${RUNNER_TEMP}/skill.md" "${RUNNER_TEMP}/client-skills/curate-knowledge/SKILL.md"
-          test -s "${RUNNER_TEMP}/client-skills/curate-knowledge/agents/openai.yaml"
-
-      - name: Contract suite
+      - name: Install package and test dependencies
+        run: python -m pip install -e '.[test]'
+      - name: Test package and installed wheel
         run: python -m pytest -q tests
-
-      - name: Run the gates
-        id: gates
-        run: |
-          set +e
-          python -m vaws_knowledge.bot.report corpus examples \
-            --mode pr \
-            --json gate-results.json \
-            --markdown gate-comment.md
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
-          set -e
-          # A gate tool that is missing or errors is a failure, never a pass, so
-          # the absence of a report is itself a failure rather than a skip.
-          test -s gate-comment.md || {
-            echo "the gates produced no report; treating as failure" >&2
-            exit 1
-          }
-          test -s gate-results.json || {
-            echo "the gates produced no results file; treating as failure" >&2
-            exit 1
-          }
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: review-report
-          path: |
-            gate-comment.md
-            gate-results.json
-
-      - name: Fail the check when a gate failed
-        if: steps.gates.outputs.exit != '0'
-        run: |
-          echo "One or more gates failed. See the review comment." >&2
-          exit 1
+      - name: Check public Markdown for accidental private data
+        run: python -m vaws_knowledge.corpus_check --repo .

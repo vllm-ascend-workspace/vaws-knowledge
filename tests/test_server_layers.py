@@ -17,14 +17,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "s
 
 import support  # noqa: E402
 from vaws_knowledge.corpus import corpus_root  # noqa: E402
+from unittest import mock
 from vaws_knowledge.server.layers import (  # noqa: E402
-    DEFAULT_STATUSES,
     LAYERS,
     SOURCE_REPO,
     ConfigError,
     default_shared_roots,
     load_config,
-    load_entries,
     resolve_shared_from_corpus,
     shared_source,
 )
@@ -38,8 +37,7 @@ class LayerMounting(unittest.TestCase):
         self.assertFalse(config.describe()["degraded"])
 
     def test_shared_is_read_only_even_if_configuration_asks_otherwise(self):
-        # docs/federation.md: a fork never writes into verified/. That is not
-        # negotiable through configuration.
+        # Shared reference material is read-only through the capture service.
         config = load_config(
             {"layers": {"shared": {"roots": ["shared"], "read_only": False}}},
             env={},
@@ -78,10 +76,8 @@ class LayerMounting(unittest.TestCase):
 
     def test_no_shared_cache_still_yields_the_local_layers(self):
         config = support.build_config(shared="missing")
-        report = load_entries(config, ["shared", "project", "candidate"])
-        self.assertEqual([], report.errors)
-        self.assertTrue(report.entries)
-        self.assertEqual({"project", "candidate"}, {e.layer for e in report.entries})
+        self.assertEqual(["project", "candidate"], config.available_layers())
+        self.assertIn("shared", config.absent_layers())
 
     def test_disabled_layer_reports_why(self):
         config = support.build_config(candidate=False)
@@ -90,7 +86,7 @@ class LayerMounting(unittest.TestCase):
     def test_service_config_describe_lists_every_layer(self):
         described = support.build_config().describe()
         self.assertEqual(set(LAYERS), set(described["layers"]))
-        self.assertEqual(list(DEFAULT_STATUSES), described["policy"]["default_statuses"])
+        self.assertNotIn("policy", described)
         self.assertEqual(SOURCE_REPO, described["source_repo"])
         self.assertIn("source_ref", described)
 
@@ -114,27 +110,30 @@ class EnvironmentOverrides(unittest.TestCase):
         self.assertEqual(["shared"], config.available_layers())
         self.assertIn("VAWS_KNOWLEDGE_LAYERS", config.absent_layers()["project"])
 
-    def test_identity_and_policy_come_from_the_environment(self):
+    def test_identity_comes_from_the_environment(self):
         config = support.build_config(
             env={
                 "VAWS_KNOWLEDGE_CONTRIBUTOR": "example-handle",
                 "VAWS_KNOWLEDGE_ORIGIN_REPO": "example-org/example-repo",
-                "VAWS_KNOWLEDGE_REDACTION_PROFILE": "r7",
-                "VAWS_KNOWLEDGE_STALE_AFTER_DAYS": "30",
             }
         )
         self.assertEqual("example-handle", config.identity["contributor"])
         self.assertEqual("example-org/example-repo", config.identity["origin_repo"])
-        self.assertEqual("r7", config.identity["redaction_profile"])
-        self.assertEqual(30, config.stale_after_days)
 
-    def test_unparsable_staleness_horizon_warns_and_keeps_the_default(self):
-        config = support.build_config(env={"VAWS_KNOWLEDGE_STALE_AFTER_DAYS": "soon"})
-        self.assertEqual(180, config.stale_after_days)
-        self.assertTrue(any("not an integer" in w for w in config.warnings))
 
 
 class ConfigFiles(unittest.TestCase):
+    def test_relative_environment_roots_without_config_use_client_cwd(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            (root / "notes").mkdir()
+            with mock.patch("vaws_knowledge.server.layers.Path.cwd", return_value=root):
+                config = load_config({}, env={"VAWS_KNOWLEDGE_PROJECT_ROOTS": "notes",
+                                              "VAWS_KNOWLEDGE_CANDIDATE_ROOT": "candidate"})
+        self.assertEqual((root / "notes",), config.mount("project").roots)
+        self.assertTrue(config.mount("project").present)
+        self.assertEqual((root / "candidate",), config.mount("candidate").roots)
+
     def test_relative_roots_resolve_against_the_config_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = pathlib.Path(tmp) / "vaws-knowledge.json"
@@ -179,12 +178,9 @@ class ConfigFiles(unittest.TestCase):
 
 
 class PackagedCorpusDefault(unittest.TestCase):
-    def test_default_shared_roots_are_both_packaged_subsets(self):
+    def test_default_shared_root_is_the_packaged_markdown_corpus(self):
         roots = default_shared_roots({})
-        self.assertEqual(
-            {name.name for name in roots},
-            {"verified", "unverified"},
-        )
+        self.assertEqual((corpus_root(),), roots)
         self.assertEqual(
             tuple(p.resolve() for p in roots),
             tuple(p.resolve() for p in resolve_shared_from_corpus(corpus_root())),
@@ -196,14 +192,7 @@ class PackagedCorpusDefault(unittest.TestCase):
             tuple(p.resolve() for p in roots),
             tuple(p.resolve() for p in resolve_shared_from_corpus(support.REPO)),
         )
-        self.assertEqual({p.name for p in roots}, {"verified", "unverified"})
-
-    def test_load_entries_reads_the_packaged_entries(self):
-        config = load_config({}, env={"VAWS_KNOWLEDGE_CANDIDATE_ROOT": ""})
-        report = load_entries(config, ["shared"])
-        self.assertEqual([], report.errors)
-        self.assertEqual(65, len(report.entries))
-        self.assertEqual({"shared"}, {e.layer for e in report.entries})
+        self.assertEqual((support.REPO / "corpus",), roots)
 
     def test_shared_source_names_the_commons_repo(self):
         source = shared_source()
@@ -211,78 +200,37 @@ class PackagedCorpusDefault(unittest.TestCase):
         self.assertIn("source_ref", source)
 
 
-class DocumentLoading(unittest.TestCase):
-    def test_every_entry_carries_its_layer_and_relative_source(self):
-        config = support.build_config()
-        report = load_entries(config, ["shared", "project", "candidate"])
-        self.assertEqual(9, len(report.entries))
-        for loaded in report.entries:
-            self.assertIn(loaded.layer, LAYERS)
-            self.assertEqual("known-failure-signatures", loaded.kind)
-            self.assertFalse(pathlib.Path(loaded.source).is_absolute())
-        candidate = [e for e in report.entries if e.layer == "candidate"]
-        self.assertEqual(["unverified"], [e.document_layer for e in candidate])
+class ReferenceConfiguration(unittest.TestCase):
+    def test_old_review_policy_does_not_become_a_runtime_filter(self):
+        config = load_config({"policy": {"default_statuses": ["verified"], "stale_after_days": 1},
+                              "identity": {"redaction_profile": "old-profile"}},
+                             env={"VAWS_KNOWLEDGE_STALE_AFTER_DAYS": "soon", "VAWS_KNOWLEDGE_REDACTION_PROFILE": "old-profile"})
+        self.assertNotIn("policy", config.describe())
+        self.assertNotIn("redaction_profile", config.identity)
+        self.assertEqual([], config.warnings)
 
-    def test_a_malformed_document_is_reported_not_raised(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            (root / "broken.yaml").write_text("entries: [ unterminated\n")
-            (root / "not-a-document.yaml").write_text("just a string\n")
-            (root / "no-entries.json").write_text(json.dumps({"kind": "x"}))
-            (root / "usable.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "kind": "known-failure-signatures",
-                        "layer": "unverified",
-                        "updated_at": "2026-09-07",
-                        "entries": [{"uuid": support.CANDIDATE_ONLY, "slug": "x"}],
-                    }
-                )
-            )
-            config = support.build_config(shared=False, project=False, candidate=root)
-            report = load_entries(config, ["candidate"])
-            self.assertEqual(1, len(report.entries))
-            self.assertEqual(3, len(report.errors))
-            self.assertEqual({"candidate"}, {err["layer"] for err in report.errors})
-            for err in report.errors:
-                self.assertFalse(pathlib.Path(err["file"]).is_absolute())
+    def test_runtime_and_publishing_configuration_are_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            publishing = {"enabled": False, "repository": "example/corpus"}
+            config = load_config({"backend": "memory", "state_root": "instance",
+                                  "publishing": publishing}, env={}, base_dir=base)
+        self.assertEqual("memory", config.backend)
+        self.assertEqual(base / "instance", config.state_root)
+        self.assertEqual(publishing, config.publishing)
 
-    def test_entry_without_uuid_is_skipped_with_an_error(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            (root / "doc.json").write_text(
-                json.dumps(
-                    {
-                        "kind": "k",
-                        "layer": "unverified",
-                        "entries": [
-                            {"uuid": support.CANDIDATE_ONLY, "slug": "ok"},
-                            {"slug": "no-uuid"},
-                        ],
-                    }
-                )
-            )
-            config = support.build_config(shared=False, project=False, candidate=root)
-            report = load_entries(config, ["candidate"])
-            self.assertEqual(1, len(report.entries))
-            self.assertIn("no uuid", report.errors[0]["error"])
+    def test_json_configuration_does_not_need_yaml(self):
+        with mock.patch("vaws_knowledge.server.layers.yaml", None):
+            config = load_config({}, env={})
+        self.assertEqual([], config.warnings)
 
-    def test_v1_document_is_skipped_without_an_error(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            (root / "legacy.yaml").write_text(
-                "schema_version: 1\nkind: known-failure-signatures\nentries:\n"
-                "  - id: old-v1-entry\n    status: active\n",
-                encoding="utf-8",
-            )
-            (root / "no-uuid.json").write_text(
-                json.dumps({"kind": "k", "layer": "unverified", "entries": [{"slug": "no-uuid"}]})
-            )
-            config = support.build_config(shared=False, project=False, candidate=root)
-            report = load_entries(config, ["candidate"])
-            self.assertEqual([], report.entries)
-            self.assertEqual([], report.errors)
+    def test_explicit_yaml_configuration_reports_missing_parser(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "service.yaml"
+            path.write_text("backend: memory\n", encoding="utf-8")
+            with mock.patch("vaws_knowledge.server.layers.yaml", None):
+                with self.assertRaisesRegex(ConfigError, "PyYAML is required"):
+                    load_config(path=path, env={})
 
 
 if __name__ == "__main__":

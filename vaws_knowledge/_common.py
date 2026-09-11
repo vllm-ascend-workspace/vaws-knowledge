@@ -1,7 +1,6 @@
 """Helpers shared by the tools CLIs.
 
-Nothing here is part of the contract. It exists so that dependency errors,
-YAML loading and path rendering read the same way in every tool.
+Only CLI errors, configuration-file loading and path rendering live here.
 """
 
 from __future__ import annotations
@@ -13,9 +12,8 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
-SCHEMA_PATH = PACKAGE_ROOT / "schemas" / "knowledge-v2.schema.json"
 
-CORPUS_EXTENSIONS = (".yaml", ".yml", ".json")
+CORPUS_EXTENSIONS = (".md", ".markdown", ".yaml", ".yml", ".json")
 
 EXIT_OK = 0
 EXIT_FINDINGS = 1
@@ -40,25 +38,6 @@ def require_yaml():
     except ImportError:
         raise ToolError(_dependency_message("PyYAML")) from None
     return yaml
-
-
-def require_jsonschema():
-    try:
-        import jsonschema  # noqa: F401
-    except ImportError:
-        raise ToolError(_dependency_message("jsonschema")) from None
-    return jsonschema
-
-
-def load_schema(path: Path | None = None) -> dict[str, Any]:
-    schema_path = path or SCHEMA_PATH
-    try:
-        with schema_path.open("r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except FileNotFoundError:
-        raise ToolError(f"error: schema not found at {schema_path}") from None
-    except json.JSONDecodeError as exc:
-        raise ToolError(f"error: schema at {schema_path} is not valid JSON: {exc}") from None
 
 
 def load_document(path: Path) -> Any:

@@ -1,27 +1,21 @@
 # vaws-knowledge
 
-Local Markdown knowledge for vLLM-Ascend development, with CPU retrieval through
-OpenViking, public contribution review, and prebuilt OVPack distribution.
+Local Markdown reference notes for vLLM-Ascend development, with CPU retrieval
+through OpenViking and optional public contribution and shared releases.
 
-This is the 0.3.2 development interface. Capture accepts a title and body; it no
-longer requires the previous v2 YAML authoring schema. Older interfaces are not
-held stable while these capabilities are being developed.
+Knowledge helps the Agent reuse experience. Lookup and capture are optional:
+ordinary work needs no knowledge checklist, structured form or extra completion
+step. Results are references, not instructions or applicability decisions. Use
+current evidence and judgment; a review or release does not prove a hardware claim.
 
-## Local knowledge
+## Read and capture
 
-The `shared`, `project`, and `candidate` layers are returned together by
-relevance and known applicability. Every result is a reference. Public review
-status does not make an entry an axiom or exclude an unreviewed local observation.
-Known incompatible conditions may exclude a result; unknown conditions are kept.
-
-- Project and candidate Markdown is authoritative. The index reconciles added,
-  edited, and deleted files and retries indexing pending offline captures.
-- Capture writes only the local candidate directory. A failed index leaves the
-  Markdown intact. `dry_run` does not alter files or start the retrieval service.
-- An unavailable index returns a degraded answer rather than an authoritative
-  assertion that no knowledge exists.
-- Shared OVPack versions use the active root returned by the distribution
-  module. Shared updates preserve project and candidate data.
+`knowledge_query(text, limit=8)` finds related notes, `knowledge_explain(ref)`
+reads the original, and `knowledge_capture(title, content)` saves a local note.
+Capturing the same title updates that local note.
+A title and non-empty Markdown body are enough. Keep known conditions, versions,
+evidence and uncertainty in the prose. No frontmatter, fixed headings, runtime
+coordinates, verification label or task association is required.
 
 Install Python 3.11 or newer and the package:
 
@@ -30,90 +24,77 @@ python -m pip install -e .
 vaws-knowledge capture --title "Graph replay observation" \
   --content "Eager passed; graph replay differed after the input layout changed."
 vaws-knowledge query --text "graph replay input layout"
-vaws-knowledge server --help
+vaws-knowledge query --ref "REFERENCE_RETURNED_BY_QUERY"
 ```
 
-The local instance uses OpenViking 0.4.19, SDK 0.1.10, FastEmbed 0.8.0 and the
-384-dimensional multilingual MiniLM model. It runs on loopback and uses CPU
-embedding. A model cache can be supplied through
-`VAWS_KNOWLEDGE_EMBEDDING_CACHE`; the first uncached use downloads the model.
+Shared, project and candidate notes are searched together by relevance. Their
+location and recorded context remain visible; there is no trust tier or automatic
+condition verdict. A missing or unavailable result means unknown and does not
+block independent development.
 
-`VAWS_KNOWLEDGE_CONFIG` selects the layer/backend configuration.
-`VAWS_KNOWLEDGE_STATE` selects local runtime state. The MCP tools are
-`knowledge_query`, `knowledge_explain`, and `knowledge_capture`.
+Markdown files retain the original content. MCP capture saves locally without
+waiting for retrieval startup or indexing. Queries reconcile added, edited and
+deleted files with the index. Shared updates preserve project and candidate
+files. Configured summary hooks save locally even when public sharing is off;
+sharing itself follows the publishing configuration. Reuse an existing useful
+summary for capture instead of writing another one.
 
-For an explicit knowledge-editing task, read the package's optional skill with
-`vaws-knowledge skill`. It adds guidance on comparing conditions and conflicting
-observations; ordinary query and capture need no skill. Native clients can
-install the same packaged resource with
-`vaws-knowledge skill --install-dir <client-skill-directory>`.
-Reinstalling identical files is safe; use `--force` only to replace a differing
-installed copy. No workspace checkout is required.
+Bundled and configured Markdown can be queried directly without first building
+a shared release. A retrieved shared note can be read through
+`knowledge_explain(ref)` just like a local note. The package handles indexing
+and active shared versions internally.
 
-## Public contribution
+`VAWS_KNOWLEDGE_CONFIG` selects storage and backend configuration;
+`VAWS_KNOWLEDGE_STATE` selects local runtime state. The local OpenViking instance
+uses CPU embedding on loopback. `VAWS_KNOWLEDGE_EMBEDDING_CACHE` can supply an
+existing model cache; the first uncached retrieval downloads the model.
+See [the service reference](vaws_knowledge/server/README.md) for setup details.
 
-The contribution module prepares a redacted public copy without modifying the
-local source, tracks retryable submissions, and reviews the complete immutable
-base-to-head Markdown change set. Grok compares candidates with retrieved public
-knowledge. Missing recall, an incompatible corpus version, unsupported changes,
-or a stale review cannot authorize an automatic merge.
+## Optional maintenance
 
-For a genuine conflict, a human chooses a direction in the PR and Grok applies
-that choice, checks the resulting changes, and proceeds through conditional
-merge. The existing decision is reused while the substantive conflict remains
-the same. Waiting for that choice affects only the public contribution.
+Project and local notes can be edited as ordinary Markdown. For an explicit
+consolidation task, `vaws-knowledge skill` reads the optional
+`curate-knowledge` guidance. It helps preserve conditions and unresolved
+differences without prescribing a required workflow. Install it for native
+discovery with `vaws-knowledge skill --install-dir <client-skill-directory>`.
+Ordinary lookup, capture and task completion need no skill.
 
-```sh
-vaws-knowledge contribution --help
-```
+## Public contribution and shared updates
 
-Run `vaws-knowledge publishing configure --config PATH` once to reuse/create the
-public corpus fork and enable submission plus shared-version sync. Only new
-captures are queued; existing private candidates are not scanned for upload.
-The live corpus uses format/redaction checks and **human review and merge**.
-The optional Grok review module and its template remain inactive.
+Public sharing follows existing authorization and configuration. The package
+prepares a redacted public copy while preserving the private source, and handles
+configured submission retries. The public corpus uses Markdown/redaction checks
+and **human review and merge**. Local and shared observations remain reference
+material regardless of publication status.
 
-See [publishing setup and lifecycle](docs/publishing.md) and
-[contribution usage](docs/contribution.md).
+For requested setup, `vaws-knowledge publishing configure --config PATH`
+creates or reuses a contribution fork and enables background shared updates.
+`--read-only` consumes public releases without a fork or GitHub login. Existing
+private candidates are not bulk uploaded when sharing is enabled. Ordinary
+development does not need a fork, publishing commands or a wait for PR review.
 
-## Prebuilt distribution
+See [publishing setup](docs/publishing.md) and [public contribution](docs/contribution.md).
+These maintenance operations are separate from normal Agent work.
+The [native-client table](docs/publishing.md#native-client-summaries) distinguishes
+automatic final-response capture from MCP support; Kimi Code currently has MCP
+and session support without a native final-text summary hook.
 
-The distribution module builds a dense OVPack from a fixed Git commit, records
-model/tokenizer and content hashes, verifies a staged pack, imports its stored
-vectors, and atomically switches the active shared version. Failure preserves
-the previous active pointer. The OS holds the switch lock for the lifetime of
-the operation, including imports longer than thirty minutes.
+The distribution module builds dense OVPack releases from fixed Git commits and
+verifies imports before switching the active shared version. Failed updates keep
+the prior version. MCP handles configured retries and synchronization internally.
+See [distribution](docs/distribution.md); detailed formats belong to the package,
+not note authors.
 
-```sh
-vaws-knowledge distribution --help
-vaws-knowledge distribution pins
-```
+## Validation
 
-See [distribution usage](docs/distribution.md). Build and publish complete
-GitHub Releases, or consume local directories. MCP startup and periodic checks
-perform submission retries and shared synchronization in the background.
-Local retrieval and OVPack import/export use the same private tenant key;
-credentials are kept in local state and are excluded from status output.
+Local tests cover Markdown capture/query, index reconciliation, public redaction,
+submission and prebuilt distribution. Windows coverage includes UTF-8 pipes,
+cross-drive paths, process and file-lock handling. Native OpenViking and dense
+distribution tests are opt-in and need the model cache described in
+`tests/test_openviking_local.py` and `tests/distribution/test_native_chain.py`.
+Set `VAWS_KNOWLEDGE_LIVE_OV=1` to run native OpenViking tests; the distribution
+test has its own documented opt-in. Test fixtures are not hardware evidence.
 
-## Validation scope
-
-The development baseline is CPU Apple Silicon macOS. Regression coverage includes
-capture identity, read-only dry runs, project/candidate reconciliation, contribution
-review bounds, portable switch-lock ownership, and native OVPack
-build/import/version-switch/restart with no document re-embedding during import.
-
-Native Windows regression coverage includes UTF-8 CLI pipes, conformance commands,
-cross-drive paths, distribution locks and the live OpenViking capture/query/update/
-delete/restart lifecycle. Use `.venv/Scripts/python.exe -m pytest tests` after
-installing the test extra. The dense distribution chain requires an existing model
-cache; see `tests/test_openviking_local.py` and
-`tests/distribution/test_native_chain.py` for their environment variables.
-Live xAI review remains outside these local tests.
-
-Generated conformance commands can use a JSON array of argument strings to
-preserve paths and special characters on Windows and POSIX. Plain command strings
-still use the host shell's syntax. The implementation subprocess protocol is UTF-8.
-
-The repository still contains corpus validation/redaction and v2 corpus data.
-Those maintenance tools do not impose the old authoring schema or trust ranking
-on the current Markdown query/capture path.
+The installed package version identifies the current interface. Agent tools and
+the packaged reference notes use the same Markdown path. Retired structured
+corpus and automated-review interfaces have been removed.

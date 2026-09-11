@@ -158,3 +158,61 @@ def test_corpus_check_blocks_bad_format_and_private_paths_without_echoing_them(t
     assert not result["ok"]
     assert len(result["problems"]) == 2
     assert "/Users/example" not in json.dumps(result)
+
+
+def test_summary_capture_is_local_without_public_publishing(tmp_path):
+    config = configured(tmp_path)
+    config.publishing = {}
+    text = "The graph replay observation remains uncertain; this is a local reference."
+    with patch("vaws_knowledge.github_transport.gh", side_effect=AssertionError("network in hook")), \
+         patch("vaws_knowledge.server.capture.backend_for_config", side_effect=AssertionError("index in hook")):
+        result = capture_summary({"hook_event_name": "Stop", "last_assistant_message": text},
+                                 config=config, client="codex")
+    assert result["status"] == "saved"
+    assert result["contribution"]["status"] == "local_only"
+    assert iter_pending(config.state_root) == []
+    assert text in next((tmp_path / "candidate").glob("*.md")).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(("client", "payload"), [
+    ("cursor", {"hook_event_name": "afterAgentResponse", "text": "A useful local reference, with its cause still uncertain."}),
+    ("codex", {"hook_event_name": "Stop", "last_assistant_message": "A useful local reference, with its cause still uncertain."}),
+    ("claude", {"hook_event_name": "Stop", "last_assistant_message": "A useful local reference, with its cause still uncertain."}),
+    ("grok", {"hookEventName": "stop", "hook_event_name": "Stop", "lastAssistantMessage": "A useful local reference, with its cause still uncertain."}),
+])
+def test_native_summary_shapes_save_only_supplied_final_text(tmp_path, client, payload):
+    config = configured(tmp_path)
+    config.publishing = {}
+    payload["transcript_path"] = str(tmp_path / "must-not-read.jsonl")
+    saved = capture_summary(payload, config=config, client=client)
+    assert saved["status"] == "saved"
+    assert capture_summary(payload, config=config, client=client)["ref"] == saved["ref"]
+    notes = list((tmp_path / "candidate").glob("*.md"))
+    assert len(notes) == 1
+    assert "cause still uncertain" in notes[0].read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(("client", "payload"), [
+    ("kimi", {"hook_event_name": "Stop", "stop_hook_active": False}),
+    ("cursor", {"hook_event_name": "afterAgentThought", "text": "Private reasoning should never become a note."}),
+    ("codex", {"hook_event_name": "StopFailure", "last_assistant_message": "API failure is not a knowledge summary."}),
+    ("claude", {"hookEventName": "stop", "hook_event_name": "Stop", "lastAssistantMessage": "Grok can import this hook; it must not double capture."}),
+    ("grok", {"hookEventName": "stop_failure", "lastAssistantMessage": "Rate limit error, not a knowledge summary."}),
+])
+def test_unsupported_or_non_response_events_do_not_create_notes(tmp_path, client, payload):
+    config = configured(tmp_path)
+    payload["transcript_path"] = str(tmp_path / "must-not-read.jsonl")
+    assert capture_summary(payload, config=config, client=client)["status"] == "no_summary"
+    assert not list((tmp_path / "candidate").glob("*.md"))
+
+
+def test_plain_text_notes_need_no_heading_or_metadata(tmp_path):
+    from vaws_knowledge.markdown import load_document
+    from vaws_knowledge.contribution.documents import MarkdownDocument
+
+    note = tmp_path / "ordinary.md"
+    text = "One observation whose cause remains unknown."
+    note.write_text(text, encoding="utf-8")
+    loaded = load_document(note, layer="project", root=tmp_path)
+    assert loaded.content == text
+    assert MarkdownDocument.from_text(text).body == text

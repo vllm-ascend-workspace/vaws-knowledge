@@ -1,8 +1,7 @@
-"""Bring the live index in line with mounted project/candidate Markdown.
+"""Bring the live index in line with mounted Markdown.
 
-Markdown on disk is authority. Shared content is an imported OVPack version
-owned by distribution; this module never walks or re-embeds it. Search still
-uses ``current_shared(state_root)`` as the join point.
+Markdown files are the stored source. Shared Markdown is indexed until an
+imported OVPack version is active; imported vectors are never re-embedded.
 """
 
 from __future__ import annotations
@@ -17,8 +16,10 @@ from typing import Any, Sequence
 
 from vaws_knowledge.local.backend import backend_for_config
 from vaws_knowledge.markdown import Document, iter_markdown_files, load_document
+from vaws_knowledge.local.instance import instance_for_config
+from vaws_knowledge.local.shared import current_shared
 
-INDEX_LAYERS = ("project", "candidate")
+INDEX_LAYERS = ("shared", "project", "candidate")
 STATE_NAME = "markdown-index.json"
 
 
@@ -157,11 +158,13 @@ def remember_document(config: Any, document: Document) -> None:
 def reconcile_markdown(config: Any, layers: Sequence[str] | None = None) -> ReconcileReport:
     """Upsert new/changed local Markdown and drop index rows whose files are gone.
 
-    Shared is never swept. Failures leave Markdown in place and are reported so
-    the caller can mark the search degraded.
+    An active imported shared pack is never swept. Failures leave Markdown
+    in place and mark the search incomplete.
     """
 
     wanted = [name for name in (layers or INDEX_LAYERS) if name in INDEX_LAYERS]
+    if "shared" in wanted and current_shared(instance_for_config(config).state_root):
+        wanted.remove("shared")
     report = ReconcileReport()
     if not wanted:
         return report

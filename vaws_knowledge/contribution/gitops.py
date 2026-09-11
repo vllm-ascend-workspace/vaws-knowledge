@@ -69,39 +69,3 @@ def commit_public_file(
         return current_sha(repo)
     run_git(repo, ["commit", "-m", message])
     return current_sha(repo)
-
-
-def commit_files(
-    repo: Path,
-    *,
-    branch: str,
-    files: dict[str, str],
-    message: str,
-    start_ref: str = "HEAD",
-) -> str:
-    """Commit several paths on ``branch``. Idempotent when the tree is unchanged."""
-
-    exists = run_git(repo, ["rev-parse", "--verify", branch], check=False)
-    if exists.returncode == 0:
-        run_git(repo, ["checkout", branch])
-    else:
-        run_git(repo, ["checkout", "-B", branch, start_ref])
-    changed = False
-    for relpath, content in files.items():
-        posix = relpath.replace("\\", "/").lstrip("/")
-        if not posix or ".." in posix.split("/"):
-            raise TransportError("invalid contribution path")
-        dest = Path(repo) / posix
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        encoded = content if content.endswith("\n") else content + "\n"
-        if dest.is_file() and dest.read_text(encoding="utf-8") == encoded:
-            continue
-        dest.write_text(encoded, encoding="utf-8", newline="\n")
-        run_git(repo, ["add", "--", posix])
-        changed = True
-    if not changed:
-        staged = run_git(repo, ["diff", "--cached", "--name-only"])
-        if not (staged.stdout or "").strip():
-            return current_sha(repo)
-    run_git(repo, ["commit", "-m", message])
-    return current_sha(repo)
