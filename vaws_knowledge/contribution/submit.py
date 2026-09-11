@@ -10,7 +10,6 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from vaws_knowledge.bot.publish_comment import GitHubError
 from vaws_knowledge.contribution.documents import (
     DIGEST_PREFIX,
     MarkdownDocument,
@@ -19,7 +18,7 @@ from vaws_knowledge.contribution.documents import (
 )
 from vaws_knowledge.contribution.errors import DocumentRejected, TransportError
 from vaws_knowledge.contribution.gitops import commit_public_file, run_git
-from vaws_knowledge.contribution.github import GitHubTransport, create_pull
+from vaws_knowledge.contribution.github import GitHubError, GitHubTransport, create_pull
 from vaws_knowledge.contribution.pending import (
     STATUS_AWAITING,
     STATUS_BLOCKED,

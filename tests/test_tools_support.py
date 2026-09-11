@@ -7,7 +7,6 @@ value is ever committed to this public repository.
 
 from __future__ import annotations
 
-import copy
 import subprocess
 import sys
 import tempfile
@@ -16,30 +15,9 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-import yaml  # noqa: E402
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "tools"
-EXAMPLE_ENTRY = REPO_ROOT / "examples" / "valid-entry.yaml"
-
-#: The cross-implementation anchor from examples/valid-entry.yaml.
-ANCHOR_HASH = "sha256:32d1e6611f47083c885205b4f4ef398ea238c0e7eaa60a3e3d961c49ce5b166a"
-
-
-def load_yaml(path: Path) -> Any:
-    with path.open(encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
-
-
-def valid_document() -> dict[str, Any]:
-    """A deep copy of the valid fixture document."""
-    return copy.deepcopy(load_yaml(FIXTURES / "valid" / "known-failure-signatures.yaml"))
-
-
-def write_yaml(path: Path, doc: Any) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
-    return path
-
+EXAMPLE_ENTRY = REPO_ROOT / "examples" / "corpus-contribution" / "ordinary.md"
 
 def run_tool(name: str, *args: str, python: str | None = None) -> subprocess.CompletedProcess:
     """Run ``python -m vaws_knowledge <name> ARGS`` from the repo root."""
@@ -129,24 +107,8 @@ class TempDir:
 
 
 class EnvironmentTests(unittest.TestCase):
-    def test_fixture_tree_present(self):
-        self.assertTrue((FIXTURES / "valid" / "known-failure-signatures.yaml").is_file())
+    def test_markdown_example_present(self):
         self.assertTrue(EXAMPLE_ENTRY.is_file())
-
-    def test_missing_jsonschema_gives_actionable_message_not_traceback(self):
-        # Simulate an interpreter without jsonschema by poisoning sys.modules
-        # before the tool imports it.
-        code = (
-            "import sys\n"
-            "sys.modules['jsonschema'] = None\n"
-            "from vaws_knowledge.cli import main\n"
-            f"raise SystemExit(main(['validate', {str(EXAMPLE_ENTRY)!r}]))\n"
-        )
-        proc = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(proc.returncode, 2, proc.stderr)
-        self.assertIn("jsonschema", proc.stderr)
-        self.assertIn("pip install -e .", proc.stderr)
-        self.assertNotIn("Traceback", proc.stderr)
 
     def test_no_tracked_fixture_contains_a_redaction_hit(self):
         # Belt and braces: the fixture tree itself must be clean under the

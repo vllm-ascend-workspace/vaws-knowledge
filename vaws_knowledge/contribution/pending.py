@@ -25,8 +25,6 @@ PENDING_STATUSES = (
     "blocked_redaction",
     "submitted",
     "pr_open",
-    "closed_duplicate",
-    "awaiting_decision",
     "merged",
     "closed",
 )
@@ -36,8 +34,6 @@ STATUS_AWAITING = "awaiting_transport"
 STATUS_BLOCKED = "blocked_redaction"
 STATUS_SUBMITTED = "submitted"
 STATUS_PR_OPEN = "pr_open"
-STATUS_CLOSED_DUP = "closed_duplicate"
-STATUS_AWAITING_DECISION = "awaiting_decision"
 
 
 def utc_now() -> str:
@@ -83,7 +79,6 @@ class PendingRecord:
     created_at: str = ""
     updated_at: str = ""
     notes: list[str] = field(default_factory=list)
-    human_decision: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -116,7 +111,6 @@ class PendingRecord:
             created_at=str(payload.get("created_at") or ""),
             updated_at=str(payload.get("updated_at") or ""),
             notes=list(payload.get("notes") or []),
-            human_decision=dict(payload["human_decision"]) if isinstance(payload.get("human_decision"), Mapping) else None,
         )
 
 

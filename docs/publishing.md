@@ -2,8 +2,8 @@
 
 Status: current
 
-`vaws-knowledge publishing configure --config PATH` enables the complete client
-path for the configured workspace. It reuses GitHub CLI authentication, creates
+For requested setup, `vaws-knowledge publishing configure --config PATH` enables
+sharing according to the user's authorization and configuration. It reuses GitHub CLI authentication, creates
 or reuses the user's corpus fork, and prepares a dedicated contribution clone.
 Existing remotes in business repositories are not changed. Use `--read-only`
 for a client that only consumes releases; downloads of the public corpus do not
@@ -14,7 +14,7 @@ config contains `state_root`, the three layer mounts, and `publishing` settings.
 Set `VAWS_KNOWLEDGE_CONFIG` to that config for MCP and CLI consumers. The workspace
 provides `.agents/scripts/knowledge_setup.py` to set this up with its own paths.
 
-After configuration, a new capture saves a private Markdown candidate and
+With public sharing enabled, a new capture saves a private Markdown candidate and
 prepares a redacted public copy in local state. The MCP service retries pending
 submissions in the background, pushes the content branch to the fork, then opens
 or reuses a PR. Offline or authentication failure keeps the pending record.
@@ -23,9 +23,9 @@ and are not reopened automatically. Existing private candidates are not bulk
 submitted when configuration is enabled.
 
 PR checks validate Markdown and redaction. **Human reviewers merge knowledge
-PRs. Grok review, automatic deduplication and automatic merging are deferred.**
-The optional Grok modules are not called by this lifecycle and no xAI credential
-is needed. PR preparation, checks and publication do not prove hardware claims.
+PRs.** This path needs no automatic reviewer or model credential. PR preparation,
+checks and publication do not prove hardware claims. The package handles this
+workflow; ordinary tasks do not need a fork, publication commands or review waits.
 
 After a corpus merge, CI builds the exact Git commit into a dense OVPack and
 manifest, uploads both to a draft Release, then publishes it. The release tag
@@ -47,10 +47,34 @@ tenant contract. Status output carries no keys.
 `vaws-knowledge publishing once --config PATH` performs one explicit recovery
 or verification pass; normal capture does not need this command.
 
-The workspace installs observe-only final-response adapters for Codex/Claude
-`Stop` and Cursor `afterAgentResponse`. They save only the final text supplied
-by the client and never read complete transcripts. Empty/absent summaries are a
-no-op. Clients without a final-response hook can use one ordinary capture call.
+## Native-client summaries
+
+All five workspace clients use the same knowledge MCP tools. Automatic capture
+uses only a native event that supplies final response text. The observed support
+as of 2026-09-12 is:
+
+| Client | Event and final-text field | Native source |
+|---|---|---|
+| Codex | `Stop` → `last_assistant_message` | [OpenAI hooks](https://learn.chatgpt.com/docs/hooks) |
+| Claude Code | `Stop` → `last_assistant_message` | [Claude hooks](https://code.claude.com/docs/en/hooks) |
+| Cursor | `afterAgentResponse` → `text` | [Cursor hooks](https://cursor.com/docs/hooks) |
+| Grok | `hookEventName: "stop"` → `lastAssistantMessage` | [Grok hooks](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md) |
+| Kimi Code | MCP and session support; no automatic summary capture | [Kimi hooks](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html), [Stop implementation](https://github.com/MoonshotAI/kimi-code/blob/main/packages/agent-core-v2/src/features/externalHooks/agent/agentExternalHooksService.ts) |
+
+Kimi Code 0.42.0 and the inspected upstream `Stop` implementation supply the
+stop-hook flag without final response text. No summary hook is installed for
+that event. A useful existing finding may still be captured through MCP; this
+does not require an extra summary or a transcript scan.
+
+Configured adapters accept only responses from their selected project. They
+reuse final text without reading transcripts or thinking events; repeated
+delivery of the same text reuses its local note. Grok's native marker prevents
+its imported hooks from capturing the same event again. Empty or absent summaries
+are a no-op, and optional capture errors do not interrupt the client. Lookup and
+capture remain optional for every client.
+Hook capture saves locally even when public publishing is disabled. Public
+queuing follows the publishing setting; local persistence does not enable sharing.
 Native hook trust remains managed by the client; configuration does not bypass it.
 
-Windows runtime verification and large-corpus distribution timing remain deferred.
+Validation depends on the tested revision and environment. Historical tests do
+not establish results for another platform or a larger corpus.

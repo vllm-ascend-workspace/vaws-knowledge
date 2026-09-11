@@ -1,132 +1,54 @@
-# Knowledge contribution and trusted review
+# Public knowledge contribution
 
 Status: current
 
-The deployed path uses human review and merge. The optional Grok classifier and
-trusted automatic-review template described below are not enabled. Capture,
-fork push/PR submission and background retries are connected through
-[the publishing lifecycle](publishing.md).
+Public contribution is optional and follows the user's existing authorization
+and configuration. Ordinary lookup, capture and development need no fork,
+review workflow or publishing follow-up. The public corpus uses human review
+and merge. Its notes remain references; publication does not prove a claim or
+decide whether it applies to the reader's environment.
 
-This package turns a local Markdown candidate into a public copy, an
-idempotent fork PR, a Grok review against already-published related
-documents, and a merge that is bound to the candidate head and the base
-SHA. The optional review library is exposed through
-`python -m vaws_knowledge.contribution`; its automatic review operations
-are separate from the currently deployed manual-review path.
+## Authoring
 
-Public review records responsibility for published text. It does not prove
-hardware facts, and Grok does not reproduce hardware measurements. Local
-experience and public knowledge are both reference, not axioms. Retrieval
-comparison uses relevance and known conditions, not a trust rank.
-
-## What an author supplies
-
-Title and non-empty body. Optional conditions, evidence, and source stay
-in the prose when known. There is no required frontmatter, UUID, type
-enum, or coordinate block.
+Use a title and a non-empty Markdown body. Retain known conditions, source,
+evidence and uncertainty in the prose. No fixed headings, frontmatter, UUID,
+type selection, runtime coordinate or verification label is required.
 
 ```markdown
-# 一次图模式启动失败的排查经验
+# Graph replay observation
 
-当时遇到了……，检查后发现……，采用……后启动成功。
-只在当时环境验证过，其他版本尚未确认。
+Eager passed for the tested input; graph replay differed after its layout changed.
+This was observed in one environment. Other versions were not checked.
 ```
 
-Ordinary observations may publish with that reporter scope. Strong metrics
-or universal conclusions must be commensurate with the evidence in the
-text.
+Scope conclusions to the available evidence. Compatible duplicates can be
+combined during an explicit editing task; retain differing observations and
+unresolved explanations instead of turning one run into a universal rule.
 
-## Local prepare and submit
+## Local copy and submission
 
-`after_capture` / `prepare_candidate` leave the candidate file unchanged,
-write a redacted public copy, and record a digest-keyed pending JSON under
-a caller-supplied state root. That store is not a generic task queue.
+The contribution package preserves the local source and prepares a redacted
+public copy. Only that copy may leave local storage. A redaction failure stops
+the export, while local notes and independent development remain usable.
 
-Retrying the same public content reuses the pending record, branch, and
-PR. Offline or GitHub authentication failure leaves `awaiting_transport`
-and does not fail capture.
+Configured publishing saves new captures locally, prepares their public copy,
+and retries submission through a dedicated contribution clone. Repeated delivery
+of the same public content reuses the submission and PR. Authentication or
+network failure preserves pending work; it does not fail the local capture.
+Existing private candidates are not uploaded merely because sharing is enabled.
 
-Content digest (`sha256:…`) is only for idempotency and integrity. Path +
-Git SHA identify published content. A digest must not be passed off as a
-Git identity.
+Use [publishing setup](publishing.md) for an explicitly requested installation or
+maintenance operation. `python -m vaws_knowledge contribution prepare --help`
+describes direct preparation; package code handles identity, integrity and
+submission records. Agents do not author those records or call each internal
+step during ordinary work.
 
-## Review decisions
+## Review and releases
 
-Trusted review recalls related documents from the already-published
-library with native OpenViking `find` (injectable client), then classifies:
+Human reviewers assess the Markdown diff and preserve meaningful conditions,
+evidence and uncertainty. Review can improve the text without establishing
+hardware truth. A merged corpus commit can be built and distributed as a shared
+Release through [the distribution module](distribution.md).
 
-| Decision | Default action |
-|---|---|
-| `new` | merge when evidence policy allows |
-| `duplicate` | close; do not re-enter |
-| `supplement` | auto-write a reviewable Markdown diff, re-check the new head, merge |
-| `condition_difference` | keep both; merge |
-| `conflict` | ask a human for direction, then Grok rewrites, re-checks, merges |
-| `insufficient_evidence` | hold this contribution only |
-
-External unavailability (recall, Grok, GitHub permission) is never a pass.
-
-The result binds `candidate_head`, `base_sha`, and related `{path, git_sha}`.
-A changed PR head is re-reviewed. An advanced base is re-checked for
-related duplicates and conflicts. Two PRs that both passed against an old
-base cannot both land: merge re-reads the live default-branch SHA, holds a
-per-base lock, and sends GitHub merge with `sha=` of the bound head.
-
-## Human direction on true conflicts
-
-Grok may rewrite published Markdown. When the claims cannot be auto-resolved,
-it posts a short PR comment (divergence, already-published excerpts,
-suggested options). A person with write/maintain/admin on the repository
-replies in ordinary language — no form.
-
-Accepted replies are GitHub issue comments, review comments, or review
-bodies that target that conflict binding (`in_reply_to` or the conflict
-key). Candidate Markdown, bot comments, and users without write permission
-are not authorization.
-
-Directions:
-
-- keep the published text → close the PR
-- prefer the candidate → rewrite the published file
-- combine / rewrite → merge the texts into the published file
-
-Grok then produces a redacted Markdown diff, commits a new head, re-reviews
-technical results, and merges through the same CAS path. The expected
-rewrite head does **not** ask for the same decision again. A new decision
-is required only when the conflict fingerprint changes (candidate digest +
-related path and **content** digest). An unrelated base advance that does
-not change those contents is re-checked and reuses the decision.
-
-Waiting for a reply blocks only that public contribution.
-
-## Trusted CI template
-
-`examples/corpus-contribution/trusted-review.yml.tmpl` is a template. The
-`.tmpl` suffix keeps it out of this package's YAML load/schema/redaction
-gates. It is not enabled here.
-
-Activation still requires the integrator to: copy it to the knowledge-content
-repository as a real workflow, drop the suffix, replace every `<pin>` with a
-reviewed action and `vaws-knowledge` version, configure OpenViking
-(`OPENVIKING_URL`) and xAI credentials, and enable the workflow on the
-default branch. Until those pins exist, live GitHub Actions is unverified.
-
-The secret-bearing job checks out the repository default branch, never the
-PR head, never installs or executes fork code, and reviews the immutable
-base→head change set. Unchanged README files are not selected as the
-contribution. Every knowledge Markdown change is classified. Unsupported
-paths (workflows, installable files, root README edits) refuse automatic
-merge. Missing, truncated, or unavailable recall/diff evidence does not
-permit publish. Permission and provider errors are explicit.
-
-## Active submission path
-
-Capture writes ordinary Markdown and prepares its public copy locally.
-`PublishingWorker` retries records using a dedicated fork clone, pushes the
-branch before opening a PR, and records manual merge/closure without reopening
-it. No network write occurs on the capture return path.
-
-## Deferred
-
-- Live xAI Grok quality
-- x86-64 Windows
+This path adds no author requirements, trust tiers, conflict classifications or
+mandatory Agent decisions beyond the Markdown content and authorized public copy.

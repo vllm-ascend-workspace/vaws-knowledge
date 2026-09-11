@@ -1,9 +1,4 @@
-"""Injectable GitHub transport for contribution PRs and conditional merge.
-
-Reuses the published error types, SHA checks, and REST conventions from
-``bot.publish_comment``. Adds PUT (merge) without modifying that module.
-"""
-
+"""GitHub transport for opening a contribution PR and reading its status."""
 from __future__ import annotations
 
 import json
@@ -12,31 +7,23 @@ import urllib.request
 import urllib.parse
 from typing import Any, Mapping, Optional, Protocol
 
-from vaws_knowledge.bot.publish_comment import (
-    API_ROOT,
-    API_VERSION,
-    GitHubError,
-    _full_name,
-    _next_link,
-    _sha,
-)
-from vaws_knowledge.contribution.documents import require_git_sha
 from vaws_knowledge.contribution.errors import TransportError
 
-ORDINARY_BLOB_MODE = "100644"
-MAX_BLOB_BYTES = 1_048_576
+API_ROOT = "https://api.github.com"
+API_VERSION = "2022-11-28"
+
+class GitHubError(Exception):
+    """A GitHub API call failed."""
+
+    def __init__(self, status: int, path: str, detail: str = "") -> None:
+        self.status = status
+        self.path = path
+        super().__init__(f"GitHub API {status} for {path}: {detail}".rstrip())
 
 
 class GitHubTransport(Protocol):
     def get(self, path: str) -> Any: ...
-
-    def paginate(self, path: str) -> list[Any]: ...
-
     def post(self, path: str, body: Mapping[str, Any]) -> Any: ...
-
-    def put(self, path: str, body: Mapping[str, Any]) -> Any: ...
-
-    def patch(self, path: str, body: Mapping[str, Any]) -> Any: ...
 
 
 def transport_message(exc: GitHubError) -> str:
@@ -45,7 +32,6 @@ def transport_message(exc: GitHubError) -> str:
     if exc.status == 0:
         return f"GitHub network error for {exc.path}: {exc}"
     return f"GitHub API {exc.status} for {exc.path}"
-
 
 def raise_transport(exc: GitHubError) -> None:
     raise TransportError(transport_message(exc), status=exc.status) from exc
@@ -93,27 +79,8 @@ class UrllibContributionGitHub:
         payload, _headers = self._request("GET", path)
         return payload
 
-    def paginate(self, path: str) -> list[Any]:
-        items: list[Any] = []
-        current: Optional[str] = path
-        while current:
-            payload, headers = self._request("GET", current)
-            if not isinstance(payload, list):
-                raise TransportError("malformed GitHub listing")
-            items.extend(payload)
-            current = _next_link(headers.get("Link") or headers.get("link"))
-        return items
-
     def post(self, path: str, body: Mapping[str, Any]) -> Any:
         payload, _headers = self._request("POST", path, body)
-        return payload
-
-    def put(self, path: str, body: Mapping[str, Any]) -> Any:
-        payload, _headers = self._request("PUT", path, body)
-        return payload
-
-    def patch(self, path: str, body: Mapping[str, Any]) -> Any:
-        payload, _headers = self._request("PATCH", path, body)
         return payload
 
 
@@ -122,49 +89,6 @@ def pull_head_ref(fork: str, upstream: str, branch: str) -> str:
         return branch
     owner = fork.split("/", 1)[0]
     return f"{owner}:{branch}"
-
-
-def default_branch_sha(api: GitHubTransport, repository: str, branch: str) -> str:
-    try:
-        payload = api.get(f"/repos/{repository}/git/ref/heads/{branch}")
-    except GitHubError as exc:
-        raise_transport(exc)
-        raise
-    if not isinstance(payload, Mapping):
-        raise TransportError("malformed git ref")
-    obj = payload.get("object")
-    sha = _sha(obj.get("sha") if isinstance(obj, Mapping) else None)
-    if sha is None:
-        raise TransportError("malformed git ref sha")
-    return sha
-
-
-def live_pull(api: GitHubTransport, repository: str, number: int) -> dict[str, Any]:
-    try:
-        payload = api.get(f"/repos/{repository}/pulls/{number}")
-    except GitHubError as exc:
-        raise_transport(exc)
-        raise
-    if not isinstance(payload, Mapping):
-        raise TransportError("malformed pull request")
-    return dict(payload)
-
-
-def pull_head_sha(pull: Mapping[str, Any]) -> str:
-    head = pull.get("head")
-    sha = _sha(head.get("sha") if isinstance(head, Mapping) else None)
-    if sha is None:
-        raise TransportError("pull request is missing a git head")
-    return sha
-
-
-def pull_base_sha(pull: Mapping[str, Any]) -> str:
-    base = pull.get("base")
-    sha = _sha(base.get("sha") if isinstance(base, Mapping) else None)
-    if sha is None:
-        raise TransportError("pull request is missing a git base")
-    return sha
-
 
 def find_open_pull(
     api: GitHubTransport,
@@ -185,7 +109,6 @@ def find_open_pull(
         if isinstance(item, Mapping) and isinstance(item.get("number"), int):
             return dict(item)
     return None
-
 
 def create_pull(
     api: GitHubTransport,
@@ -216,105 +139,3 @@ def create_pull(
     if not isinstance(created, Mapping) or not isinstance(created.get("number"), int):
         raise TransportError("malformed create-pull response")
     return dict(created)
-
-
-def repository_full_name(value: object) -> str:
-    name = _full_name(value)
-    if name is None:
-        raise TransportError("malformed repository")
-    return name
-
-
-def require_sha(value: object) -> str:
-    return require_git_sha(value)
-
-
-WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
-
-
-def collaborator_permission(api: GitHubTransport, repository: str, username: str) -> str:
-    """Return GitHub permission for ``username``, or ``none``."""
-
-    if not username:
-        return "none"
-    try:
-        payload = api.get(f"/repos/{repository}/collaborators/{username}/permission")
-    except GitHubError as exc:
-        if exc.status in (404, 403):
-            return "none"
-        raise_transport(exc)
-        raise
-    if not isinstance(payload, Mapping):
-        return "none"
-    permission = payload.get("permission")
-    if isinstance(permission, str) and permission:
-        return permission
-    return "none"
-
-
-def has_write_permission(api: GitHubTransport, repository: str, username: str) -> bool:
-    return collaborator_permission(api, repository, username) in WRITE_PERMISSIONS
-
-
-def github_commit_files(
-    api: GitHubTransport,
-    *,
-    repository: str,
-    branch: str,
-    parent_sha: str,
-    files: Mapping[str, str],
-    message: str,
-) -> str:
-    """Create a commit on ``branch`` through the Git Data API. Does not checkout PR code."""
-
-    parent = require_git_sha(parent_sha)
-    try:
-        commit = api.get(f"/repos/{repository}/git/commits/{parent}")
-    except GitHubError as exc:
-        raise_transport(exc)
-        raise
-    if not isinstance(commit, Mapping):
-        raise TransportError("malformed git commit")
-    tree_obj = commit.get("tree")
-    base_tree = _sha(tree_obj.get("sha") if isinstance(tree_obj, Mapping) else None)
-    entries: list[dict[str, str]] = []
-    for path, content in files.items():
-        posix = path.replace("\\", "/").lstrip("/")
-        if not posix or ".." in posix.split("/"):
-            raise TransportError("invalid contribution path")
-        encoded = content if content.endswith("\n") else content + "\n"
-        try:
-            blob = api.post(
-                f"/repos/{repository}/git/blobs",
-                {"content": encoded, "encoding": "utf-8"},
-            )
-        except GitHubError as exc:
-            raise_transport(exc)
-            raise
-        blob_sha = _sha(blob.get("sha") if isinstance(blob, Mapping) else None)
-        if blob_sha is None:
-            raise TransportError("malformed git blob")
-        entries.append({"path": posix, "mode": ORDINARY_BLOB_MODE, "type": "blob", "sha": blob_sha})
-    tree_body: dict[str, Any] = {"tree": entries}
-    if base_tree:
-        tree_body["base_tree"] = base_tree
-    try:
-        tree = api.post(f"/repos/{repository}/git/trees", tree_body)
-        tree_sha = _sha(tree.get("sha") if isinstance(tree, Mapping) else None)
-        if tree_sha is None:
-            raise TransportError("malformed git tree")
-        created = api.post(
-            f"/repos/{repository}/git/commits",
-            {"message": message, "tree": tree_sha, "parents": [parent]},
-        )
-        new_sha = _sha(created.get("sha") if isinstance(created, Mapping) else None)
-        if new_sha is None:
-            raise TransportError("malformed git commit")
-        api.patch(
-            f"/repos/{repository}/git/refs/heads/{branch}",
-            {"sha": new_sha, "force": False},
-        )
-    except GitHubError as exc:
-        raise_transport(exc)
-        raise
-    return new_sha

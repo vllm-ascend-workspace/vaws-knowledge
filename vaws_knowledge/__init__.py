@@ -1,16 +1,12 @@
-"""Installable engine for the vaws-knowledge commons.
-
-The public library surface is ``canonical``, ``validate``, ``redact``,
-``export`` and ``corpus``. The corpus ships in the wheel.
-"""
+"""Local Markdown references, optional retrieval and public contribution."""
 
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-from vaws_knowledge import canonical, corpus, export, redact, validate
+from vaws_knowledge import corpus, redact
 
-__all__ = ["canonical", "corpus", "export", "package_version", "redact", "validate"]
+__all__ = ["corpus", "package_version", "redact"]
 
 
 def package_version() -> str:
@@ -19,4 +15,4 @@ def package_version() -> str:
     try:
         return version("vaws-knowledge")
     except PackageNotFoundError:
-        return "0.3.2"
+        return "0.4.0"

@@ -91,3 +91,18 @@ class DocumentIdentity(unittest.TestCase):
             self.assertEqual("图模式失败", loaded.title)
             self.assertEqual("viking://resources/candidate/captured-entry.md", loaded.uri)
             self.assertEqual("old stored body", loaded.content)
+
+
+def test_updating_prose_keeps_recorded_context_without_requiring_metadata(tmp_path):
+    from vaws_knowledge.markdown import save_document, meta_path
+    import json
+
+    original = save_document(tmp_path, layer="candidate", title="Reference", content="Observed once.",
+                             source={"run": "old evidence"}, conditions={"soc": "A3"},
+                             evidence="Existing trace excerpt")
+    updated = save_document(tmp_path, layer="candidate", title="Reference", content="Still uncertain.")
+    assert updated.path == original.path
+    assert updated.source == original.source
+    assert updated.conditions == original.conditions
+    assert updated.evidence == original.evidence
+    assert "status" not in json.loads(meta_path(updated.path).read_text(encoding="utf-8"))

@@ -1,253 +1,84 @@
-# server/ — knowledge retrieval service
+# Knowledge retrieval service
 
-One query surface over the three trust layers of [README.md](../README.md),
-plus a write path that can only ever touch the local one.
+Status: current
 
-```
-layers.py      mount the three layers; absence is a reported state
-query.py       OpenViking retrieval over Markdown; known conditions optional
-capture.py     title + content Markdown write path (candidate layer only)
-mcp_server.py  stdio JSON-RPC MCP server, newline-delimited framing
-OpenViking     native storage/search; FastEmbed CPU embeddings on loopback
-```
+The service reads ordinary Markdown and saves local notes. It provides optional
+reference material; it does not decide whether a claim applies to the current
+environment. Known conditions and evidence stay visible for the Agent to judge.
+See [the package README](../../README.md) for the common usage contract.
 
-Runtime dependency: the installed `vaws-knowledge` package (PyYAML is
-declared there). Nothing here imports `torch`, `torch_npu`, or touches
-NPU hardware; the service reads and writes text documents.
+## Agent tools
 
-## Layers
+| Tool | Inputs | Result |
+|---|---|---|
+| `knowledge_query` | `text`; optional `limit` (default 8) | Relevant excerpts and document references |
+| `knowledge_explain` | `ref` from a query | Original Markdown and recorded context |
+| `knowledge_capture` | `title`, `content` | Local saved note and indexing state |
 
-| Layer | Reads | Writable | Default |
-|---|---|---|---|
-| `shared` | packaged corpus `verified/` and `unverified/` | never | `vaws_knowledge.corpus` both subsets |
-| `project` | paths from config, e.g. a business repo's `.agents/knowledge/` | never through this service | unconfigured |
-| `candidate` | a developer's untracked local directory | yes, by `capture.py` | `$XDG_STATE_HOME/vaws-knowledge/candidate`, else `~/.local/state/vaws-knowledge/candidate` |
+A title and non-empty body are enough. No author schema, runtime coordinate,
+status choice, fixed sections or extra summary is required. Old v2 arguments
+such as `entry`, `reader_coordinate`, `statuses` and `include_unverified`
+are not MCP inputs. Retrieval returns local and shared notes by relevance,
+without trust ranking, status filtering or applicability verdicts.
 
-A layer is a trust source, not a status filter. Entries carry their own
-`status`; default visibility for operational facts is
-`policy.default_statuses` (`verified`, `stale`, `resolved`). Shared
-`unverified` rules and measurements are therefore mounted but hidden until a
-caller passes `statuses`, `include_unverified`, or changes
-`default_statuses`. Sourced `reference` entries in shared and project layers
-are part of the default result set even at `status: unverified`, labelled as
-citations. `VAWS_KNOWLEDGE_CORPUS` still overrides the default and resolves
-both subsets from that path.
+Responses identify unavailable storage or indexes separately from an empty
+result. Neither is evidence that a claim is absent, supported or safe to ignore.
+The Agent can continue independent work. MCP capture saves the Markdown without
+waiting for an index or retrieval startup; queries reconcile local changes later.
+Configured public sharing uses a separate redacted copy and follows the existing
+authorization. Summary hooks can save locally while public sharing is disabled.
 
-`shared` is forced read-only even if configuration asks otherwise:
-[docs/federation.md](../docs/federation.md) says a fork never writes into
-`verified/`. `project` is tracked content of another repo and changes through
-that repo's PRs, not through a background service call.
+## Storage and setup
 
-The candidate default sits outside the checkout on purpose. A default inside
-the repo eventually gets committed by somebody.
+These locations are package configuration, not an author-managed lifecycle:
 
-## Configuration
+| Location | Content | Write path |
+|---|---|---|
+| `shared` | Packaged or downloaded public notes | Read-only; shared Release updates |
+| `project` | A project's Markdown files | Ordinary project file editing |
+| `candidate` | Local captured notes | Capture or ordinary local file editing |
 
-JSON or YAML. Precedence, lowest to highest: built-in defaults → config file →
-mapping passed by an embedding caller → environment variables.
+Shared updates preserve the project and candidate locations. There is no
+promotion requirement from one location to another. Missing project configuration
+does not prevent using local notes.
+Bundled or mounted shared Markdown is indexed when queried; no release build is
+needed first. Once a prebuilt shared pack is active, its stored vectors are reused
+and `knowledge_explain(ref)` reads its original Markdown. Both paths are internal
+to the package.
+
+For a standalone configured project:
 
 ```json
 {
   "layers": {
-    "shared":    { "roots": ["corpus/verified"] },
-    "project":   { "roots": ["../example-business-repo/.agents/knowledge"] },
+    "project": { "roots": ["../example-project/.agents/knowledge"] },
     "candidate": { "root": "~/.local/state/vaws-knowledge/candidate" }
-  },
-  "identity": {
-    "contributor": "example-handle",
-    "origin_repo": "example-org/example-business-repo",
-    "redaction_profile": "r1"
-  },
-  "policy": {
-    "stale_after_days": 180,
-    "default_statuses": ["verified", "stale", "resolved"]
   }
 }
 ```
 
-A layer may also be written as a bare string (one root), a list (several
-roots), or `{"enabled": false}`. Relative roots resolve against the config
-file's directory — never against the process working directory, which moves
-under a long-running server.
+Relative paths resolve against the configuration file's directory.
+`VAWS_KNOWLEDGE_CONFIG` selects that file; `VAWS_KNOWLEDGE_STATE` selects
+runtime state. Existing workspace setup can supply both without per-task inputs.
+Public contribution and Release setup are described in
+[publishing](../../docs/publishing.md).
 
-Discovery order when no path is passed: `$VAWS_KNOWLEDGE_CONFIG`, then
-`./vaws-knowledge.{json,yaml,yml}`, `./.vaws/vaws-knowledge.*`, and
-`$XDG_CONFIG_HOME/vaws-knowledge/vaws-knowledge.*` (default `~/.config`).
-
-### Environment overrides
-
-| Variable | Effect |
-|---|---|
-| `VAWS_KNOWLEDGE_CORPUS` | corpus root (`verified/` + `unverified/`, or a checkout with `corpus/`) |
-| `VAWS_KNOWLEDGE_CONFIG` | config file path |
-| `VAWS_KNOWLEDGE_SHARED_ROOTS` | shared roots, `:`- or `,`-separated |
-| `VAWS_KNOWLEDGE_PROJECT_ROOTS` | project roots, `:`- or `,`-separated |
-| `VAWS_KNOWLEDGE_CANDIDATE_ROOT` | candidate root |
-| `VAWS_KNOWLEDGE_LAYERS` | allowlist, e.g. `shared,project` |
-| `VAWS_KNOWLEDGE_CONTRIBUTOR` / `_ORIGIN_REPO` / `_REDACTION_PROFILE` | provenance stamped by capture |
-| `VAWS_KNOWLEDGE_STALE_AFTER_DAYS` | staleness labelling horizon |
-
-Setting a `*_ROOTS` variable to the empty string disables that layer, which is
-how you turn one off without editing a config file.
-
-## Running
-
-```bash
-# resolved mounts, then exit
-vaws-knowledge server --corpus /path/to/vaws-knowledge --describe
-
-# stdio MCP server
-vaws-knowledge server --corpus /path/to/vaws-knowledge [--config path/to/vaws-knowledge.json]
+```sh
+vaws-knowledge server --config path/to/vaws-knowledge.json --describe
+vaws-knowledge server --config path/to/vaws-knowledge.json
 ```
 
-## Tools
+The installed package owns the local OpenViking instance and CPU embedding.
+This service performs no NPU execution. Index reconciliation and configured
+submission/sync run inside the package; callers do not sequence these operations
+after each capture.
 
-All three tool payloads carry the same envelope: `version` (the installed
-package version), `layers_available`, `layers_absent` (layer → reason),
-`degraded`, `absent_fact_semantics: "unknown"`, `degradation_contract`,
-`source_ref` (the installed commons commit, or `null`) and
-`source_repo` (`vllm-ascend-workspace/vaws-knowledge`).
+## Implementation reference
 
-### `knowledge_query`
+`layers.py` resolves configured storage; `query.py` retrieves Markdown;
+`capture.py` saves local notes; `mcp_server.py` exposes the three tools.
+The package version identifies the interface.
 
-| Argument | Type | Default | Meaning |
-|---|---|---|---|
-| `text` | string | — | free-text symptom |
-| `fingerprint` | string | — | matched against `rule.fingerprints` |
-| `bodies` | array | `["rule","measurement","reference"]` | restrict to one body variant |
-| `reader_coordinate` | object | `{}` | your own build; any of the twelve `scope` dimensions |
-| `layers` | array | `["shared","project"]` | overrides the layer set |
-| `statuses` | array | policy default | replaces the default status set |
-| `include_unverified` | bool | `false` | opt in to `unverified`, and to the `candidate` layer that holds it |
-| `include_non_matching` | bool | `false` | also return entries whose scope excludes you, labelled |
-| `kind` | string | — | restrict to one document family |
-| `limit` | int | `20` | |
-
-Each result carries `body` (`"rule"`, `"measurement"` or `"reference"`),
-`evidence_class` (`operational_evidence` or `sourced_reference`), `layer`,
-`status`, `confidence`, `content_hash`, `provenance.origin_repo`, `evidence`,
-`verified_by`, `lifecycle`, `staleness`, `source`, `warnings`, `notes`, and an
-`applicability` block. Runtime bodies include coordinate verdicts:
-
-```json
-"applicability": {
-  "applies": true,
-  "covered": ["soc", "torch", "vllm", "topology"],
-  "matched_on_independence_claim": [{"dimension": "cann", "basis": "..."}],
-  "unchecked": ["component"],
-  "undecidable": [],
-  "mismatched": [],
-  "dimensions": [{"dimension": "soc", "verdict": "covered", "...": "..."}]
-}
-```
-
-Per-dimension verdicts:
-
-| Verdict | Meaning |
-|---|---|
-| `covered` | the entry bounds the dimension and your value is inside those bounds |
-| `assumed_any` | the entry claims `any`; it matches, but on an unproven claim — the `basis` is returned and a warning is attached |
-| `unchecked` | you supplied no value, so nothing about this dimension was verified |
-| `undecidable` | the values cannot be ordered (e.g. a non-numeric build string), or the entry's constraint is malformed |
-| `mismatch` | your value is outside the entry's bounds |
-
-An entry with any `mismatch` does not apply. It is withheld by default and the
-count of withheld entries appears in `notes`; with `include_non_matching` it
-comes back with `applies: false` and never outranks an entry that applies.
-Ranking prefers dimensions that were *observed* (`covered`) over dimensions
-that were *asserted* (`assumed_any`).
-
-### `knowledge_capture`
-
-| Argument | Type | Default |
-|---|---|---|
-| `entry` | object (schema v2 entry) | required |
-| `kind` | string | `known-failure-signatures` |
-| `layer` | string | `candidate` — anything else is refused |
-| `dry_run` | bool | `false` |
-
-Supply `slug` and exactly one body. Runtime bodies (`rule` / `measurement`)
-still need all twelve `scope` dimensions. A sourced `reference` must not
-invent those coordinates. `uuid`, `content_hash`, `provenance` and the
-`lifecycle` dates are stamped when absent; `status` defaults to `unverified`
-and `confidence` to `low`. `rule.fingerprints` are stored in canonical form
-so that anyone reading the file can reproduce `content_hash` from it.
-
-Refusals are results, not crashes: `error: "capture_refused"` with
-`refused_layer`, or `error: "capture_rejected"` with every structural problem
-listed at once.
-
-### `knowledge_explain`
-
-`uuid` (required), plus optional `reader_coordinate` and `layers`. Returns the
-entire entry — full coordinate, `verification.evidence`, the concrete
-`verified_against` environment, lifecycle, conflicts — and reaches entries the
-default query hides (`deprecated`, superseded). A uuid that is not present
-returns `found: false` with `answer: "unknown"` and the list of layers
-actually consulted.
-
-## Default result set
-
-Following [docs/lifecycle.md](../docs/lifecycle.md): operational `verified`,
-`stale` (with the "do not trust its version bounds" warning) and `resolved`
-(with its `resolved_by` reference) are returned. Operational `unverified`
-rules and measurements require `include_unverified`. Sourced `reference`
-entries in shared and project layers are returned by default even when
-`status: unverified`, labelled by source and trust — not as a local
-observation, and not as a fact that a handshake would promote. `deprecated`
-is never returned by default, and neither is an entry with
-`lifecycle.superseded_by` set. An explicit `statuses` argument overrides all
-of that, including reaching superseded entries.
-
-## When a layer, or the service, is unavailable
-
-The rule this preserves: **an absent fact means "unknown", never
-"supported"**. So absence is always reported, never rendered as an empty
-success.
-
-| Situation | Behaviour |
-|---|---|
-| A layer is unconfigured | `layers_absent[layer] = "not configured (no roots supplied)"`. `degraded` is true only when that layer was actually requested. |
-| A configured shared/project path does not exist | `layers_absent[layer]` names the path. Other layers still answer. |
-| A configured candidate path does not exist | Mounted as an empty layer (`present: true`). "Nothing captured yet" is the normal start state, not a gap. |
-| A candidate path exists but cannot be read | Absent, same as any other unreadable layer. |
-| `degraded` | True only when a **consulted** layer is missing. An unrequested candidate root does not make the answer incomplete. |
-| A layer is disabled by config or env | The reason names the config key or variable. |
-| No layer at all is mounted | Empty `results`, `answer: "unknown"`, and a note that every answer from this service is therefore unknown. |
-| One document is malformed | Recorded in `load.errors` (layer + file relative to its root) and skipped. The service does not go down, and the gap is visible. |
-| The config file cannot be parsed | The server starts with no layers, reports `configuration_error`, and answers `unknown`. |
-| PyYAML is missing | JSON documents and JSON config still load; the actionable install hint appears in `warnings` and on stderr. YAML files are reported in `load.errors`. |
-| A tool raises | `isError: true` with `error: "internal_error"` and `answer: "unknown"`. The loop keeps serving. |
-| The whole service is unreachable | The caller sees no `initialize` response at all. Callers must treat that as unknown, not as "no known issues" — there is no in-band way for us to say it. |
-
-`version` (the installed `vaws-knowledge` package version) appears in the
-`initialize` result at top level, inside `serverInfo`, and in every tool
-payload. The package version is the contract; there is no separate
-service-API handshake. `measurement` and `reference` are part of that
-contract. `bodies` is an ordinary query filter. Rule-only fields come back as
-`null` rather than absent on a measurement or reference result, so a client
-can tell "not a rule" from "a rule missing a field".
-
-## Framing
-
-Newline-delimited JSON-RPC over stdio, implemented in `mcp_server.py`. One
-UTF-8 JSON object per line; messages must not contain embedded newlines.
-`Content-Length` framing is not used. The official MCP SDK is not required;
-if it happens to be importable we report that in `initialize`
-(`serviceInfo.official_mcp_sdk_importable`) but we do not switch transports
-based on what is installed. Blank lines are ignored.
-
-## Canonicalization
-
-`content_hash` is computed only by `vaws_knowledge.canonical.content_hash`.
-`capture.py` does not keep a second implementation. Every capture result
-reports `content_hash_source: vaws_knowledge.canonical`.
-
-## One thing schema v2 cannot express
-
-The document-level `layer` field is `verified | unverified` — the two *corpus
-review zones*. The three *trust layers* (`shared`, `project`, `candidate`) are
-a different axis, and `tests/test_schema_contract.py` explicitly rejects
-`layer: candidate` in a document. So the trust layer comes from the mount, not
-from the file, and a candidate capture is written as `layer: unverified`.
-Query results carry the mount-derived layer, which is the one a reader needs.
+MCP uses newline-delimited UTF-8 JSON-RPC on stdio. Only protocol messages go to
+stdout. Tool errors and unavailable sources remain visible to the caller without
+turning knowledge into an execution gate.

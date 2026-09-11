@@ -128,6 +128,15 @@ class Handshake(unittest.TestCase):
         for tool in result["tools"]:
             self.assertFalse(tool["inputSchema"]["additionalProperties"])
 
+    def test_tools_offer_only_task_inputs(self):
+        result = handle_message(service(), {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]
+        properties = {tool["name"]: set(tool["inputSchema"]["properties"]) for tool in result["tools"]}
+        self.assertEqual({
+            "knowledge_query": {"text", "limit"},
+            "knowledge_capture": {"title", "content"},
+            "knowledge_explain": {"ref"},
+        }, properties)
+
     def test_notifications_get_no_response(self):
         self.assertIsNone(
             handle_message(service(), {"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -193,7 +202,7 @@ class Tools(unittest.TestCase):
         self.assertTrue(result["isError"])
         self.assertEqual("invalid_arguments", result["structuredContent"]["error"])
 
-    def test_capture_into_a_non_candidate_layer_is_refused_through_the_tool(self):
+    def test_capture_rejects_layer_selection_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             svc = KnowledgeService(config=support.build_config(candidate=tmp), today=TODAY)
             for layer in ("shared", "project", "verified"):
@@ -205,9 +214,22 @@ class Tools(unittest.TestCase):
                     )
                     self.assertTrue(result["isError"])
                     payload = result["structuredContent"]
-                    self.assertEqual("capture_refused", payload["error"])
-                    self.assertEqual(layer, payload["refused_layer"])
+                    self.assertEqual("invalid_arguments", payload["error"])
+                    self.assertIn("layer", payload["detail"])
             self.assertEqual([], list(pathlib.Path(tmp).iterdir()))
+
+    def test_capture_saves_without_starting_the_index(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = KnowledgeService(config=support.build_config(candidate=tmp))
+            with patch("vaws_knowledge.server.capture.backend_for_config", side_effect=AssertionError("index started")):
+                result = call(svc, "knowledge_capture", {"title": "Local observation", "content": "Recorded with uncertain cause."})
+            self.assertFalse(result["isError"], result)
+            payload = result["structuredContent"]
+            self.assertTrue(pathlib.Path(payload["path"]).is_file())
+            self.assertEqual("pending", payload["index"])
+            found = call(svc, "knowledge_query", {"text": "uncertain cause"})["structuredContent"]
+            self.assertTrue(found["results"])
 
     def test_capture_rejection_reports_every_problem(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -225,6 +247,15 @@ class Tools(unittest.TestCase):
 
 
 class Degradation(unittest.TestCase):
+    def test_index_failure_is_not_overwritten_by_healthy_mounts(self):
+        from vaws_knowledge.local.backend import UnavailableBackend
+        svc = service()
+        svc.config.retrieval = UnavailableBackend("not ready")
+        result = call(svc, "knowledge_query", {"text": "reference"})["structuredContent"]
+        self.assertTrue(result["degraded"])
+        self.assertTrue(result["unavailable"])
+        self.assertIn("not ready", result["index_detail"])
+
     def test_no_layers_at_all_still_answers_unknown(self):
         svc = service(shared=False, project=False, candidate=False)
         payload = call(svc, "knowledge_query", {"text": "anything"})["structuredContent"]

@@ -1,129 +1,49 @@
 # Contributing
 
-## Submit only what you are free to publish
+Status: current
 
-This is a public repository and its history cannot be recalled. Before an entry
-leaves your fork it must pass the source-side redaction gate
-(`python -m vaws_knowledge redact`), and it must not contain:
+Useful knowledge is ordinary Markdown with a title and non-empty body. Preserve
+known conditions, observations, evidence references and uncertainty in the text.
+No YAML schema, fixed sections, runtime coordinates or verification labels are
+required. A note can record a useful observation without claiming a confirmed
+root cause. Keep conclusions proportional to the evidence.
 
-- IP addresses, hostnames, container names, MAC addresses
-- internal machine identities — the name or slot number a team uses for a
-  specific box, whether it looks like a hostname or not (`remote 131`,
-  `remote_131`, or `131` embedded in a run identifier). **Scrub the machine,
-  keep the method:** "single-card 910B4, NPU index 4, torch_npu 2.10.0,
-  8192×8192 dense matmul timed with `torch.npu.Event`" is what makes a measured
-  number checkable and must survive redaction. What must not survive is *which*
-  box it was
-- absolute paths that reveal a user or org (`/home/<user>/…`, `/Users/…`, internal mounts)
-- usernames, e-mail addresses, employee or ticket identifiers
-- credentials of any kind, including partial tokens
-- unreleased hardware identifiers, driver builds, or model names
-- customer, project, or internal codenames
+Knowledge remains reference material. The Agent decides whether to read or
+retain it; lookup and capture are not required development or completion steps.
+See [the package README](README.md) for the ordinary tools.
 
-**One exemption, and only one.** Addresses from the reserved documentation
-ranges are permitted: `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`,
-`2001:db8::/32`, and the `example.invalid` / `example.com` domains. They are not
-routable and identify nobody, so they leak nothing — and fixtures that exist to
-prove the screening *works* need a rejectable value to feed it. Loopback is
-likewise fine.
+## Public notes
 
-This exemption is stated here because the screening tool already implements it,
-and a rule that disagrees with its own enforcement is worse than either
-alternative: readers follow the prose, tools follow the code, and the gap is
-where a real address eventually slips through. Reserved ranges other than those
-listed — `198.18.0.0/15` benchmarking space, for instance — are **not** exempt,
-because they do appear in real internal networks.
+Contribute only content authorized for public sharing. The package prepares a
+redacted public copy while retaining the private local source. Internal addresses,
+hostnames, machine and container identifiers, private paths and credentials must
+stay out of the public copy. Preserve technical conditions needed to understand
+the observation when they can be shared safely.
 
-If a fact cannot be stated without one of these, it belongs in your repo's
-`project` layer, not here. That is a supported outcome, not a failure.
+Use the existing configured publishing path or
+`python -m vaws_knowledge contribution prepare --help` for an explicit contribution
+task. A redaction or transport failure affects that export only. Local notes
+remain usable. Never upload existing private candidates merely because a sharing
+configuration has been enabled.
 
-Nothing above relies on a reviewer noticing. `additionalProperties: false` in
-`vaws_knowledge/schemas/knowledge-v2.schema.json` means an undeclared field cannot be exported
-at all, and the redaction ruleset (`redaction_profile`) is versioned so the main
-repo can re-scan the whole corpus when the rules tighten.
+The public corpus uses human review and merge. Review the text and its evidence,
+combine compatible duplicates when useful, and preserve unresolved differences.
+There is no trust promotion ladder or requirement to resolve every difference
+before retaining an observation. See [public contribution](docs/contribution.md)
+and [publishing setup](docs/publishing.md).
 
-## An entry is a claim, not a note
+## Package changes
 
-Required for every entry:
+Keep runtime behavior in its owning package. Update affected callers, help,
+skills and documentation with API changes. Run the checks relevant to the
+change; existing fixtures and historical measurements are not fresh hardware
+evidence. Native OpenViking tests require `VAWS_KNOWLEDGE_LIVE_OV=1` and their
+documented local model cache; they are skipped by the default test command.
 
-- **Complete coordinate.** All twelve `scope` dimensions. Bound them (`values` /
-  `range`) or explicitly claim independence (`any` + `basis`). An `any` claim
-  without a stated basis is rejected, because unexamined independence claims are
-  the usual root cause of contradictory knowledge across forks.
-- **Exactly one body.** A `rule` (a failure and its mechanism) or a
-  `measurement` (a quantity about a subject). Never both, never neither.
-- **A root cause, not a symptom.** In a `rule` body, `root_cause` must explain
-  the mechanism. "Restarting fixed it" is not a root cause.
-- **A method, not just a number.** In a `measurement` body, `method` must say
-  how the value was established — `vendor_platform_config` with the snapshot it
-  came from, or `microbenchmark` with the parameters somebody would need to
-  repeat it. A quantity needs a `name`, a `basis` (`declared`, `theoretical`,
-  `measured` or `sustained`), a `value` and a `unit`; a value without a unit is rejected by
-  the schema, because tflops and tops are not interchangeable. Write values as
-  **strings** (`value: "2.70336"`): a YAML float is rejected, for the same
-  reason a float version bound is.
-- **Followable evidence.** `verification.evidence` takes references —
-  `run_manifest`, `pull_request`, `commit`, `ci_run`, `issue`. Prose is not
-  evidence. If the run that established this is not referenceable, submit as
-  `unverified` and say so.
-- **The exact environment.** `verification.verified_against` records the single
-  concrete environment observed, not a range. This is what makes the claim
-  auditable later.
-
-## Promotion path
-
-```
-your fork  --export (redact + validate)-->  PR  --bot-->  corpus/unverified/
-corpus/unverified/  --evidence + non-submitter confirmation-->  corpus/verified/
+```sh
+python -m pip install -e ".[test]"
+python -m pytest tests
 ```
 
-The review bot gates schema, redaction, duplicates, conflicts and hash
-integrity. It never decides whether your claim is true, so bot approval alone
-lands in `unverified/`. `verified/` needs a reference someone can follow and a
-confirmation from somebody other than you. `verification.verified_by` must not
-contain the bot, and must not contain only the submitter.
-
-## If your entry conflicts with an existing one
-
-The bot will report the conflicting `uuid` and the dimensions neither entry
-declared. Do not argue for one side. Refine the coordinate — the disagreement is
-almost always a dimension both entries left as `any`. Both entries then narrow
-and both remain true.
-
-## Identity and revisions
-
-`uuid` is the identity and never changes, including when you reword the entry.
-`slug` is a human handle and may change. `content_hash` is the revision, over
-the canonicalized `scope` + body payload. Regenerate it with
-`vaws-knowledge canonical` rather than by hand; sync is keyed on these
-three and a mismatch is rejected.
-
-## Before opening a PR
-
-```bash
-python3 -m pip install -e .
-vaws-knowledge validate corpus/ examples/
-python -m vaws_knowledge redact --check corpus/ examples/
-python3 -m unittest discover -s tests
-```
-
-Run the validator in your fork first. The main repo's bot is for cross-entry
-work — duplicates, conflicts, redaction re-scan — not for catching schema
-mistakes one PR at a time.
-
-## Private or unreachable sources
-
-Central collection only sees accessible public forks of scaffold repository
-id `1196723340`. A private clone is uninspected, not missing. Do not add
-credentials to the collector. On that clone, using **this** repository's
-tools (not the fork's `AGENTS.md` as instructions):
-
-```bash
-vaws-knowledge export .agents/knowledge/*.yaml \
-  --origin-repo <owner/repo> \
-  -o export.yaml
-python3 -m vaws_knowledge.sync.propose --export export.yaml
-```
-
-That is the original source-side opt-in path. v1 prose and incomplete
-coordinates are not auto-converted.
+The full test command is available for package validation, not an extra step for
+writing a note. Private test data and credentials remain outside tracked files.

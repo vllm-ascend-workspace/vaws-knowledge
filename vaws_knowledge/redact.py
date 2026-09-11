@@ -1,48 +1,8 @@
-#!/usr/bin/env python3
-"""Source-side redaction ruleset for the knowledge corpus.
+"""Scan public copies for private addresses, paths, identifiers and credentials.
 
-This module is the *single* declaration of the redaction ruleset. Its version
-is ``REDACTION_PROFILE`` and is what an exported entry records in
-``provenance.redaction_profile``. Tightening any rule, adding a rule, or
-shrinking the built-in allowlist is a profile change: bump ``REDACTION_PROFILE``
-so the main repo knows which entries were cleared under an older ruleset and
-must be re-scanned (docs/federation.md, "Re-scanning after a ruleset change").
-
-Design
-------
-- The scanner walks an arbitrary parsed YAML/JSON tree (mappings, sequences,
-  scalars) and inspects every string, including mapping keys. The same code
-  runs as the fork-side export gate and as the main-repo bulk re-scan.
-- Rules are regular expressions plus a couple of function rules. They are
-  tuned towards false positives: a benign 4-part version string that looks like
-  an IPv4 address is reported and must be allowlisted explicitly, because the
-  alternative is a silent leak into public git history that cannot be recalled.
-- Findings are reported with the *masked* match by default. The report itself
-  may end up in a public CI log, and a redaction report that prints the leaked
-  value defeats its own purpose. ``--show-matches`` prints raw values for local
-  triage.
-
-Allowlisting
-------------
-There are two layers, and they are deliberately different in scope:
-
-1. ``BUILTIN_ALLOWLIST`` / ``BUILTIN_ALLOW_PATTERNS`` below are part of the
-   profile. They cover values that are public by construction: loopback and
-   unspecified addresses, RFC 5737 / RFC 3849 documentation ranges,
-   ``example.com``-style names, ``<placeholder>`` tokens, well-known hash
-   algorithm names that look like ticket ids.
-2. A run-time allowlist (``--allow TERM``, ``--allow-file FILE``) is local to
-   the invocation. A fork may use it to clear a known false positive; the main
-   repo re-scan does **not** inherit it, so a fork cannot allowlist its way past
-   the second line of defence. Allow-file format: a YAML/JSON list of strings.
-   A string starting with ``re:`` is a regular expression that must fully match
-   the reported value; anything else is an exact, case-insensitive match.
-
-Modes
------
-- default: print findings, exit 0 (report-only, for triage)
-- ``--check``: print findings, exit 1 if any (gate mode)
-- ``--profile``: print ``REDACTION_PROFILE`` and exit
+The same text scanner is used by Markdown contribution preparation and the
+CLI. YAML/JSON input remains useful for configuration scanning; no knowledge
+schema, verification state or review gate is involved.
 """
 
 from __future__ import annotations
@@ -116,7 +76,7 @@ _TOKEN_CANDIDATE = re.compile(r"[A-Za-z0-9+/_=-]{32,}")
 def _high_entropy_tokens(text: str) -> Iterator[tuple[int, int]]:
     """Long mixed-case alphanumeric blobs that are not hashes or uuids.
 
-    Hex digests (commit shas, content_hash) and uuids are structurally
+    Hex digests (commit SHAs and content digests) and UUIDs are structurally
     identifiable and are not credentials, so they are excluded; everything
     else that is >= 32 chars and mixes upper, lower and digits is reported.
     """
@@ -234,7 +194,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         id="email-address",
         description="e-mail address",
-        hint="refer to people by GitHub handle in verified_by, nowhere else",
+        hint="use a public handle when attribution is needed; omit private contact details",
         pattern=re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+(?![\w.-])"),
     ),
     Rule(
@@ -549,8 +509,14 @@ def scan_tree(tree: Any, allow: Allowlist | None = None, path: tuple[Any, ...] =
 
 
 def scan_file(path: Path, allow: Allowlist | None = None) -> list[Finding]:
-    doc = load_document(path)
-    findings = scan_tree(doc, allow)
+    if path.suffix.lower() in {".md", ".markdown"}:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ToolError(f"{path}: cannot read file: {exc}") from exc
+        findings = scan_text(text, allow)
+    else:
+        findings = scan_tree(load_document(path), allow)
     label = relpath(path)
     for f in findings:
         f.file = label
@@ -576,7 +542,7 @@ def main(argv: list[str]) -> int:
             "case-insensitive values; prefix with 're:' for a full-match regex."
         ),
     )
-    parser.add_argument("paths", nargs="*", help="YAML/JSON files or directories")
+    parser.add_argument("paths", nargs="*", help="Markdown files or directories (YAML/JSON configuration also accepted)")
     parser.add_argument("--check", action="store_true", help="exit 1 when any finding is reported")
     parser.add_argument("--show-matches", action="store_true", help="print raw matched values (local use only)")
     parser.add_argument("--allow", action="append", default=[], metavar="TERM", help="allowlist a value or 're:<regex>'")

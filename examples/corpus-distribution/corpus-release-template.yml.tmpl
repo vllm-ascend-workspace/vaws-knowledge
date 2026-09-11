@@ -1,13 +1,10 @@
 # Opt-in template for the knowledge corpus repository: build a dense OVPack
 # from the exact pushed commit and assemble a verified local release
 # directory. Copy into .github/workflows/ of the corpus repo yourself and
-# drop the .tmpl suffix (the suffix keeps this file out of the host repo's
-# corpus-YAML gates); this file never installs itself anywhere.
+# drop the .tmpl suffix; this file never installs itself anywhere.
 #
 # Before enabling, replace every <pin> action placeholder with the reviewed
-# action revision (the placeholders keep login-shaped strings out of this
-# repo's redaction gate; they also force a deliberate pin). Everything else
-# runs as plain shell.
+# action revision. Everything else runs as plain shell.
 #
 # Real GitHub Release creation / network publishing stays DISABLED this
 # round: the job ends by uploading the release directory as a workflow

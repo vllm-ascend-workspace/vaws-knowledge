@@ -2,16 +2,15 @@
 
 Three tools:
 
-    knowledge_query     search the mounted layers, with a reader coordinate
+    knowledge_query     search local reference material
     knowledge_capture   write one entry to the candidate layer (only)
-    knowledge_explain   expand one entry by uuid into its full record
+    knowledge_explain   read one Markdown document by ref
 
 Framing is newline-delimited JSON-RPC on stdio, matching the MCP stdio
 transport. Messages MUST NOT contain embedded newlines. The official MCP SDK
-is not a dependency: this package must run on a laptop with nothing installed
-but PyYAML. If the SDK is importable we say so in ``initialize`` (so a caller
-can tell what it is talking to) but we still do our own framing. Nothing but
-JSON-RPC messages is written to stdout.
+is not required for transport; indexing uses the package's OpenViking backend.
+If the SDK is importable we report it in ``initialize``. Nothing but JSON-RPC
+messages is written to stdout.
 
 Degradation contract
 --------------------
@@ -40,7 +39,6 @@ from typing import Any, BinaryIO, Mapping
 
 from vaws_knowledge import package_version
 
-from . import layers as layers_mod
 from .capture import CaptureRefused, CaptureRejected, capture
 from .layers import (
     ENV_CORPUS,
@@ -50,7 +48,7 @@ from .layers import (
     load_config,
     shared_source,
 )
-from .query import CONDITION_KEYS, explain, query
+from .query import explain, query
 
 SERVER_NAME = "vaws-knowledge"
 MCP_PROTOCOL_VERSION = "2025-11-25"
@@ -110,43 +108,18 @@ def read_message(stream: BinaryIO) -> dict[str, Any] | None:
 # tool schemas
 # --------------------------------------------------------------------------
 
-_CONDITION_SCHEMA = {
-    "type": "object",
-    "description": (
-        "Optional known conditions. Omitted or unknown keys stay unknown and "
-        "do not drop related experience."
-    ),
-    "properties": {name: {"type": "string"} for name in CONDITION_KEYS},
-    "additionalProperties": True,
-}
-
 TOOLS: list[dict[str, Any]] = [
     {
         "name": "knowledge_query",
         "description": (
-            "Search local Markdown knowledge. Shared, project, and candidate are "
-            "returned together as reference material. Required input is text. "
-            "Known conditions may exclude explicit mismatches after retrieval. "
-            "Review status is a label, not a filter. An unavailable index is "
-            "labelled degraded and is never an authoritative no."
+            "Search reference notes by free text. Results retain known conditions "
+            "and uncertainty; assess them against current evidence. Lookup is optional."
         ),
         "inputSchema": {
             "type": "object",
             "required": ["text"],
             "properties": {
-                "text": {"type": "string", "description": "Free-text symptom or question."},
-                "conditions": _CONDITION_SCHEMA,
-                "reader_coordinate": _CONDITION_SCHEMA,
-                "layers": {
-                    "type": "array",
-                    "items": {"enum": list(LAYERS)},
-                    "description": "Override which layers are consulted.",
-                },
-                "include_non_matching": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Also return explicit condition mismatches, labelled applies=false.",
-                },
+                "text": {"type": "string", "description": "Question or symptom, with useful context."},
                 "limit": {"type": "integer", "default": 8, "minimum": 1},
             },
             "additionalProperties": False,
@@ -155,44 +128,25 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "knowledge_capture",
         "description": (
-            "Save one local candidate as Markdown. Required inputs are title and "
-            "content. Optional source, conditions, and evidence are kept when known. "
-            "Only the candidate layer is writable."
+            "Save a local Markdown note; the same title updates its body. Reuse an existing "
+            "summary when useful; no template or separate report is required. "
+            "Keep known conditions, sources and uncertainty in the prose. "
+            "Sharing follows the user's existing publishing configuration."
         ),
         "inputSchema": {
             "type": "object",
             "required": ["title", "content"],
-            "properties": {
-                "title": {"type": "string"},
-                "content": {"type": "string"},
-                "source": {"type": "object"},
-                "conditions": _CONDITION_SCHEMA,
-                "evidence": {},
-                "layer": {
-                    "enum": list(LAYERS),
-                    "default": "candidate",
-                    "description": "Only 'candidate' is accepted; anything else is refused.",
-                },
-                "dry_run": {"type": "boolean", "default": False},
-            },
+            "properties": {"title": {"type": "string"}, "content": {"type": "string"}},
             "additionalProperties": False,
         },
     },
     {
         "name": "knowledge_explain",
-        "description": (
-            "Expand one document by ref (URI, slug, or path) into its Markdown "
-            "body plus any stored source, conditions, and review status."
-        ),
+        "description": "Read the original Markdown and recorded context for a search result.",
         "inputSchema": {
             "type": "object",
-            "properties": {
-                "ref": {"type": "string"},
-                "uuid": {"type": "string", "description": "Accepted as an alias of ref."},
-                "conditions": _CONDITION_SCHEMA,
-                "reader_coordinate": _CONDITION_SCHEMA,
-                "layers": {"type": "array", "items": {"enum": list(LAYERS)}},
-            },
+            "required": ["ref"],
+            "properties": {"ref": {"type": "string"}},
             "additionalProperties": False,
         },
     },
@@ -254,6 +208,11 @@ class KnowledgeService:
             env["configuration_error"] = self.config_error
         return env
 
+    def with_environment(self, payload: dict[str, Any]) -> dict[str, Any]:
+        environment = self.envelope()
+        degraded = bool(environment["degraded"] or payload.get("degraded"))
+        return {**environment, **payload, "degraded": degraded}
+
     def server_info(self) -> dict[str, Any]:
         info = self.config.describe()
         info.update(
@@ -263,7 +222,6 @@ class KnowledgeService:
                 "degradation_contract": DEGRADATION_CONTRACT,
                 "official_mcp_sdk_importable": _sdk_available(),
                 "framing": "newline-delimited JSON-RPC (MCP stdio; SDK not required)",
-                "condition_keys": list(CONDITION_KEYS),
                 "writable_layers": ["candidate"],
                 "capture_required": ["title", "content"],
             }
@@ -279,13 +237,10 @@ class KnowledgeService:
         response = query(
             self.config,
             text=text,
-            conditions=args.get("conditions") or args.get("reader_coordinate"),
-            layers=args.get("layers"),
-            include_non_matching=bool(args.get("include_non_matching", False)),
-            limit=int(args.get("limit", 8) or 8),
+            limit=int(args.get("limit", 8)),
         )
         payload = response.to_dict()
-        payload.update(self.envelope())
+        payload = self.with_environment(payload)
         if payload.get("unavailable"):
             payload["answer"] = "unknown"
             payload["answer_detail"] = payload["no_result_meaning"]
@@ -295,16 +250,14 @@ class KnowledgeService:
         return payload
 
     def knowledge_explain(self, args: Mapping[str, Any]) -> dict[str, Any]:
-        ident = str(args.get("ref") or args.get("uuid") or "").strip()
+        ident = str(args.get("ref") or "").strip()
         if not ident:
             raise ValueError("ref is required")
         payload = explain(
             self.config,
             ident,
-            reader_coordinate=args.get("conditions") or args.get("reader_coordinate"),
-            layers=args.get("layers"),
         )
-        payload.update(self.envelope())
+        payload = self.with_environment(payload)
         if not payload.get("found"):
             payload["answer"] = "unknown"
         return payload
@@ -313,14 +266,10 @@ class KnowledgeService:
         payload = capture(
             title=str(args.get("title") or ""),
             content=str(args.get("content") or ""),
-            layer=str(args.get("layer") or "candidate"),
             config=self.config,
-            source=args.get("source") if isinstance(args.get("source"), Mapping) else None,
-            conditions=args.get("conditions") if isinstance(args.get("conditions"), Mapping) else None,
-            evidence=args.get("evidence"),
-            dry_run=bool(args.get("dry_run", False)),
+            index=False,
         )
-        payload.update(self.envelope())
+        payload = self.with_environment(payload)
         return payload
 
     def call_tool(self, name: str, args: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -344,6 +293,10 @@ class KnowledgeService:
                 True,
             )
         try:
+            schema = next(tool["inputSchema"] for tool in TOOLS if tool["name"] == name)
+            unknown = set(args) - set(schema["properties"])
+            if unknown:
+                raise ValueError(f"unsupported arguments: {', '.join(sorted(unknown))}")
             return handler(args), False
         except CaptureRefused as exc:
             return (
@@ -514,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--corpus",
-        help="corpus root (directory containing verified/) or a checkout that holds corpus/verified/",
+        help="shared Markdown directory or a checkout containing corpus/",
     )
     parser.add_argument("--config", help="path to a JSON/YAML service config")
     parser.add_argument(
@@ -523,9 +476,6 @@ def main(argv: list[str] | None = None) -> int:
         help="print resolved mounts as JSON and exit (no server loop)",
     )
     args = parser.parse_args(argv)
-
-    if layers_mod.yaml is None:
-        print(layers_mod.YAML_MISSING_HINT, file=sys.stderr)
 
     env = dict(os.environ)
     if args.corpus:

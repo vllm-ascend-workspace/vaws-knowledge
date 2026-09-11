@@ -1,4 +1,4 @@
-"""Live OpenViking loopback path. Skips when the engine is not installed."""
+"""Opt-in live OpenViking loopback path (VAWS_KNOWLEDGE_LIVE_OV=1)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from vaws_knowledge.server.query import explain, query
 
 
 def _openviking_ready() -> bool:
-    if os.environ.get("VAWS_KNOWLEDGE_LIVE_OV") == "0":
+    if os.environ.get("VAWS_KNOWLEDGE_LIVE_OV") != "1":
         return False
     try:
         import openviking_sdk  # noqa: F401
@@ -26,7 +26,7 @@ def _openviking_ready() -> bool:
     return which("openviking-server") is not None
 
 
-@unittest.skipUnless(_openviking_ready(), "openviking-server is not installed")
+@unittest.skipUnless(_openviking_ready(), "set VAWS_KNOWLEDGE_LIVE_OV=1 with openviking-server installed")
 class LiveOpenViking(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

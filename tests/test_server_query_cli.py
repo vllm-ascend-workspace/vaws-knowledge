@@ -16,7 +16,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "s
 import support  # noqa: E402
 from vaws_knowledge.local.backend import MemoryBackend
 from vaws_knowledge.server.capture import capture
-from vaws_knowledge.server.query import main, reader_coordinate_from_args
+from vaws_knowledge.server.capture_cli import main as capture_main
+from vaws_knowledge.server.query import main
 
 
 def _run_cli(*argv: str) -> tuple[int, dict, str]:
@@ -29,6 +30,20 @@ def _run_cli(*argv: str) -> tuple[int, dict, str]:
 
 
 class QueryCli(unittest.TestCase):
+    def test_capture_saves_without_starting_the_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = support.build_config(candidate=tmp, shared=False, project=False)
+            out = io.StringIO()
+            with mock.patch("vaws_knowledge.server.capture_cli.load_config", return_value=config), \
+                    mock.patch("vaws_knowledge.server.capture.backend_for_config") as backend, \
+                    redirect_stdout(out):
+                code = capture_main(["--title", "Existing finding", "--content", "Useful observation."])
+            payload = json.loads(out.getvalue())
+            self.assertEqual(0, code)
+            self.assertTrue(pathlib.Path(payload["path"]).is_file())
+            self.assertFalse(payload["degraded"])
+            backend.assert_not_called()
+
     def test_text_query_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = support.build_config(candidate=tmp, shared=False, project=False)
@@ -46,18 +61,16 @@ class QueryCli(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertIn("--text", err)
 
-    def test_reader_flags_drop_unknown(self) -> None:
-        args = type("A", (), {"soc": "unknown", "cann": "8.2.RC1", "torch": None})()
-        for name in (
-            "driver",
-            "python_abi",
-            "torch_npu",
-            "vllm",
-            "vllm_ascend",
-            "model",
-            "topology",
-            "execution_mode",
-            "component",
-        ):
-            setattr(args, name, None)
-        self.assertEqual({"cann": "8.2.RC1"}, reader_coordinate_from_args(args))
+    def test_help_needs_no_environment_coordinate(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit) as exc:
+            main(["--help"])
+        self.assertEqual(0, exc.exception.code)
+        self.assertNotIn("--soc", out.getvalue())
+        self.assertNotIn("--cann", out.getvalue())
+
+    def test_invalid_limit_does_not_start_the_index(self) -> None:
+        with mock.patch("vaws_knowledge.server.layers.load_config") as load:
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(["--text", "context", "--limit", "0"])
+            load.assert_not_called()

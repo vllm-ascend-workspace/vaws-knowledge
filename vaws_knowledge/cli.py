@@ -35,17 +35,13 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         choices=(
             "server",
-            "validate",
             "redact",
-            "export",
-            "canonical",
             "query",
             "capture",
             "contribution",
             "distribution",
             "publishing",
             "skill",
-            "conformance",
         ),
         help="subcommand",
     )
@@ -71,22 +67,10 @@ def main(argv: list[str] | None = None) -> int:
         from vaws_knowledge.server.mcp_server import main as server_main
 
         return server_main(rest)
-    if command == "validate":
-        from vaws_knowledge.validate import main as validate_main
-
-        return _dispatch(validate_main, rest)
     if command == "redact":
         from vaws_knowledge.redact import main as redact_main
 
         return _dispatch(redact_main, rest)
-    if command == "export":
-        from vaws_knowledge.export import main as export_main
-
-        return _dispatch(export_main, rest)
-    if command == "canonical":
-        from vaws_knowledge.canonical import main as canonical_main
-
-        return _dispatch(canonical_main, rest)
     if command == "query":
         from vaws_knowledge.server.query import main as query_main
 
@@ -111,10 +95,6 @@ def main(argv: list[str] | None = None) -> int:
         from vaws_knowledge.skill import main as skill_main
 
         return skill_main(rest)
-    if command == "conformance":
-        from vaws_knowledge.conformance.runner import main as conformance_main
-
-        return conformance_main(rest)
     parser.print_help()
     return 2
 

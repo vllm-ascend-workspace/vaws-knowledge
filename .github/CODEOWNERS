@@ -1,23 +1,2 @@
-# Review ownership.
-#
-# CODEOWNERS on its own only requests reviewers. It does not require them —
-# that needs branch protection with "Require review from Code Owners", which is
-# a repository-admin setting and cannot be committed. Until an administrator
-# enables it, everything below is advisory.
-#
-# The two paths that matter most:
-#
-#   corpus/verified/  is the published shared layer. An entry landing here is
-#                     asserted to be true on a stated coordinate, and every
-#                     consumer's default query returns it.
-#   schemas/          is also the egress whitelist. additionalProperties:false
-#                     is what stops an undeclared field leaving a fork, so
-#                     widening any object here is a privacy decision.
-
-*                       @maoxx241
-
-/corpus/verified/       @maoxx241
-/schemas/               @maoxx241
-/docs/version-ordering.md @maoxx241
-/docs/federation.md     @maoxx241
-/CONTRIBUTING.md        @maoxx241
+# Review ownership for code and reference notes. Review does not establish a technical fact.
+* @maoxx241

@@ -22,46 +22,42 @@ def _config(tmp: str):
 
 
 class QueryMarkdown(unittest.TestCase):
-    def test_unknown_conditions_are_not_dropped(self) -> None:
+    def test_query_returns_context_without_applicability_verdict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = _config(tmp)
-            capture(
-                title="graph replay mismatch",
-                content="Eager passed; graph replay diverged on padding.",
+            saved = capture(
+                title="910B graph replay",
+                content="Seen on 910B; the cause is still uncertain.",
+                conditions={"soc": "Ascend910B4"},
+                source={"run": "existing observation"},
                 config=config,
             )
-            payload = query(
-                config,
-                text="graph replay",
-                conditions={"soc": "Ascend910B4"},
-            ).to_dict()
+            payload = query(config, text="910B graph replay").to_dict()
             self.assertEqual(1, payload["count"])
-            self.assertTrue(payload["results"][0]["applies"])
+            hit = payload["results"][0]
+            self.assertEqual({"soc": "Ascend910B4"}, hit["conditions"])
+            self.assertEqual("reference", hit["role"])
+            self.assertNotIn("applies", hit)
+            self.assertNotIn("filtered_before_limit", payload)
+            original = explain(config, saved["ref"])
+            self.assertIn("uncertain", original["content"])
+            self.assertEqual(hit["conditions"], original["conditions"])
+            self.assertNotIn("applies", original)
 
-    def test_known_mismatch_is_filtered_after_retrieval(self) -> None:
+    def test_review_status_does_not_hide_related_notes(self) -> None:
+        from vaws_knowledge.markdown import meta_path
+        import json
+
         with tempfile.TemporaryDirectory() as tmp:
             config = _config(tmp)
-            capture(
-                title="910B note",
-                content="Only seen on 910B graph replay.",
-                conditions={"soc": "Ascend910B4"},
-                config=config,
-            )
-            dropped = query(
-                config,
-                text="graph replay",
-                conditions={"soc": "Ascend310P"},
-            ).to_dict()
-            self.assertEqual([], dropped["results"])
-            self.assertGreaterEqual(dropped["filtered_before_limit"], 1)
-            kept = query(
-                config,
-                text="graph replay",
-                conditions={"soc": "Ascend310P"},
-                include_non_matching=True,
-            ).to_dict()
-            self.assertEqual(1, kept["count"])
-            self.assertFalse(kept["results"][0]["applies"])
+            saved = capture(title="Unreviewed context", content="graph padding context", config=config)
+            sidecar = meta_path(pathlib.Path(saved["path"]))
+            metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+            metadata["status"] = "unverified"
+            sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+            payload = query(config, text="graph padding").to_dict()
+            self.assertEqual(1, payload["count"])
+            self.assertEqual("unverified", payload["results"][0]["status"])
 
     def test_unavailable_index_is_unknown_not_empty_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -206,7 +202,7 @@ class QueryMarkdown(unittest.TestCase):
             self.assertTrue(payload["degraded"])
             self.assertEqual([], payload["results"])
 
-    def test_shared_markdown_is_not_swept_into_the_index(self) -> None:
+    def test_active_shared_pack_is_not_swept_into_the_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             shared = root / "shared"
@@ -231,7 +227,45 @@ class QueryMarkdown(unittest.TestCase):
 
             backend.upsert = tracking  # type: ignore[method-assign]
             config.retrieval = backend
-            payload = query(config, text="sharedonyx", layers=["shared"]).to_dict()
+            from unittest.mock import patch
+            with patch("vaws_knowledge.local.reconcile.current_shared", return_value={"root_uri": "viking://resources/shared/active"}):
+                payload = query(config, text="sharedonyx", layers=["shared"]).to_dict()
             self.assertEqual([], upserts)
             self.assertEqual(0, payload["count"])
             self.assertNotIn("viking://resources/shared/public.md", backend.documents)
+
+
+class SharedReferenceRoundTrip(unittest.TestCase):
+    def test_mounted_shared_markdown_is_searchable_without_a_pack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            shared = root / "shared"
+            shared.mkdir()
+            note = shared / "hardware.md"
+            note.write_text("# Recorded hardware\n\nA theoretical limit, not measured throughput: sharedcanary.\n", encoding="utf-8")
+            config = support.build_config(shared=str(shared), project=False, candidate=str(root / "candidate"))
+            config.retrieval = MemoryBackend()
+            hit = query(config, text="sharedcanary").results[0]
+            self.assertEqual("shared", hit["layer"])
+            original = explain(config, hit["ref"])
+            self.assertTrue(original["found"])
+            self.assertIn("not measured", original["content"])
+
+    def test_imported_shared_result_expands_from_the_active_snapshot(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = pathlib.Path(tmp) / "shared"
+            shared.mkdir()
+            config = support.build_config(shared=str(shared), project=False, candidate=str(pathlib.Path(tmp) / "candidate"))
+            config.retrieval = MemoryBackend()
+            config.state_root = pathlib.Path(tmp) / "state"
+            ref = "viking://resources/shared/current-version/corpus/context.md"
+            config.retrieval.upsert(ref, "# Shared observation\n\nOnly observed once; cause unknown.\n", layer="shared")
+            active = {"root_uri": "viking://resources/shared/current-version", "source_git_sha": "a" * 40}
+            with patch("vaws_knowledge.server.query.current_shared", return_value=active):
+                result = explain(config, ref)
+                stale = explain(config, ref.replace("current-version", "old-version"))
+            self.assertTrue(result["found"])
+            self.assertIn("cause unknown", result["content"])
+            self.assertEqual("a" * 40, result["source_git_sha"])
+            self.assertFalse(stale["found"])

@@ -1,20 +1,22 @@
 """Query and explain Markdown knowledge through OpenViking.
 
-Retrieval is native. Known conditions may drop a hit that is *explicitly*
-inapplicable; unknown conditions stay. An unavailable index is labelled
-degraded and is never an authoritative "no".
+Retrieval returns references, never applicability decisions. Recorded conditions
+remain visible for the reader to assess. An unavailable index is labelled
+degraded and does not block independent work.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 from vaws_knowledge import package_version
 from vaws_knowledge.local.backend import Hit, backend_for_config
 from vaws_knowledge.local.reconcile import reconcile_markdown
-from vaws_knowledge.markdown import Document, iter_markdown_files, layer_from_uri, load_document
+from vaws_knowledge.local.instance import instance_for_config
+from vaws_knowledge.local.shared import current_shared
+from vaws_knowledge.markdown import Document, iter_markdown_files, layer_from_uri, load_document, parse_markdown
 from vaws_knowledge.server.layers import LAYERS, ServiceConfig, shared_source
 
 NO_RESULT_MEANING = (
@@ -23,65 +25,16 @@ NO_RESULT_MEANING = (
 )
 REFERENCE_NOTE = (
     "All knowledge is reference, not an axiom. Local experience and public "
-    "documents are returned together by relevance and known applicability. "
+    "documents are returned together by relevance. "
     "Public review status is not an admission or ranking filter and does not "
     "prove hardware facts."
 )
 
-#: Optional known-condition names. None are required.
-CONDITION_KEYS: tuple[str, ...] = (
-    "soc",
-    "cann",
-    "driver",
-    "python_abi",
-    "torch",
-    "torch_npu",
-    "vllm",
-    "vllm_ascend",
-    "model",
-    "topology",
-    "execution_mode",
-    "component",
-)
-
-# Historical aliases kept so older callers compiling against 0.2.0 names
-# still import. They are not a YAML applicability engine.
-SCOPE_DIMENSIONS = CONDITION_KEYS
-READER_DIMENSIONS = CONDITION_KEYS
-
-
-def _norm(value: Any) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def known_conditions(raw: Mapping[str, Any] | None) -> dict[str, str]:
-    if not isinstance(raw, Mapping):
-        return {}
-    out: dict[str, str] = {}
-    for key, value in raw.items():
-        text = _norm(value)
-        if not text or text.lower() == "unknown":
-            continue
-        out[str(key)] = text
-    return out
-
-
-def conditions_conflict(entry: Mapping[str, str], reader: Mapping[str, str]) -> list[str]:
-    """Return keys where both sides have a concrete value and they differ."""
-
-    mismatched: list[str] = []
-    for key, reader_value in reader.items():
-        entry_value = entry.get(key)
-        if not entry_value or not reader_value:
-            continue
-        if entry_value.lower() != reader_value.lower() and entry_value != reader_value:
-            mismatched.append(key)
-    return mismatched
-
-
 def load_layer_documents(config: ServiceConfig, layers: Sequence[str]) -> list[Document]:
     documents: list[Document] = []
     for layer in layers:
+        if layer == "shared" and current_shared(instance_for_config(config).state_root):
+            continue  # imported shared content is read from its active snapshot
         mount = config.mount(layer)
         if not mount.present:
             continue
@@ -109,7 +62,6 @@ class QueryResponse:
     request: dict[str, Any] = field(default_factory=dict)
     layers_available: list[str] = field(default_factory=list)
     layers_absent: dict[str, str] = field(default_factory=dict)
-    filtered_before_limit: int = 0
     inspected: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -124,7 +76,6 @@ class QueryResponse:
             "no_result_meaning": NO_RESULT_MEANING,
             "count": len(self.results),
             "inspected": self.inspected,
-            "filtered_before_limit": self.filtered_before_limit,
             "notes": list(self.notes),
             "results": list(self.results),
         }
@@ -134,7 +85,7 @@ class QueryResponse:
         return payload
 
 
-def _hit_payload(hit: Hit, document: Document | None, *, mismatched: list[str]) -> dict[str, Any]:
+def _hit_payload(hit: Hit, document: Document | None) -> dict[str, Any]:
     title = (document.title if document else None) or hit.title
     excerpt = (document.excerpt() if document else None) or hit.excerpt
     layer = (document.layer if document else None) or hit.layer or layer_from_uri(hit.uri) or ""
@@ -144,17 +95,15 @@ def _hit_payload(hit: Hit, document: Document | None, *, mismatched: list[str]) 
         "title": title,
         "excerpt": excerpt,
         "layer": layer,
-        "status": document.status if document else "unknown",
         "role": "reference",
         "score": round(hit.score, 4),
-        "applies": not mismatched,
     }
+    if document and document.status:
+        payload["status"] = document.status
     if document and document.source:
         payload["source"] = dict(document.source)
     if document and document.conditions:
         payload["conditions"] = dict(document.conditions)
-    if mismatched:
-        payload["mismatched_conditions"] = mismatched
     if document:
         payload["path"] = str(document.path)
         payload["slug"] = document.slug
@@ -164,36 +113,21 @@ def _hit_payload(hit: Hit, document: Document | None, *, mismatched: list[str]) 
 def query(
     config: ServiceConfig,
     *,
-    text: str | None = None,
-    fingerprint: str | None = None,
-    reader_coordinate: Mapping[str, Any] | None = None,
-    conditions: Mapping[str, Any] | None = None,
+    text: str,
     layers: Sequence[str] | None = None,
-    statuses: Sequence[str] | None = None,
-    include_unverified: bool = True,
-    include_non_matching: bool = False,
-    kind: str | None = None,
-    bodies: Sequence[str] | None = None,
     limit: int = 8,
-    today: Any = None,
-    load: Any = None,
 ) -> QueryResponse:
-    """Search mounted Markdown layers.
+    """Search all mounted Markdown by relevance, retaining recorded context."""
 
-    Shared, project, and candidate are queried together. Review status is a
-    label, not a filter or rank. Known reader conditions exclude only explicit
-    mismatches after retrieval, so unknown items are not dropped by a short
-    pre-filter.
-    """
-
-    del fingerprint, kind, bodies, today, load, statuses, include_unverified
+    if not text.strip():
+        raise ValueError("text is required")
+    if limit < 1:
+        raise ValueError("limit must be positive")
     wanted_layers = [name for name in (layers or LAYERS) if name in LAYERS]
     consulted = config.consulted(wanted_layers)
-    reader = known_conditions(conditions if conditions is not None else reader_coordinate)
     request = {
         "text": text or "",
         "layers": wanted_layers,
-        "conditions": reader,
         "limit": int(limit or 8),
     }
     backend = backend_for_config(config)
@@ -222,17 +156,13 @@ def query(
         )
 
     fetch = max(int(limit or 8) * 4, 16)
-    hits = backend.search(text or "", layers=wanted_layers, limit=fetch)
+    searched_layers = consulted["layers_available"]
+    hits = backend.search(text, layers=searched_layers, limit=fetch) if searched_layers else []
     catalog = documents_by_uri(config, wanted_layers)
     kept: list[dict[str, Any]] = []
-    filtered = 0
     for hit in hits:
         document = catalog.get(hit.uri)
-        mismatched = conditions_conflict(document.conditions if document else {}, reader)
-        if mismatched and not include_non_matching:
-            filtered += 1
-            continue
-        kept.append(_hit_payload(hit, document, mismatched=mismatched))
+        kept.append(_hit_payload(hit, document))
     cap = max(int(limit or 8), 1)
     kept.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("uri") or "")))
     return QueryResponse(
@@ -244,7 +174,6 @@ def query(
         request=request,
         layers_available=consulted["layers_available"],
         layers_absent=consulted["layers_absent"],
-        filtered_before_limit=filtered,
         inspected=len(hits),
     )
 
@@ -253,16 +182,11 @@ def explain(
     config: ServiceConfig,
     ref: str,
     *,
-    reader_coordinate: Mapping[str, Any] | None = None,
     layers: Sequence[str] | None = None,
-    today: Any = None,
-    load: Any = None,
-    uuid: str | None = None,
 ) -> dict[str, Any]:
-    """Expand one document by URI, slug, or path. Markdown on disk is authority."""
+    """Read one document by URI, slug, or path, including its recorded context."""
 
-    del today, load
-    ident = (ref or uuid or "").strip()
+    ident = ref.strip()
     wanted_layers = [name for name in (layers or LAYERS) if name in LAYERS]
     consulted = config.consulted(wanted_layers)
     base: dict[str, Any] = {
@@ -289,6 +213,24 @@ def explain(
         }:
             match = document
             break
+    if match is None and "shared" in consulted["layers_available"] and layer_from_uri(ident) == "shared":
+        active = current_shared(instance_for_config(config).state_root)
+        prefix = str(active["root_uri"]).rstrip("/") + "/" if active else ""
+        if prefix and ident.startswith(prefix) and ".." not in ident.split("/"):
+            backend = backend_for_config(config)
+            try:
+                ok, detail = backend.available()
+                if not ok:
+                    return {**base, "found": False, "unavailable": True, "degraded": True, "index_detail": detail}
+                raw = backend.read(ident)
+            except Exception as exc:
+                return {**base, "found": False, "unavailable": True, "degraded": True,
+                        "index_detail": f"{type(exc).__name__}: {exc}"}
+            if raw:
+                title, content = parse_markdown(raw)
+                return {**base, "found": True, "title": title, "content": content,
+                        "uri": ident, "layer": "shared", "role": "reference",
+                        "source_git_sha": active.get("source_git_sha"), "notes": [REFERENCE_NOTE]}
     if match is None:
         base.update(
             found=False,
@@ -298,28 +240,12 @@ def explain(
             ),
         )
         return base
-    reader = known_conditions(reader_coordinate)
-    mismatched = conditions_conflict(match.conditions, reader)
     payload = match.to_dict()
-    payload.update(found=True, applies=not mismatched, role="reference")
+    payload.update(found=True, role="reference")
     payload.setdefault("notes", []).append(REFERENCE_NOTE)
-    if mismatched:
-        payload["mismatched_conditions"] = mismatched
     payload.update(base)
     payload["found"] = True
     return payload
-
-
-def add_reader_coordinate_arguments(parser: Any) -> None:
-    """Optional known-condition flags. Omitted dimensions stay unknown."""
-
-    for name in CONDITION_KEYS:
-        parser.add_argument(f"--{name.replace('_', '-')}", dest=name, default=None)
-
-
-def reader_coordinate_from_args(args: Any) -> dict[str, str]:
-    raw = {name: getattr(args, name, None) for name in CONDITION_KEYS}
-    return known_conditions(raw)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -328,19 +254,21 @@ def main(argv: list[str] | None = None) -> int:
     import sys
 
     parser = argparse.ArgumentParser(description="Query local Markdown knowledge")
-    parser.add_argument("--text", default="")
-    parser.add_argument("--ref", default="")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--text", default="")
+    selection.add_argument("--ref", default="")
     parser.add_argument("--config", default="")
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--backend", default="")
-    add_reader_coordinate_arguments(parser)
     args = parser.parse_args(argv)
+    if args.limit < 1:
+        parser.error("--limit must be positive")
     from vaws_knowledge.server.layers import load_config
 
     mapping = {"backend": args.backend} if args.backend else None
     config = load_config(mapping, path=args.config or None)
     if args.ref:
-        payload = explain(config, args.ref, reader_coordinate=reader_coordinate_from_args(args))
+        payload = explain(config, args.ref)
     else:
         if not str(args.text or "").strip():
             print("error: --text is required unless --ref is set", file=sys.stderr)
@@ -348,7 +276,6 @@ def main(argv: list[str] | None = None) -> int:
         payload = query(
             config,
             text=args.text,
-            conditions=reader_coordinate_from_args(args),
             limit=args.limit,
         ).to_dict()
     print(json.dumps(payload, ensure_ascii=False, indent=2))

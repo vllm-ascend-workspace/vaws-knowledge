@@ -54,7 +54,7 @@ class RetrievalBackend(Protocol):
         layers: Sequence[str] | None = None,
         limit: int = 8,
     ) -> list[Hit]:
-        """Return ranked hits. Caller applies known-condition filtering."""
+        """Return ranked reference hits without deciding applicability."""
 
     def read(self, uri: str) -> str | None:
         """Return indexed content, or None if absent."""

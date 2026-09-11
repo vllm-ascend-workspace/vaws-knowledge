@@ -25,9 +25,7 @@ from test_tools_support import (
     synthetic_ticket,
     synthetic_user_path,
     pem_header,
-    valid_document,
     versionlike,
-    write_yaml,
 )
 
 from vaws_knowledge import redact
@@ -206,11 +204,10 @@ class AllowlistTests(unittest.TestCase):
 
 class TreeScanTests(unittest.TestCase):
     def test_ip_inside_rule_body_reported_with_path(self):
-        doc = valid_document()
-        doc["entries"][0]["rule"]["resolution"] += " " + calibration_sentence()
+        doc = {"observations": [{"note": calibration_sentence()}]}
         findings = redact.scan_tree(doc)
         self.assertEqual(len(findings), 1, findings)
-        self.assertEqual(findings[0].path, "entries[0].rule.resolution")
+        self.assertEqual(findings[0].path, "observations[0].note")
         self.assertEqual(findings[0].rule, "ipv4-address")
 
     def test_keys_are_scanned_too(self):
@@ -226,10 +223,10 @@ class TreeScanTests(unittest.TestCase):
 
 class CliTests(unittest.TestCase):
     def _leaky_file(self, tmp):
-        doc = valid_document()
-        doc["entries"][0]["rule"]["symptom"] += " " + calibration_sentence()
-        doc["entries"][0]["rule"]["avoidance"] += " Logs live in " + synthetic_user_path() + "."
-        return write_yaml(tmp / "leaky.yaml", doc)
+        path = tmp / "leaky.md"
+        path.write_text("# Observation\n\n" + calibration_sentence() +
+                        " Logs live in " + synthetic_user_path() + ".\n", encoding="utf-8")
+        return path
 
     def test_report_mode_exits_zero_check_mode_exits_one(self):
         with TempDir() as tmp:
@@ -240,7 +237,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(check.returncode, 1, check.stderr)
         self.assertIn("[ipv4-address]", check.stdout)
         self.assertIn("[user-path]", check.stdout)
-        self.assertIn("entries[0].rule.symptom", check.stdout)
+        self.assertIn("<text>", check.stdout)
 
     def test_matches_are_masked_unless_requested(self):
         with TempDir() as tmp:
@@ -263,7 +260,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual({f["rule"] for f in payload["findings"]}, {"ipv4-address", "user-path"})
 
     def test_clean_input_check_passes(self):
-        proc = run_tool("redact", "--check", str(FIXTURES / "valid"))
+        proc = run_tool("redact", "--check", str(EXAMPLE_ENTRY))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertRegex(proc.stderr, re.compile(r"0 finding\(s\)"))
 

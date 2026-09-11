@@ -69,6 +69,15 @@ class CaptureMarkdown(unittest.TestCase):
                 with self.assertRaises(CaptureRefused):
                     capture(title="x", content="y", layer=layer, config=config)
 
+    def test_read_only_candidate_is_not_written(self) -> None:
+        from vaws_knowledge.server.layers import load_config
+        with tempfile.TemporaryDirectory() as tmp:
+            target = pathlib.Path(tmp) / "read-only"
+            config = load_config({"layers": {"candidate": {"root": str(target), "read_only": True}}}, env={})
+            with self.assertRaises(CaptureRefused):
+                capture(title="Reference", content="Must not write here.", config=config, index=False)
+            self.assertFalse(target.exists())
+
     def test_delete_removes_file_and_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = _config(tmp)
