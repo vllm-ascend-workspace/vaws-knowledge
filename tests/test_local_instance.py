@@ -43,12 +43,18 @@ class ProcessOwnership(unittest.TestCase):
         proc = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(30)", marker],
         )
+        self.addCleanup(proc.wait, timeout=5)
         self.addCleanup(proc.kill)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not pid_alive(proc.pid):
+        # PID liveness alone does not establish command-line ownership. Wait
+        # for the actual marker within a bounded startup window; failed
+        # runtime ownership probes still fail closed meanwhile.
+        deadline = time.monotonic() + 15
+        observed = owned_process(proc.pid, marker)
+        while not observed and time.monotonic() < deadline:
             time.sleep(0.05)
+            observed = owned_process(proc.pid, marker)
         self.assertTrue(pid_alive(proc.pid))
-        self.assertTrue(owned_process(proc.pid, marker))
+        self.assertTrue(observed, "child command-line ownership marker did not become observable")
         self.assertFalse(owned_process(proc.pid, "not-this-instance"))
 
     def test_stop_owned_leaves_unrelated_pid_alone(self) -> None:
