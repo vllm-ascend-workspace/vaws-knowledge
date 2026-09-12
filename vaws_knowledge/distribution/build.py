@@ -101,8 +101,10 @@ def resolve_git_sha(repo: Path, expected_sha: str | None = None) -> str:
 def _materialize(repo: Path, sha: str, subdir: str, target: Path) -> list[dict[str, Any]]:
     """Extract ``*.md`` files of ``subdir`` at ``sha`` via git archive; hash each."""
 
+    # git archive applies checkout line-ending policy unless explicitly pinned.
     proc = subprocess.Popen(
-        ["git", "-C", str(repo), "archive", "--format=tar", sha, "--", subdir if subdir != "." else "."],
+        ["git", "-c", "core.autocrlf=false", "-C", str(repo), "archive", "--format=tar", sha,
+         "--", subdir if subdir != "." else "."],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
