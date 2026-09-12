@@ -73,6 +73,8 @@ report for the knowledge store.
 
 For a published experience, optional `experience_feedback(ref, vote)` records
 `+1` when it helped or `-1` when it misled the work. No reason or extra summary is
-required. Configured sharing reuses the GitHub account's reaction on a feedback
-Issue, without changing the article or creating a contribution PR. Do not treat
-reaction counts as truth, and do not make feedback a task completion step.
+required. Each actual use may produce another positive or negative feedback event,
+including repeated feedback from the same account. Configured sharing records it
+as a minimal Issue comment; the two totals accumulate independently. For a failed
+call, reuse its returned `request_id` to retry; omit that optional field for a new
+event. Do not treat counts as truth or make feedback a task completion step.

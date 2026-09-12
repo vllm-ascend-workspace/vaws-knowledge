@@ -110,17 +110,27 @@ local candidates, knowledge and project references are not public feedback targe
 
 With configured sharing authorization, the tool reuses GitHub authentication,
 checks the case exists in the canonical corpus, then creates or reuses its feedback
-Issue and adds a [GitHub reaction](https://docs.github.com/en/rest/reactions/reactions#create-reaction-for-an-issue).
-It uploads only the public case path and vote, with no session content or reason.
-The response contains the Issue link and reaction counts. Issues remain separate
+Issue and adds a minimal [GitHub comment](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment)
+for each usage event. The comment contains only the vote and an opaque random
+event marker, with no session content or reason. The response contains the Issue
+link, feedback receipt link and separate positive/negative event counts. Issues remain separate
 from source Markdown and release packs; feedback does not rewrite the case,
 change retrieval ranking or promote it into maintained knowledge.
 
-Votes belong to GitHub accounts, not tasks: retrying the same vote does not add
-another, and changing one's vote replaces the prior reaction. Counts reflect
-reported usefulness, not proof of correctness or applicability. GitHub remains
-the feedback authority; there is no separate feedback database. Transport failure
-is returned for retry without failing unrelated work. Concurrent first submissions
+Every new call records another usage event. The same account can contribute
+multiple `+1` and multiple `-1` events; the two totals accumulate independently
+and never erase earlier events. Counts reflect reported usefulness, not proof
+of correctness or applicability. GitHub remains the feedback authority; there
+is no separate feedback database.
+
+After a failed call, reuse its returned `request_id` with the same ref and vote
+to retry that event (`--request-id` in the CLI). Omit it for a new usage event.
+The package first looks for an existing matching comment, including after a
+lost POST response. Totals count each author/event ID once, even if concurrent
+retries created duplicate comments. A retry ID cannot change the recorded vote.
+If the entire tool response is lost and the caller did not retain an ID before
+sending, another call without an ID is a new event. No automatic cross-session
+identity or reasoning is inferred. Concurrent first submissions
 from different clients can create duplicate Issues because GitHub provides no
 unique creation key; maintainers can consolidate those rare duplicates.
 

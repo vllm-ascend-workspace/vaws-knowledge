@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
@@ -15,10 +16,15 @@ REPOSITORY = "vllm-ascend-workspace/vaws-knowledge-corpus"
 TARGET = "experience/case-one.md"
 ACTOR = {"id": 7, "login": "current-reviewer"}
 OTHER = {"id": 8, "login": "another-reviewer"}
+EVENT_ID = "0123456789abcdef0123456789abcdef"
 
 
 def marker(target):
     return f"<!-- vaws-experience-feedback: {target} -->"
+
+
+def event_body(vote, request_id):
+    return f"{vote}\n\n<!-- vaws-experience-vote: {request_id} -->\n"
 
 
 class FeedbackGitHub:
@@ -26,9 +32,11 @@ class FeedbackGitHub:
         self.calls = []
         self.files = {f"corpus/{TARGET}": {"type": "file", "path": f"corpus/{TARGET}", "sha": "a" * 40}}
         self.issues = []
-        self.reactions = {}
-        self.next_reaction = 1000
+        self.comments = {}
+        self.next_comment = 1000
         self.failure = None
+        self.duplicate_after_post = False
+        self.fail_comment_reads = False
 
     def issue(self, target=TARGET, *, number=None, pull=False, state="open"):
         number = number or len(self.issues) + 1
@@ -38,14 +46,15 @@ class FeedbackGitHub:
         if pull:
             issue["pull_request"] = {"url": "https://api.github.com/pulls/999"}
         self.issues.append(issue)
-        self.reactions.setdefault(number, [])
+        self.comments.setdefault(number, [])
         return issue
 
-    def reaction(self, issue, content, user=ACTOR):
-        self.next_reaction += 1
-        reaction = {"id": self.next_reaction, "content": content, "user": dict(user)}
-        self.reactions.setdefault(issue, []).append(reaction)
-        return reaction
+    def comment(self, issue, body, user=ACTOR):
+        self.next_comment += 1
+        comment = {"id": self.next_comment, "body": body, "user": dict(user),
+                   "html_url": "https://untrusted.example/must-not-be-returned"}
+        self.comments.setdefault(issue, []).append(comment)
+        return comment
 
     def _parts(self, path):
         parsed = urlsplit(path)
@@ -80,12 +89,10 @@ class FeedbackGitHub:
         if parts[3:] == ["issues"]:
             assert query.get("state") == ["all"], "closed feedback issues remain reusable"
             return self._page(self.issues, query)
-        if len(parts) == 6 and parts[3] == "issues" and parts[5] == "reactions":
-            return self._page(self.reactions[int(parts[4])], query)
-        if len(parts) == 5 and parts[3] == "issues":
-            issue = next(item for item in self.issues if item["number"] == int(parts[4]))
-            reactions = self.reactions[issue["number"]]
-            return {**issue, "reactions": {vote: sum(r["content"] == vote for r in reactions) for vote in ("+1", "-1")}}
+        if len(parts) == 6 and parts[3] == "issues" and parts[5] == "comments":
+            if self.fail_comment_reads:
+                raise GitHubError(503, path, "comment readback unavailable")
+            return self._page(self.comments[int(parts[4])], query)
         raise AssertionError(f"unexpected GET {path}")
 
     def post(self, path, body):
@@ -97,25 +104,24 @@ class FeedbackGitHub:
             issue.update(body)
             self._fail("create_issue_after")
             return dict(issue)
-        if len(parts) == 6 and parts[3] == "issues" and parts[5] == "reactions":
-            self._fail("reaction_before")
+        if len(parts) == 6 and parts[3] == "issues" and parts[5] == "comments":
+            self._fail("comment_before")
             number = int(parts[4])
-            existing = next((r for r in self.reactions[number]
-                             if r["user"]["id"] == ACTOR["id"] and r["content"] == body["content"]), None)
-            result = existing or self.reaction(number, body["content"])
-            self._fail("reaction_after")
+            result = self.comment(number, body["body"])
+            if self.duplicate_after_post:
+                self.duplicate_after_post = False
+                self.comment(number, body["body"])
+            if self.failure == "comment_after_and_readback":
+                self.failure = None
+                self.fail_comment_reads = True
+                raise GitHubError(503, path, "response lost")
+            self._fail("comment_after")
             return dict(result)
         raise AssertionError(f"unexpected POST {path}")
 
     def delete(self, path):
         self.calls.append(("DELETE", path, None))
-        self._fail("delete")
-        parts, _ = self._parts(path)
-        assert len(parts) == 7 and parts[3] == "issues" and parts[5] == "reactions"
-        number, reaction_id = int(parts[4]), int(parts[6])
-        reaction = next(r for r in self.reactions[number] if r["id"] == reaction_id)
-        assert reaction["user"]["id"] == ACTOR["id"], "must never remove another account's feedback"
-        self.reactions[number].remove(reaction)
+        raise AssertionError("independent feedback events must never delete past votes")
 
     def mutations(self):
         return [call for call in self.calls if call[0] != "GET"]
@@ -145,6 +151,8 @@ def test_public_experience_ref_creates_only_one_canonical_feedback_issue(feedbac
     assert result["status"] == "ok"
     assert result["issue_url"] == f"https://github.com/{REPOSITORY}/issues/1"
     assert result["counts"] == {"+1": 1, "-1": 0}
+    assert result["feedback_url"] == f"https://github.com/{REPOSITORY}/issues/1#issuecomment-1001"
+    assert re.fullmatch(r"\+1\n\n<!-- vaws-experience-vote: [0-9a-f]{32} -->\n", api.comments[1][0]["body"])
     assert len(api.issues) == 1
     assert marker(TARGET) in api.issues[0]["body"]
     assert not list(tmp_path.rglob("*.md")), "feedback must not create searchable Markdown notes"
@@ -194,40 +202,39 @@ def test_feedback_requires_the_exact_existing_canonical_experience_file(feedback
     assert api.mutations() == []
 
 
-def test_repeated_vote_is_idempotent_and_switch_only_removes_the_current_accounts_old_vote(feedback):
+def test_every_default_call_records_an_independent_positive_or_negative_use(feedback):
     config, api = feedback
-    issue = api.issue(state="closed")
-    mine = api.reaction(issue["number"], "+1")
-    theirs = api.reaction(issue["number"], "+1", OTHER)
-    unrelated = api.reaction(issue["number"], "heart")
-    same = experience_feedback(config, TARGET, "+1", github=api)
-    assert same["status"] == "ok"
-    assert api.mutations() == []
-    changed = experience_feedback(config, TARGET, "-1", github=api)
-    assert changed["status"] == "ok"
-    assert changed["counts"] == {"+1": 1, "-1": 1}
-    assert mine not in api.reactions[1]
-    assert theirs in api.reactions[1] and unrelated in api.reactions[1]
-    writes = api.mutations()
-    assert [call[0] for call in writes] == ["POST", "DELETE"]
+    api.issue(state="closed")
+    receipts = []
+    for vote in ("+1", "+1", "-1", "-1", "+1"):
+        result = experience_feedback(config, TARGET, vote, github=api)
+        assert result["status"] == "ok"
+        receipts.append(result["feedback_url"])
+    assert result["counts"] == {"+1": 3, "-1": 2}
+    assert len(api.comments[1]) == 5
+    assert len(set(receipts)) == 5
+    assert len({item["body"] for item in api.comments[1]}) == 5
+    assert all(call[0] == "POST" and call[1].endswith("/comments") for call in api.mutations())
     assert len(api.issues) == 1
 
 
-def test_paginated_issue_and_reaction_lookup_ignores_prs_and_finds_the_current_account(feedback):
+def test_paginated_issue_and_comment_lookup_ignores_prs_and_finds_the_retry_event(feedback):
     config, api = feedback
     api.issue(pull=True)
     for number in range(2, 101):
         api.issue(target=f"experience/unrelated-{number}.md", number=number)
     issue = api.issue(number=101)
     for number in range(100):
-        api.reaction(issue["number"], "+1", {"id": number + 100, "login": f"reviewer-{number}"})
-    api.reaction(issue["number"], "-1")
-    result = experience_feedback(config, TARGET, "+1", github=api)
+        api.comment(issue["number"], event_body("+1", f"{number:032x}"), OTHER)
+    original = api.comment(issue["number"], event_body("-1", EVENT_ID))
+    result = experience_feedback(config, TARGET, "-1", github=api, request_id=EVENT_ID)
     assert result["status"] == "ok"
     assert result["issue_url"].endswith("/issues/101")
-    assert result["counts"] == {"+1": 101, "-1": 0}
+    assert result["counts"] == {"+1": 100, "-1": 1}
+    assert result["feedback_url"].endswith(f"#issuecomment-{original['id']}")
     assert len(api.issues) == 101
-    assert api.reactions[1] == []
+    assert api.comments[1] == []
+    assert api.mutations() == []
 
 
 def test_same_basename_in_different_experience_directories_has_separate_feedback(feedback):
@@ -249,7 +256,7 @@ def test_an_issue_with_a_conflicting_marker_is_not_reused_even_if_its_title_matc
     result = experience_feedback(config, TARGET, "+1", github=api)
     assert result["status"] == "ok"
     assert result["issue_url"].endswith(f"/issues/{correct['number']}")
-    assert api.reactions[misleading["number"]] == []
+    assert api.comments[misleading["number"]] == []
 
 
 def test_an_ordinary_issue_with_the_same_title_is_not_a_feedback_target(feedback):
@@ -260,7 +267,7 @@ def test_an_ordinary_issue_with_the_same_title_is_not_a_feedback_target(feedback
     assert result["status"] == "ok"
     assert result["issue_url"].endswith("/issues/2")
     assert len(api.issues) == 2
-    assert api.reactions[ordinary["number"]] == []
+    assert api.comments[ordinary["number"]] == []
 
 
 def test_percent_in_a_literal_git_path_is_escaped_once_and_not_used_as_traversal(feedback):
@@ -274,21 +281,97 @@ def test_percent_in_a_literal_git_path_is_escaped_once_and_not_used_as_traversal
     assert marker(target) in api.issues[0]["body"]
 
 
-@pytest.mark.parametrize("stage", ["reaction_before", "reaction_after", "delete"])
-def test_failed_vote_switch_is_retryable_and_does_not_lose_the_previous_vote(feedback, stage):
+@pytest.mark.parametrize("vote", ["+1", "-1"])
+def test_retry_reuses_the_event_and_cannot_change_its_vote(feedback, vote):
     config, api = feedback
     api.issue()
-    previous = api.reaction(1, "+1")
+    first = experience_feedback(config, TARGET, vote, github=api, request_id=EVENT_ID)
+    repeated = experience_feedback(config, TARGET, vote, github=api, request_id=EVENT_ID)
+    assert repeated["status"] == "ok"
+    assert repeated["feedback_url"] == first["feedback_url"]
+    other_vote = "-1" if vote == "+1" else "+1"
+    conflict = experience_feedback(config, TARGET, other_vote, github=api, request_id=EVENT_ID)
+    assert conflict["status"] == "conflict"
+    assert conflict["retryable"] is False
+    assert len(api.comments[1]) == 1
+    assert api.comments[1][0]["body"] == event_body(vote, EVENT_ID)
+
+
+def test_copying_another_authors_event_id_does_not_hijack_a_retry(feedback):
+    config, api = feedback
+    api.issue()
+    copied = api.comment(1, event_body("-1", EVENT_ID), OTHER)
+    first = experience_feedback(config, TARGET, "+1", github=api, request_id=EVENT_ID)
+    repeated = experience_feedback(config, TARGET, "+1", github=api, request_id=EVENT_ID)
+    assert first["status"] == repeated["status"] == "ok"
+    assert repeated["counts"] == {"+1": 1, "-1": 1}
+    assert first["feedback_url"] == repeated["feedback_url"]
+    assert not first["feedback_url"].endswith(f"#issuecomment-{copied['id']}")
+    assert len(api.comments[1]) == 2
+
+
+@pytest.mark.parametrize("vote", ["+1", "-1"])
+def test_same_event_concurrent_duplicate_comments_count_only_once(feedback, vote):
+    config, api = feedback
+    api.issue()
+    api.duplicate_after_post = True
+    first = experience_feedback(config, TARGET, vote, github=api, request_id=EVENT_ID)
+    assert first["status"] == "ok"
+    assert len(api.comments[1]) == 2, "GitHub lacks an atomic uniqueness constraint for comments"
+    repeated = experience_feedback(config, TARGET, vote, github=api, request_id=EVENT_ID)
+    assert repeated["status"] == "ok"
+    assert repeated["counts"] == {"+1": int(vote == "+1"), "-1": int(vote == "-1")}
+    assert len(api.comments[1]) == 2
+
+
+def test_ordinary_discussion_and_quoted_markers_do_not_count_as_use_events(feedback):
+    config, api = feedback
+    api.issue()
+    for body in ("+1", "A discussion of a helpful case.", f"Example:\n{event_body('+1', EVENT_ID)}",
+                 f"```\n{event_body('-1', EVENT_ID)}```", event_body("+1", "not-an-event-id")):
+        api.comment(1, body, OTHER)
+    result = experience_feedback(config, TARGET, "-1", github=api)
+    assert result["status"] == "ok"
+    assert result["counts"] == {"+1": 0, "-1": 1}
+
+
+@pytest.mark.parametrize("request_id", ["", "a" * 31, "a" * 33, "g" * 32, True, 123,
+                                       "private/session/id", "a" * 32 + "\n"])
+def test_retry_id_must_be_an_opaque_token_before_any_network(feedback, request_id):
+    config, api = feedback
+    result = experience_feedback(config, TARGET, "+1", github=api, request_id=request_id)
+    assert result["status"] in {"invalid_request_id", "invalid_request"}
+    assert result["retryable"] is False
+    assert api.calls == []
+
+
+@pytest.mark.parametrize("vote", ["+1", "-1"])
+def test_comment_write_response_loss_is_recovered_by_readback_without_reposting(feedback, vote):
+    config, api = feedback
+    api.issue()
+    api.failure = "comment_after"
+    result = experience_feedback(config, TARGET, vote, github=api)
+    assert result["status"] == "ok"
+    assert len(api.comments[1]) == 1
+    assert len(api.mutations()) == 1
+    assert result["counts"] == {"+1": int(vote == "+1"), "-1": int(vote == "-1")}
+
+
+@pytest.mark.parametrize("stage", ["comment_before", "comment_after_and_readback"])
+def test_unconfirmed_comment_error_returns_the_same_id_for_recovery(feedback, stage):
+    config, api = feedback
+    api.issue()
     api.failure = stage
-    failed = experience_feedback(config, TARGET, "-1", github=api)
+    failed = experience_feedback(config, TARGET, "+1", github=api)
     assert failed["status"] == "error"
     assert failed["retryable"] is True
-    assert previous in api.reactions[1]
-    recovered = experience_feedback(config, TARGET, "-1", github=api)
+    assert re.fullmatch(r"[0-9a-f]{32}", failed["request_id"])
+    assert len(api.mutations()) == 1, "an unconfirmed write must not be blindly posted again"
+    api.fail_comment_reads = False
+    recovered = experience_feedback(config, TARGET, "+1", github=api, request_id=failed["request_id"])
     assert recovered["status"] == "ok"
-    assert recovered["counts"] == {"+1": 0, "-1": 1}
-    assert len(api.reactions[1]) == 1
-    assert len(api.issues) == 1
+    assert recovered["counts"] == {"+1": 1, "-1": 0}
+    assert len(api.comments[1]) == 1
 
 
 def test_lost_issue_create_response_is_recovered_without_another_issue(feedback):
@@ -298,7 +381,7 @@ def test_lost_issue_create_response_is_recovered_without_another_issue(feedback)
     assert failed["status"] == "error"
     assert failed["retryable"] is True
     assert len(api.issues) == 1
-    recovered = experience_feedback(config, TARGET, "+1", github=api)
+    recovered = experience_feedback(config, TARGET, "+1", github=api, request_id=failed["request_id"])
     assert recovered["status"] == "ok"
     assert len(api.issues) == 1
     assert recovered["counts"] == {"+1": 1, "-1": 0}

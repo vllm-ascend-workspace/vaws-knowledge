@@ -185,15 +185,18 @@ TOOLS += [
 TOOLS.append({
     "name": "experience_feedback",
     "description": (
-        "Optionally react +1 when a published experience helped, or -1 when it misled the work. "
-        "No explanation or extra summary is required. Uses the configured GitHub account and "
-        "sharing authorization; repeated votes do not accumulate. Feedback is usefulness, not proof of correctness."
+        "Optionally record +1 when a published experience helped, or -1 when it misled the work. "
+        "Each usage feedback counts, including repeated positive or negative feedback from the same account. "
+        "No explanation or extra summary is required. Uses configured GitHub sharing. "
+        "Omit request_id for new feedback; reuse a failed call's request_id only to retry that event. "
+        "Feedback is usefulness, not proof of correctness."
     ),
     "inputSchema": {
         "type": "object", "required": ["ref", "vote"],
         "properties": {
             "ref": {"type": "string", "description": "Published shared experience reference, or experience/relative-file.md."},
             "vote": {"type": "string", "enum": ["+1", "-1"]},
+            "request_id": {"type": "string", "description": "Optional retry ID returned by a failed call. Omit for a new usage event."},
         },
         "additionalProperties": False,
     },
@@ -337,7 +340,7 @@ class KnowledgeService:
     def experience_feedback(self, args: Mapping[str, Any]) -> dict[str, Any]:
         from vaws_knowledge.feedback import experience_feedback
 
-        return experience_feedback(self.config, args.get("ref"), args.get("vote"))
+        return experience_feedback(self.config, args.get("ref"), args.get("vote"), request_id=args.get("request_id"))
 
     def _capture(self, args: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
         config = self.config.for_kind(kind)

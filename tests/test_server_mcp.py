@@ -140,7 +140,7 @@ class Handshake(unittest.TestCase):
             "experience_query": {"text", "limit"},
             "experience_capture": {"title", "content", "ref", "public_relpath"},
             "experience_explain": {"ref"},
-            "experience_feedback": {"ref", "vote"},
+            "experience_feedback": {"ref", "vote", "request_id"},
         }, properties)
 
     def test_notifications_get_no_response(self):

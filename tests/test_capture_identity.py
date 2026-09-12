@@ -133,7 +133,19 @@ def test_feedback_tool_requires_no_reason_and_preserves_compact_result(tmp_path)
     with patch("vaws_knowledge.feedback.experience_feedback", return_value=result) as feedback:
         actual, error = service.call_tool("experience_feedback", {"ref": "experience/case.md", "vote": "+1"})
     assert not error and actual == result
-    feedback.assert_called_once_with(config, "experience/case.md", "+1")
+    feedback.assert_called_once_with(config, "experience/case.md", "+1", request_id=None)
+
+
+def test_feedback_tool_can_retry_returned_event_without_creating_new_identity(tmp_path):
+    config = configuration(tmp_path)
+    service = KnowledgeService(config=config)
+    retry_id = "a" * 32
+    with patch("vaws_knowledge.feedback.experience_feedback", return_value={"status": "ok"}) as feedback:
+        _, error = service.call_tool("experience_feedback", {
+            "ref": "experience/case.md", "vote": "-1", "request_id": retry_id,
+        })
+    assert not error
+    feedback.assert_called_once_with(config, "experience/case.md", "-1", request_id=retry_id)
 
 
 def test_feedback_cli_negative_vote_and_compact_json(tmp_path, capsys):
@@ -141,6 +153,7 @@ def test_feedback_cli_negative_vote_and_compact_json(tmp_path, capsys):
 
     config = configuration(tmp_path)
     with patch("vaws_knowledge.feedback_cli.load_config", return_value=config), \
-         patch("vaws_knowledge.feedback_cli.experience_feedback", return_value={"status": "ok", "vote": "-1"}):
-        assert main(["experience-feedback", "--ref", "experience/case.md", "--vote=-1"]) == 0
+         patch("vaws_knowledge.feedback_cli.experience_feedback", return_value={"status": "ok", "vote": "-1"}) as feedback:
+        assert main(["experience-feedback", "--ref", "experience/case.md", "--vote=-1", "--request-id", "b" * 32]) == 0
+    feedback.assert_called_once_with(config, "experience/case.md", "-1", request_id="b" * 32)
     assert json.loads(capsys.readouterr().out) == {"status": "ok", "vote": "-1"}

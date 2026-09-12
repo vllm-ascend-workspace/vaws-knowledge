@@ -38,8 +38,9 @@ Untyped legacy notes remain reachable through knowledge for compatibility; this
 does not assert that they have been checked against current main.
 For a published case, `experience_feedback(ref, vote="+1")` or `vote="-1"`
 optionally records whether it helped or misled the work. No reason is required.
-The tool reuses configured GitHub sharing and reacts on a feedback Issue; one
-account's repeated vote does not accumulate. Votes do not certify correctness
+The tool reuses configured GitHub sharing and records each usage feedback on an
+Issue. Both positive and negative feedback accumulate, even from the same account;
+they do not remove earlier feedback. Votes do not certify correctness
 or alter retrieval ranking. See [publishing](docs/publishing.md#experience-feedback).
 
 A title and non-empty Markdown body are enough. Keep known conditions, versions,

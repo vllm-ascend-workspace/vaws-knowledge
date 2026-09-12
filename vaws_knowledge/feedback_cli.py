@@ -1,4 +1,4 @@
-"""One optional GitHub reaction for a published experience."""
+"""Record one optional usage feedback event for a published experience."""
 
 from __future__ import annotations
 
@@ -14,7 +14,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--ref", required=True)
     parser.add_argument("--vote", required=True, choices=("+1", "-1"))
     parser.add_argument("--config")
+    parser.add_argument("--request-id", help="retry a failed feedback event with its returned ID; omit for a new event")
     args = parser.parse_args(argv)
-    result = experience_feedback(load_config(path=args.config), args.ref, args.vote)
+    result = experience_feedback(load_config(path=args.config), args.ref, args.vote, request_id=args.request_id)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result.get("status") in {"ok", "disabled"} else 1
