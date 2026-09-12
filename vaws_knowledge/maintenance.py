@@ -105,14 +105,13 @@ class MaintenanceWorker:
             self.thread.start()
 
     def _run(self) -> None:
-        startup = True
         while not self.closed.is_set():
             changed = self.wakeup.is_set()
             self.wakeup.clear()
             try:
-                result = maintain(self.config, force=changed, verify=startup)
-                if result.get("status") != "busy":
-                    startup = False
+                # Connections share readiness and the verification schedule.
+                # A new client alone does not invalidate a prepared model.
+                maintain(self.config, force=changed)
             except Exception:
                 pass  # Retry later; maintenance cannot terminate the MCP stream.
             self.wakeup.wait(POLL_SECONDS)
