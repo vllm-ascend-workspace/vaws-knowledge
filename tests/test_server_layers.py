@@ -92,6 +92,22 @@ class LayerMounting(unittest.TestCase):
 
 
 class EnvironmentOverrides(unittest.TestCase):
+    def test_explicit_state_overrides_discovered_workspace_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            path = root / ".vaws-local" / "knowledge" / "service.json"
+            path.parent.mkdir(parents=True)
+            configured_state = root / "configured-instance"
+            explicit_state = root / "attached-task" / "instance"
+            path.write_text(json.dumps({"state_root": str(configured_state)}), encoding="utf-8")
+            with mock.patch("vaws_knowledge.server.layers.Path.cwd", return_value=root):
+                configured = load_config(env={})
+                overridden = load_config(env={"VAWS_KNOWLEDGE_STATE": str(explicit_state)})
+            self.assertEqual(path, configured.config_path)
+            self.assertEqual(path, overridden.config_path)
+            self.assertEqual(configured_state, configured.state_root)
+            self.assertEqual(explicit_state, overridden.state_root)
+
     def test_env_roots_override_the_config_file(self):
         config = load_config(
             {"layers": {"project": {"roots": ["no-such-directory"]}}},

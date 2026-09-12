@@ -490,7 +490,7 @@ def load_config(
     backend = str(
         data.get("backend") or env.get(ENV_BACKEND) or "openviking"
     ).strip().lower() or "openviking"
-    state_raw = data.get("state_root") or env.get(ENV_STATE)
+    state_raw = env.get(ENV_STATE) or data.get("state_root")
     if state_raw:
         state_root = _resolve(str(state_raw), base)
     else:
