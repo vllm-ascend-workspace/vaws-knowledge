@@ -8,7 +8,7 @@ the local instance is down: Markdown remains authoritative.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
 from vaws_knowledge.markdown import layer_from_uri
@@ -39,7 +39,16 @@ class RetrievalBackend(Protocol):
     name: str
 
     def available(self) -> tuple[bool, str]:
-        """Return ``(ok, detail)``. ``ok`` false means index is unusable."""
+        """Prepare the engine for maintenance, starting it when necessary."""
+
+    def ready(self) -> tuple[bool, str]:
+        """Check/connect to an existing engine without starting or downloading."""
+
+    def index_fingerprint(self) -> Mapping[str, Any]:
+        """The engine and embedding contract used to build index records."""
+
+    def check_document(self, uri: str, content: str) -> bool:
+        """Verify stored content and its exact vector index record, without writes."""
 
     def upsert(self, uri: str, content: str, *, layer: str, wait: bool = True) -> None:
         """Create or replace one document in the index."""
@@ -71,6 +80,15 @@ class UnavailableBackend:
     def available(self) -> tuple[bool, str]:
         return False, self.reason
 
+    def ready(self) -> tuple[bool, str]:
+        return False, self.reason
+
+    def index_fingerprint(self) -> Mapping[str, Any]:
+        return {"backend": self.name}
+
+    def check_document(self, uri: str, content: str) -> bool:
+        return False
+
     def upsert(self, uri: str, content: str, *, layer: str, wait: bool = True) -> None:
         del uri, content, layer, wait
 
@@ -97,11 +115,26 @@ class MemoryBackend:
 
     name = "memory"
 
-    def __init__(self) -> None:
+    def __init__(self, config: Any = None) -> None:
+        self.config = config
         self.documents: dict[str, dict[str, Any]] = {}
+        self.vectors: set[str] = set()
+        self.fingerprint = {"backend": "memory", "model": "test-v1"}
 
     def available(self) -> tuple[bool, str]:
         return True, "memory"
+
+    def ready(self) -> tuple[bool, str]:
+        return True, "memory"
+
+    def index_fingerprint(self) -> Mapping[str, Any]:
+        return dict(self.fingerprint)
+
+    def check_document(self, uri: str, content: str) -> bool:
+        record = self.documents.get(uri)
+        stored = str(record.get("content") or "") if record else ""
+        normalize = lambda value: value.replace("\r\n", "\n").replace("\r", "\n")
+        return bool(record and normalize(stored) == normalize(content) and uri in self.vectors)
 
     def upsert(self, uri: str, content: str, *, layer: str, wait: bool = True) -> None:
         del wait
@@ -119,9 +152,11 @@ class MemoryBackend:
             "title": title,
             "body": body,
         }
+        self.vectors.add(uri)
 
     def delete(self, uri: str) -> None:
         self.documents.pop(uri, None)
+        self.vectors.discard(uri)
 
     def read(self, uri: str) -> str | None:
         record = self.documents.get(uri)
@@ -138,9 +173,17 @@ class MemoryBackend:
         query_tokens = set(_TOKEN_RE.findall((text or "").lower()))
         hits: list[Hit] = []
         for uri, record in self.documents.items():
+            if uri not in self.vectors:
+                continue
             layer = str(record.get("layer") or layer_from_uri(uri) or "")
             if wanted and layer not in wanted:
                 continue
+            if layer == "shared" and self.config is not None:
+                from vaws_knowledge.local.shared import shared_search_uris
+
+                roots = shared_search_uris(getattr(self.config, "state_root", None))
+                if not any(uri.startswith(root + "/") for root in roots):
+                    continue
             haystack = str(record.get("content") or "").lower()
             score = 0.0
             if text and text.lower() in haystack:
@@ -170,10 +213,12 @@ def backend_for_config(config: Any) -> RetrievalBackend:
 
     existing = getattr(config, "retrieval", None)
     if existing is not None:
+        if isinstance(existing, MemoryBackend):
+            existing.config = config
         return existing
     name = str(getattr(config, "backend", None) or "openviking").strip().lower()
     if name in {"memory", "test"}:
-        backend: RetrievalBackend = MemoryBackend()
+        backend: RetrievalBackend = MemoryBackend(config)
     elif name in {"unavailable", "off", "none"}:
         backend = UnavailableBackend("knowledge index disabled")
     else:

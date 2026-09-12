@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -36,10 +35,15 @@ def queue_capture(config: ServiceConfig, candidate: Path) -> dict[str, Any]:
         return {"status": "prepare_failed", "reason": str(exc)[:600]}
 
 
-def run_once(config: ServiceConfig, *, force: bool = False) -> dict[str, Any]:
+def run_once(config: ServiceConfig, *, force: bool = False, verify: bool = False) -> dict[str, Any]:
     settings = config.publishing
-    if not settings.get("enabled"):
-        return {"status": "disabled"}
+    shared = getattr(config, "shared_sync", {})
+    # Empty roots represent an explicit disabled shared layer. Its sync must
+    # not start a model/server or contact a release source either.
+    shared_enabled = shared.get("enabled", True) and bool(config.mount("shared").roots)
+    publishing_enabled = settings.get("enabled", False)
+    if not shared_enabled and not publishing_enabled:
+        return {"status": "disabled", "sync": {"status": "disabled"}}
     instance = instance_for_config(config)
     root = instance.state_root
     status_path = root / "publishing.json"
@@ -47,15 +51,15 @@ def run_once(config: ServiceConfig, *, force: bool = False) -> dict[str, Any]:
     try:
         lock.acquire()
     except SwitchInProgress:
-        return {"status": "busy"}
+        return {"status": "busy", "sync": {"status": "busy"}}
     try:
         previous = read_json(status_path) or {}
         now = time.time()
-        if not force and now < previous.get("next_check", 0):
-            return {"status": "unchanged"}
+        if not force and not verify and now < previous.get("next_check", 0):
+            return {"status": "unchanged", "sync": previous.get("sync", {"status": "pending"})}
         result: dict[str, Any] = {"status": "ok", "checked_at": now,
                                   "next_check": now + 30, "next_sync": previous.get("next_sync", 0)}
-        if settings.get("fork"):
+        if publishing_enabled and settings.get("fork"):
             pending = [r for r in iter_pending(root) if r.status in {"pending", "awaiting_transport", "pr_open"}]
             if pending:
                 try:
@@ -90,22 +94,36 @@ def run_once(config: ServiceConfig, *, force: bool = False) -> dict[str, Any]:
                 except Exception as exc:
                     result["contribution_error"] = str(exc)[:1000]
                     result["status"] = "partial"
-        if force or now >= result["next_sync"]:
+        if not shared_enabled:
+            result["sync"] = {"status": "disabled"}
+        elif force or verify or now >= result["next_sync"]:
             try:
                 from vaws_knowledge.distribution.release import source_from_location
                 from vaws_knowledge.distribution.client import connect_client
                 from vaws_knowledge.local.embedding import EMBEDDING_MODEL, EMBEDDING_DIMENSION
 
-                source = source_from_location(f"github://{settings['repository']}", cache_dir=root / "release-downloads")
-                status = instance.ensure()
-                client = connect_client(status["openviking_url"], api_key=instance.data_key())
+                repository = shared.get("repository") or settings.get("repository") or DEFAULT_CORPUS
+                source = source_from_location(f"github://{repository}", cache_dir=root / "release-downloads")
+                status: dict[str, Any] = {}
+                client = None
+
+                def prepare_model(manifest):
+                    status.update(instance.ensure(verify_model=True, model_manifest=manifest))
+
+                def open_client():
+                    nonlocal client
+                    client = connect_client(status["openviking_url"], api_key=instance.data_key())
+                    return client
+
                 try:
                     synced = check_and_sync(
                         root, source, embedding_info={"model": EMBEDDING_MODEL, "dimension": EMBEDDING_DIMENSION},
-                        client=client, model_cache=instance.cache_dir,
+                        client_factory=open_client, model_cache=instance.cache_dir, prepare_model=prepare_model,
+                        verify=verify,
                     )
                 finally:
-                    client.close()
+                    if client is not None:
+                        client.close()
                 result["sync"] = synced.to_dict()
                 result["next_sync"] = now + (1800 if synced.ok else 60)
             except Exception as exc:
@@ -113,7 +131,7 @@ def run_once(config: ServiceConfig, *, force: bool = False) -> dict[str, Any]:
                 result["next_sync"] = now + 60
         else:
             result["sync"] = previous.get("sync")
-        if (result.get("sync") or {}).get("status") not in {"switched", "unchanged"}:
+        if (result.get("sync") or {}).get("status") not in {"switched", "unchanged", "disabled"}:
             result["status"] = "partial"
         if any(item.get("status") == "awaiting_transport" for item in result.get("contributions", [])):
             result["status"] = "partial"
@@ -121,35 +139,6 @@ def run_once(config: ServiceConfig, *, force: bool = False) -> dict[str, Any]:
         return result
     finally:
         lock.release()
-
-
-class PublishingWorker:
-    """One bounded background thread per MCP connection; process lock shares work."""
-
-    def __init__(self, config: ServiceConfig):
-        self.config = config
-        self.closed = threading.Event()
-        self.thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self.config.publishing.get("enabled") and self.thread is None:
-            self.thread = threading.Thread(target=self._run, name="knowledge-publishing", daemon=True)
-            self.thread.start()
-
-    def _run(self) -> None:
-        startup = True
-        while not self.closed.is_set():
-            try:
-                run_once(self.config, force=startup)
-            except Exception:  # a failure never terminates the stdio tool service
-                pass
-            startup = False
-            self.closed.wait(10)
-
-    def stop(self) -> None:
-        self.closed.set()
-        if self.thread:
-            self.thread.join(timeout=1)
 
 
 def configure(path: Path, *, repository: str, read_only: bool = False) -> dict[str, Any]:
@@ -162,7 +151,11 @@ def configure(path: Path, *, repository: str, read_only: bool = False) -> dict[s
     payload.setdefault("state_root", str(path.parent / "instance"))
     config = load_config(payload, path=path, base_dir=path.parent)
     root = instance_for_config(config).state_root.resolve()
-    settings: dict[str, Any] = {"enabled": True, "repository": repository_name(repository)}
+    name = repository_name(repository)
+    payload["shared_sync"] = {"enabled": True, "repository": name}
+    settings: dict[str, Any] = {"enabled": not read_only, "repository": name}
+    if read_only and isinstance(payload.get("publishing"), dict):
+        settings = {**payload["publishing"], **settings}
     if not read_only:
         settings.update(ensure_fork(repository, root / "contribution" / "repository"))
     payload["publishing"] = settings

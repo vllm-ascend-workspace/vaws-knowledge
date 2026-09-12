@@ -46,6 +46,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
         metrics_reader=metrics_reader,
         model_cache=Path(args.model_cache) if args.model_cache else None,
         smoke_query=args.smoke_query,
+        verify=args.verify,
     )
     _print(result.to_dict())
     return 0 if result.ok else 1
@@ -112,7 +113,7 @@ def _cmd_build_release(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="vaws-corpus-build-") as temporary:
         instance = LocalInstance(Path(temporary))
         if args.model_cache:
-            instance.cache_dir = Path(args.model_cache)
+            instance.source_cache = Path(args.model_cache)
         try:
             status = instance.ensure()
             client = connect_client(status["openviking_url"], api_key=instance.data_key())
@@ -212,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--embedding-dimension", type=int, default=EMBEDDING_DIMENSION)
     p.add_argument("--model-cache", default=None)
     p.add_argument("--smoke-query", default=None)
+    p.add_argument("--verify", action="store_true", help="audit and repair the active content and dense vectors even without a new release")
     p.set_defaults(func=_cmd_check)
 
     p = sub.add_parser("build", help="build a dense OVPack from a fixed Git commit")

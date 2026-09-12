@@ -16,8 +16,8 @@ from vaws_knowledge.contribution.pending import iter_pending
 from vaws_knowledge.contribution.submit import SubmitConfig, submit_pending
 from vaws_knowledge.distribution.release import GitHubReleaseSource
 from vaws_knowledge.distribution.errors import SourceUnavailable
-from vaws_knowledge.distribution.sync import SwitchLock
-from vaws_knowledge.publishing import queue_capture, run_once
+from vaws_knowledge.distribution.sync import SwitchLock, SyncResult
+from vaws_knowledge.publishing import configure, queue_capture, run_once
 from vaws_knowledge.server.capture import capture
 from vaws_knowledge.server.layers import load_config
 from vaws_knowledge.summary_hook import capture_summary
@@ -216,3 +216,102 @@ def test_plain_text_notes_need_no_heading_or_metadata(tmp_path):
     loaded = load_document(note, layer="project", root=tmp_path)
     assert loaded.content == text
     assert MarkdownDocument.from_text(text).body == text
+
+
+def test_shared_sync_defaults_on_without_contribution_authorization(tmp_path):
+    from types import SimpleNamespace
+
+    config = configured(tmp_path)
+    config.publishing["enabled"] = False
+    config.shared_sync = {}
+    instance = SimpleNamespace(state_root=config.state_root, cache_dir=tmp_path / "model",
+                               ensure=lambda: {"openviking_url": "http://loopback"}, data_key=lambda: "test")
+    with patch("vaws_knowledge.publishing.instance_for_config", return_value=instance), \
+         patch("vaws_knowledge.publishing.iter_pending", side_effect=AssertionError("private history must not be queued")), \
+         patch("vaws_knowledge.distribution.release.source_from_location") as source, \
+         patch("vaws_knowledge.distribution.client.connect_client"), \
+         patch("vaws_knowledge.publishing.check_and_sync", return_value=SyncResult(status="unchanged")) as sync:
+        result = run_once(config, verify=True)
+    assert result["sync"]["status"] == "unchanged"
+    assert source.call_args.args[0] == "github://example/corpus"
+    assert sync.call_args.kwargs["verify"] is True
+
+
+def test_shared_sync_can_be_disabled_without_enabling_private_history(tmp_path):
+    config = configured(tmp_path)
+    config.publishing["enabled"] = False
+    config.shared_sync = {"enabled": False}
+    with patch("vaws_knowledge.publishing.iter_pending", side_effect=AssertionError("pending must stay private")), \
+         patch("vaws_knowledge.publishing.instance_for_config", side_effect=AssertionError("no service needed")):
+        result = run_once(config, force=True)
+    assert result == {"status": "disabled", "sync": {"status": "disabled"}}
+
+
+@pytest.mark.parametrize("disabled,env", [
+    ({"enabled": False}, {}),
+    ({}, {"VAWS_KNOWLEDGE_SHARED_ROOTS": ""}),
+    ({}, {"VAWS_KNOWLEDGE_LAYERS": "project,candidate"}),
+])
+def test_explicit_disabled_shared_layer_does_not_start_or_download(tmp_path, disabled, env):
+    config = load_config({"state_root": str(tmp_path / "state"), "layers": {"shared": disabled}}, env=env)
+    with patch("vaws_knowledge.publishing.instance_for_config", side_effect=AssertionError("disabled layer must not start runtime")):
+        result = run_once(config, force=True, verify=True)
+    assert result["sync"]["status"] == "disabled"
+
+
+def test_release_cache_only_returns_the_requested_activated_git_version(tmp_path):
+    source, manifest, _downloads = release_source(tmp_path)
+    source.fetch()
+    source._json = lambda _suffix: (_ for _ in ()).throw(AssertionError("cache lookup must be offline"))
+    assert source.cached(manifest["source"]["git_sha"]).manifest.source_git_sha == manifest["source"]["git_sha"]
+    assert source.cached("f" * 40) is None
+
+
+def test_read_only_configuration_enables_sync_and_disables_upload(tmp_path):
+    path = tmp_path / "service.json"
+    path.write_text(json.dumps({"publishing": {"enabled": True, "fork": "old/fork"}}))
+    with patch("vaws_knowledge.github_transport.ensure_fork", side_effect=AssertionError("read-only must not create a fork")):
+        result = configure(path, repository="example/corpus", read_only=True)
+    data = json.loads(path.read_text())
+    assert data["shared_sync"] == {"enabled": True, "repository": "example/corpus"}
+    assert data["publishing"]["enabled"] is False
+    assert data["publishing"]["fork"] == "old/fork"
+    assert result["contributions"] is False
+
+
+def test_shared_sync_prepares_latest_manifest_before_connecting(tmp_path):
+    from types import SimpleNamespace
+    from distribution.helpers import FakeClient, GIT_SHA, make_release_dir
+    from vaws_knowledge.distribution.release import LocalReleaseSource
+
+    config = configured(tmp_path)
+    config.publishing["enabled"] = False
+    release = make_release_dir(tmp_path / "release")
+    events = []
+
+    def ensure(**kwargs):
+        assert kwargs["verify_model"] is True
+        assert kwargs["model_manifest"].source_git_sha == GIT_SHA
+        events.append("prepare")
+        return {"openviking_url": "http://fresh-instance"}
+
+    client = FakeClient()
+    client.close = lambda: events.append("close")
+
+    def connect(url, **kwargs):
+        assert url == "http://fresh-instance" and kwargs["api_key"] == "test"
+        events.append("connect")
+        return client
+
+    instance = SimpleNamespace(state_root=config.state_root, cache_dir=tmp_path / "model",
+                               ensure=ensure, data_key=lambda: "test")
+    with patch("vaws_knowledge.publishing.instance_for_config", return_value=instance), \
+         patch("vaws_knowledge.distribution.release.source_from_location", return_value=LocalReleaseSource(release)), \
+         patch("vaws_knowledge.distribution.client.connect_client", side_effect=connect):
+        result = run_once(config, verify=True)
+        assert result["sync"]["status"] == "switched", result
+        assert events == ["prepare", "connect", "close"]
+        events.clear()
+        result = run_once(config, force=True)
+    assert result["sync"]["status"] == "unchanged"
+    assert events == []

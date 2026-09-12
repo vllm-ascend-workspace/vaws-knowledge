@@ -46,6 +46,14 @@ def test_valid_manifest_passes(tmp_path):
     assert len(manifest.content_files) == 2
 
 
+@pytest.mark.parametrize("asset", ["../escape.ovpack", "C:\\escape.ovpack", "subdir/pack.ovpack"])
+def test_release_asset_stays_inside_its_local_version_directory(tmp_path, asset):
+    data = _valid_manifest(tmp_path)
+    data["pack"]["file"] = asset
+    with pytest.raises(CorruptPack, match="single asset filename"):
+        validate_release_manifest(data, expected=ExpectedContract())
+
+
 def test_manifest_requires_dense_index(tmp_path):
     data = _valid_manifest(tmp_path)
     data["pack"]["index"] = {"records": {"count": 1}}

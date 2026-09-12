@@ -21,6 +21,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "fixtures" / "s
 
 import support  # noqa: E402
 from vaws_knowledge import package_version
+from vaws_knowledge.local.reconcile import reconcile_markdown
 from vaws_knowledge.server.layers import load_config  # noqa: E402
 from vaws_knowledge.server.mcp_server import (  # noqa: E402
     METHOD_NOT_FOUND,
@@ -161,6 +162,7 @@ class Tools(unittest.TestCase):
                 },
             )
             self.assertFalse(captured["isError"], captured)
+            reconcile_markdown(svc.config)
             result = call(svc, "knowledge_query", {"text": "hostname resolution"})
             self.assertFalse(result["isError"])
             payload = result["structuredContent"]
@@ -228,6 +230,8 @@ class Tools(unittest.TestCase):
             payload = result["structuredContent"]
             self.assertTrue(pathlib.Path(payload["path"]).is_file())
             self.assertEqual("pending", payload["index"])
+            self.assertFalse(call(svc, "knowledge_query", {"text": "uncertain cause"})["structuredContent"]["results"])
+            reconcile_markdown(svc.config)
             found = call(svc, "knowledge_query", {"text": "uncertain cause"})["structuredContent"]
             self.assertTrue(found["results"])
 
@@ -281,6 +285,7 @@ class Degradation(unittest.TestCase):
                 "knowledge_capture",
                 {"title": "loop note", "content": "framed stdio session"},
             )
+            reconcile_markdown(svc.config)
             stdin = io.BytesIO(
                 frame(
                     {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
@@ -312,6 +317,7 @@ class StdioSubprocessHandshake(unittest.TestCase):
 
     def test_initialize_tools_list_and_query_over_newline_stdio(self):
         import subprocess
+        import time
 
         repo = pathlib.Path(__file__).resolve().parent.parent
         tmp = tempfile.TemporaryDirectory()
@@ -321,6 +327,7 @@ class StdioSubprocessHandshake(unittest.TestCase):
             "PYTHONPATH": str(repo),
             "VAWS_KNOWLEDGE_BACKEND": "memory",
             "VAWS_KNOWLEDGE_CANDIDATE_ROOT": tmp.name,
+            "VAWS_KNOWLEDGE_STATE": str(pathlib.Path(tmp.name) / "instance"),
             "VAWS_KNOWLEDGE_PROJECT_ROOTS": "",
             "VAWS_KNOWLEDGE_SHARED_ROOTS": "",
         }
@@ -385,6 +392,13 @@ class StdioSubprocessHandshake(unittest.TestCase):
             )
             queried = recv()
             payload = queried["result"]["structuredContent"]
+            deadline = time.monotonic() + 5
+            while not payload["results"] and time.monotonic() < deadline:
+                time.sleep(0.05)
+                send({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+                    "name": "knowledge_query", "arguments": {"text": "newline-delimited JSON-RPC"}}})
+                queried = recv()
+                payload = queried["result"]["structuredContent"]
             self.assertFalse(queried["result"]["isError"])
             self.assertTrue(payload["results"], payload)
             self.assertIn("newline-delimited JSON-RPC", payload["results"][0]["excerpt"])

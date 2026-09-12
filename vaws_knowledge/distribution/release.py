@@ -190,6 +190,28 @@ class GitHubReleaseSource:
             raise SourceUnavailable("GitHub release metadata is too large")
         return json.loads(raw)
 
+    def cached(self, source_git_sha: str) -> ReleaseSnapshot | None:
+        """Find an already downloaded release for an activation we own.
+
+        This never chooses a new version while offline. The caller supplies
+        the exact previously activated Git identity and still verifies the
+        cached asset before using it.
+        """
+        directory = self.cache_dir / self.repository.replace("/", "--")
+        if not directory.is_dir():
+            return None
+        for release in sorted(directory.iterdir(), key=lambda path: path.name, reverse=True):
+            if not release.is_dir() or not release.name.isdigit():
+                continue
+            try:
+                manifest = validate_release_manifest(read_json(release / RELEASE_MANIFEST_NAME), expected=ExpectedContract())
+            except Exception:
+                continue
+            pack = release / manifest.pack["file"]
+            if manifest.source_git_sha == source_git_sha and pack.is_file():
+                return ReleaseSnapshot(manifest, pack, "cached GitHub release")
+        return None
+
     def _download(self, asset: dict[str, Any], destination: Path, *, maximum: int) -> None:
         url = str(asset.get("browser_download_url") or "")
         prefix = f"https://github.com/{self.repository}/releases/download/"

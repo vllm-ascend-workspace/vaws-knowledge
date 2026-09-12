@@ -21,6 +21,16 @@ Install Python 3.11 or newer and the package:
 
 ```sh
 python -m pip install -e .
+vaws-knowledge prepare --project /path/to/project
+vaws-knowledge server --config /path/to/project/.vaws-local/knowledge/service.json
+```
+
+Workspace installation calls `prepare` automatically. It prepares the CPU model,
+bundled notes and indexes before reporting readiness. The MCP service maintains
+them in the background. A standalone installation can use the same command;
+it creates local configuration without enabling public contribution.
+
+```sh
 vaws-knowledge capture --title "Graph replay observation" \
   --content "Eager passed; graph replay differed after the input layout changed."
 vaws-knowledge query --text "graph replay input layout"
@@ -33,21 +43,23 @@ condition verdict. A missing or unavailable result means unknown and does not
 block independent development.
 
 Markdown files retain the original content. MCP capture saves locally without
-waiting for retrieval startup or indexing. Queries reconcile added, edited and
-deleted files with the index. Shared updates preserve project and candidate
+waiting for retrieval startup or indexing. Background maintenance reconciles
+added, edited and deleted files and periodically checks actual content and vectors.
+Queries use the ready index without downloads or repairs. Shared updates preserve project and candidate
 files. Configured summary hooks save locally even when public sharing is off;
 sharing itself follows the publishing configuration. Reuse an existing useful
 summary for capture instead of writing another one.
 
-Bundled and configured Markdown can be queried directly without first building
-a shared release. A retrieved shared note can be read through
+Bundled and configured Markdown remains searchable alongside the active shared
+release; installing a smaller release does not hide the packaged notes.
+A retrieved shared note can be read through
 `knowledge_explain(ref)` just like a local note. The package handles indexing
 and active shared versions internally.
 
 `VAWS_KNOWLEDGE_CONFIG` selects storage and backend configuration;
 `VAWS_KNOWLEDGE_STATE` selects local runtime state. The local OpenViking instance
 uses CPU embedding on loopback. `VAWS_KNOWLEDGE_EMBEDDING_CACHE` can supply an
-existing model cache; the first uncached retrieval downloads the model.
+existing model cache; preparation downloads an uncached model.
 See [the service reference](vaws_knowledge/server/README.md) for setup details.
 
 ## Optional maintenance
@@ -67,9 +79,11 @@ configured submission retries. The public corpus uses Markdown/redaction checks
 and **human review and merge**. Local and shared observations remain reference
 material regardless of publication status.
 
-For requested setup, `vaws-knowledge publishing configure --config PATH`
-creates or reuses a contribution fork and enables background shared updates.
-`--read-only` consumes public releases without a fork or GitHub login. Existing
+Shared release synchronization is enabled by default, independently of public
+upload permission. For explicitly requested contribution setup,
+`vaws-knowledge publishing configure --config PATH` creates or reuses a
+contribution fork. `--read-only` disables contribution and keeps release sync
+without a fork or GitHub login. Existing
 private candidates are not bulk uploaded when sharing is enabled. Ordinary
 development does not need a fork, publishing commands or a wait for PR review.
 

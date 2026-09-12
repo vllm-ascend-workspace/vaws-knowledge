@@ -23,7 +23,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from vaws_knowledge.local.embedding import EMBEDDING_DIMENSION, EMBEDDING_MODEL
+from vaws_knowledge.local.embedding import (
+    EMBEDDING_DIMENSION, EMBEDDING_MODEL, PreparedModel, prepare_embedding_cache,
+)
 
 OPENVIKING_VERSION = "0.4.19"
 LOOPBACK = "127.0.0.1"
@@ -116,10 +118,32 @@ def _unused_port() -> int:
 
 def _health(url: str, timeout: float = 2.0) -> bool:
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=timeout) as response:
             return 200 <= int(response.status) < 300
     except (urllib.error.URLError, TimeoutError, OSError):
         return False
+
+
+def _tenant_key_accepted(url: str, key: str) -> bool:
+    """False only for explicit authentication rejection, never transport errors."""
+    from openviking_sdk import SyncHTTPClient
+    from openviking_sdk.errors import NotFoundError, UnauthenticatedError
+
+    with without_proxies():
+        client = SyncHTTPClient(url=url, api_key=key, timeout=5.0)
+        client.initialize()
+    try:
+        try:
+            client.stat("viking://resources")
+        except UnauthenticatedError:
+            return False
+        except NotFoundError:
+            # A new tenant may have no resources yet; authentication passed.
+            return True
+        return True
+    finally:
+        client.close()
 
 
 def pid_alive(pid: int) -> bool:
@@ -319,7 +343,8 @@ class LocalInstance:
         self.log_dir = self.state_root / "logs"
         self.data_dir = self.state_root / "ov-data"
         cache_env = os.environ.get("VAWS_KNOWLEDGE_EMBEDDING_CACHE")
-        self.cache_dir = Path(cache_env) if cache_env else self.state_root / "embedding-cache"
+        self.cache_dir = self.state_root / "embedding-cache"
+        self.source_cache = Path(cache_env) if cache_env else None
         self.metrics_path = self.state_root / "embedding.jsonl"
 
     @property
@@ -360,13 +385,86 @@ class LocalInstance:
             "embedding_dimension": EMBEDDING_DIMENSION,
         }
 
-    def ensure(self) -> dict[str, Any]:
+    def _model_manifest(self) -> Any | None:
+        """Use only the already verified release attached to this instance."""
+        from vaws_knowledge.distribution.manifest import (
+            ExpectedContract, read_json, validate_release_manifest,
+        )
+        from vaws_knowledge.distribution.sync import DistributionState
+
+        state = DistributionState(self.state_root)
+        current = state.read_current()
+        if current is None:
+            return None
+        path = state.version_dir(current["version_id"]) / "release.json"
+        if (Path(current["manifest_path"]).resolve() != path.resolve()
+                or not path.resolve().is_relative_to(state.root.resolve())):
+            return None
+        payload = read_json(path)
+        if payload is None:
+            return None
+        manifest = validate_release_manifest(payload, expected=ExpectedContract())
+        if manifest.source_git_sha != current["source_git_sha"]:
+            raise RuntimeError("active embedding manifest differs from its shared source version")
+        return manifest
+
+    def prepare_model(self, manifest: Any | None = None, *, verify: bool = False) -> PreparedModel:
+        return prepare_embedding_cache(
+            self.cache_dir, source_cache=self.source_cache,
+            manifest=manifest if manifest is not None else self._model_manifest(), verify=verify,
+        )
+
+    def _activate_model(self, prepared: PreparedModel) -> None:
+        if not prepared.changed:
+            return
+        stage = prepared.cache_dir.resolve()
+        parent = self.cache_dir.parent.resolve()
+        if stage.parent != parent or not stage.name.startswith(f".{self.cache_dir.name}-prepare-"):
+            raise RuntimeError("prepared embedding cache is outside its instance")
+        backup = parent / f".{self.cache_dir.name}-previous-{time.time_ns()}"
+        if self.cache_dir.exists():
+            self.cache_dir.rename(backup)
+        try:
+            stage.rename(self.cache_dir)
+        except OSError:
+            if backup.exists() and not self.cache_dir.exists():
+                backup.rename(self.cache_dir)
+            raise
+
+    def _save_pid(self, record: dict[str, Any]) -> None:
+        from vaws_knowledge.distribution.manifest import atomic_write_json
+
+        atomic_write_json(self.pid_path, record)
+
+    def _ensure_data_key(self, url: str, credentials: dict[str, str]) -> None:
+        """Maintenance-only recovery when a rebuilt DB forgot its tenant key."""
+        key = credentials.get("data_key")
+        if key and _tenant_key_accepted(url, key):
+            return
+        root_key = credentials.get("root_key")
+        if not root_key:
+            raise RuntimeError("knowledge instance has no administrator credential for tenant recovery")
+        from vaws_knowledge.distribution.client import provision_tenant_key
+
+        replacement = provision_tenant_key(url, root_key=root_key)
+        if not _tenant_key_accepted(url, replacement):
+            raise RuntimeError("recovered knowledge tenant credential was rejected")
+        updated = {**credentials, "data_key": replacement}
+        self._save_credentials(updated)
+        credentials.update(updated)
+
+    def ensure(self, *, verify_model: bool = False, model_manifest: Any | None = None) -> dict[str, Any]:
         with InstanceLock(self.lock_path):
             current = self.describe()
             credentials = self._credentials()
-            if current["live"] and credentials.get("data_key"):
+            # Downloads and CPU model validation are preparation, outside the
+            # bounded child health wait and before stopping a healthy process.
+            prepared = self.prepare_model(model_manifest, verify=verify_model)
+            if current["live"] and not prepared.changed:
+                self._ensure_data_key(current["openviking_url"], credentials)
                 return current
             self._stop_owned(current.get("pid") or {})
+            self._activate_model(prepared)
             self.state_root.mkdir(parents=True, exist_ok=True)
             self.log_dir.mkdir(parents=True, exist_ok=True)
             self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -432,6 +530,15 @@ class LocalInstance:
                     embed_cmd, env=env, stdout=embed_log, stderr=subprocess.STDOUT, **_popen_kwargs()
                 )
             try:
+                record = {
+                    "status": "starting", "embedding_pid": embed_proc.pid,
+                    "embedding_port": embed_port, "openviking_port": ov_port,
+                    "host": LOOPBACK, "started_at": time.time(),
+                    "openviking_version": OPENVIKING_VERSION, "embedding_model": EMBEDDING_MODEL,
+                    "openviking_marker": self.openviking_marker,
+                    "embedding_marker": self.embedding_marker,
+                }
+                self._save_pid(record)
                 self._wait_proc_health(
                     embed_proc,
                     f"http://{LOOPBACK}:{embed_port}/health",
@@ -444,6 +551,8 @@ class LocalInstance:
                         ov_cmd, env=env, stdout=ov_log, stderr=subprocess.STDOUT, **_popen_kwargs()
                     )
                 try:
+                    record["openviking_pid"] = ov_proc.pid
+                    self._save_pid(record)
                     self._wait_proc_health(
                         ov_proc,
                         f"http://{LOOPBACK}:{ov_port}/health",
@@ -451,33 +560,15 @@ class LocalInstance:
                         log_path=self.log_dir / "openviking.log",
                         name="openviking-server",
                     )
-                    if not credentials.get("data_key"):
-                        from vaws_knowledge.distribution.client import provision_tenant_key
-
-                        credentials["data_key"] = provision_tenant_key(
-                            f"http://{LOOPBACK}:{ov_port}",
-                            root_key=credentials["root_key"],
-                        )
-                        self._save_credentials(credentials)
-                except Exception:
+                    self._ensure_data_key(f"http://{LOOPBACK}:{ov_port}", credentials)
+                except BaseException:
                     stop_owned_pid(ov_proc.pid, self.openviking_marker)
                     raise
-            except Exception:
+            except BaseException:
                 stop_owned_pid(embed_proc.pid, self.embedding_marker)
                 raise
-            record = {
-                "embedding_pid": embed_proc.pid,
-                "openviking_pid": ov_proc.pid,
-                "embedding_port": embed_port,
-                "openviking_port": ov_port,
-                "host": LOOPBACK,
-                "started_at": time.time(),
-                "openviking_version": OPENVIKING_VERSION,
-                "embedding_model": EMBEDDING_MODEL,
-                "openviking_marker": self.openviking_marker,
-                "embedding_marker": self.embedding_marker,
-            }
-            self.pid_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            record["status"] = "running"
+            self._save_pid(record)
             return self.describe()
 
     def _credentials(self) -> dict[str, str]:

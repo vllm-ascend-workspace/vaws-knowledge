@@ -13,7 +13,6 @@ from typing import Any, Sequence
 
 from vaws_knowledge import package_version
 from vaws_knowledge.local.backend import Hit, backend_for_config
-from vaws_knowledge.local.reconcile import reconcile_markdown
 from vaws_knowledge.local.instance import instance_for_config
 from vaws_knowledge.local.shared import current_shared
 from vaws_knowledge.markdown import Document, iter_markdown_files, layer_from_uri, load_document, parse_markdown
@@ -33,8 +32,6 @@ REFERENCE_NOTE = (
 def load_layer_documents(config: ServiceConfig, layers: Sequence[str]) -> list[Document]:
     documents: list[Document] = []
     for layer in layers:
-        if layer == "shared" and current_shared(instance_for_config(config).state_root):
-            continue  # imported shared content is read from its active snapshot
         mount = config.mount(layer)
         if not mount.present:
             continue
@@ -131,7 +128,7 @@ def query(
         "limit": int(limit or 8),
     }
     backend = backend_for_config(config)
-    ok, detail = backend.available()
+    ok, detail = backend.ready()
     notes: list[str] = [REFERENCE_NOTE]
     if not ok:
         notes.append(
@@ -148,26 +145,37 @@ def query(
             layers_absent=consulted["layers_absent"],
         )
 
-    report = reconcile_markdown(config, wanted_layers)
-    if report.errors:
-        notes.append(
-            "markdown index reconciliation failed; files on disk were left unchanged "
-            "and this search may be incomplete"
-        )
+    from vaws_knowledge.maintenance import maintenance_status
+
+    maintenance = maintenance_status(config)
+    pending = not maintenance.get("ready", False)
+    if pending:
+        notes.append("Index maintenance is pending; results may be incomplete. The service retries in the background.")
 
     fetch = max(int(limit or 8) * 4, 16)
     searched_layers = consulted["layers_available"]
-    hits = backend.search(text, layers=searched_layers, limit=fetch) if searched_layers else []
+    try:
+        hits = backend.search(text, layers=searched_layers, limit=fetch) if searched_layers else []
+    except Exception as exc:
+        return QueryResponse(degraded=True, unavailable=True,
+                             index_detail=f"{type(exc).__name__}: {exc}", notes=notes, request=request,
+                             layers_available=consulted["layers_available"], layers_absent=consulted["layers_absent"])
     catalog = documents_by_uri(config, wanted_layers)
+    active = current_shared(instance_for_config(config).state_root) if "shared" in searched_layers else None
+    active_prefix = str(active["root_uri"]).rstrip("/") + "/" if active else ""
     kept: list[dict[str, Any]] = []
     for hit in hits:
         document = catalog.get(hit.uri)
+        # A lost ledger must not make deleted local files reappear as references.
+        # Only the current imported pack has its authoritative source off disk.
+        if document is None and not (active_prefix and hit.uri.startswith(active_prefix)):
+            continue
         kept.append(_hit_payload(hit, document))
     cap = max(int(limit or 8), 1)
     kept.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("uri") or "")))
     return QueryResponse(
         results=kept[:cap],
-        degraded=consulted["degraded"] or report.degraded,
+        degraded=consulted["degraded"] or pending,
         unavailable=False,
         index_detail=detail,
         notes=notes,
@@ -219,7 +227,7 @@ def explain(
         if prefix and ident.startswith(prefix) and ".." not in ident.split("/"):
             backend = backend_for_config(config)
             try:
-                ok, detail = backend.available()
+                ok, detail = backend.ready()
                 if not ok:
                     return {**base, "found": False, "unavailable": True, "degraded": True, "index_detail": detail}
                 raw = backend.read(ident)

@@ -427,3 +427,240 @@ def test_corrupt_current_pointer_is_not_fatal(tmp_path):
     result = _sync(state, release, FakeClient())
     assert result.status == "switched", result.reason
     assert current_shared(state)["source_git_sha"] == GIT_SHA
+
+
+@pytest.mark.parametrize("damage", ["content", "missing_file", "vector", "missing_root"])
+def test_active_damage_is_repaired_into_an_independent_root(tmp_path, damage):
+    state = tmp_path / "state"
+    release = make_release_dir(tmp_path / "release")
+    client = FakeClient()
+    assert _sync(state, release, client).status == "switched"
+    old_root = current_shared(state)["root_uri"]
+    if damage == "content":
+        client.trees[old_root]["alpha.md"] = "# Damaged\n\nDifferent content.\n"
+    elif damage == "missing_file":
+        del client.trees[old_root]["alpha.md"]
+    elif damage == "vector":
+        client.corrupt_vectors.add(old_root)
+    else:
+        del client.trees[old_root]
+    # Presence-only consistency is deliberately still true in this fake.
+    assert client.check_consistency(old_root)["ok"]
+    result = _sync(state, release, client, verify=True)
+    assert result.status == "switched", result.reason
+    assert result.details["repaired"] and result.details["verified"]
+    new_root = current_shared(state)["root_uri"]
+    assert new_root != old_root and "/repairs/" in new_root
+    assert client.trees[new_root]["alpha.md"] == DOC_A
+    assert ("rm", old_root) not in client.calls
+    again = _sync(state, release, client, verify=True)
+    assert again.status == "unchanged" and again.details["verified"]
+    assert current_shared(state)["root_uri"] == new_root
+
+
+def test_failed_active_repair_keeps_pointer_and_original_content(tmp_path):
+    state = tmp_path / "state"
+    release = make_release_dir(tmp_path / "release")
+    client = FakeClient()
+    assert _sync(state, release, client).status == "switched"
+    old = current_shared(state)
+    client.corrupt_vectors.add(old["root_uri"])
+    client.fail_import = True
+    result = _sync(state, release, client, verify=True)
+    assert result.status == "error"
+    assert current_shared(state) == old
+    assert client.trees[old["root_uri"]]["alpha.md"] == DOC_A
+    assert ("rm", old["root_uri"]) not in client.calls
+
+
+@pytest.mark.parametrize("damage", ["manifest", "pack"])
+def test_active_local_release_metadata_and_pack_are_restored(tmp_path, damage):
+    state = tmp_path / "state"
+    release = make_release_dir(tmp_path / "release")
+    client = FakeClient()
+    assert _sync(state, release, client).status == "switched"
+    manifest_path = Path(current_shared(state)["manifest_path"])
+    path = manifest_path if damage == "manifest" else next(manifest_path.parent.glob("*.ovpack"))
+    path.write_bytes(b"damaged")
+    result = _sync(state, release, client, verify=True)
+    assert result.status == "unchanged" and result.details["verified"]
+    assert result.details["local_release_repaired"]
+    assert path.read_bytes() != b"damaged"
+
+
+def test_offline_audit_repairs_from_retained_verified_pack(tmp_path):
+    state = tmp_path / "state"
+    client = FakeClient()
+    assert _sync(state, make_release_dir(tmp_path / "release"), client).status == "switched"
+    old_root = current_shared(state)["root_uri"]
+    client.corrupt_vectors.add(old_root)
+    result = _sync(state, tmp_path / "offline", client, verify=True)
+    assert result.status == "switched", result.reason
+    assert result.details["source_unavailable"]
+    assert result.details["repaired"] and result.details["verified"]
+    assert client.trees[current_shared(state)["root_uri"]]["alpha.md"] == DOC_A
+
+
+@pytest.mark.parametrize("missing_root", [False, True])
+def test_corrupt_pointer_recovers_activated_release_while_offline(tmp_path, missing_root):
+    state, client = tmp_path / "state", FakeClient()
+    assert _sync(state, make_release_dir(tmp_path / "release"), client).status == "switched"
+    old = current_shared(state)
+    DistributionState(state).current_path.write_text("{broken")
+    if missing_root:
+        del client.trees[old["root_uri"]]
+    result = _sync(state, tmp_path / "offline", client, verify=True)
+    assert result.ok, result.reason
+    assert result.details["current_recovered"] and result.details["verified"]
+    assert current_shared(state)["source_git_sha"] == GIT_SHA
+    assert client.trees[current_shared(state)["root_uri"]]["alpha.md"] == DOC_A
+
+
+def test_offline_pointer_recovery_skips_a_corrupted_newest_pack(tmp_path):
+    state, client = tmp_path / "state", FakeClient()
+    for sha in (GIT_SHA, GIT_SHA_2):
+        assert _sync(state, make_release_dir(tmp_path / sha, sha=sha), client).status == "switched"
+    latest = Path(current_shared(state)["manifest_path"]).parent
+    next(latest.glob("*.ovpack")).write_bytes(b"broken")
+    DistributionState(state).current_path.write_text("{broken")
+    result = _sync(state, tmp_path / "offline", client, verify=True)
+    assert result.ok and result.details["current_recovered"], result.reason
+    assert current_shared(state)["source_git_sha"] == GIT_SHA
+
+
+def test_legacy_activation_can_recover_from_source_download_cache(tmp_path):
+    from vaws_knowledge.distribution.errors import SourceUnavailable
+    from vaws_knowledge.distribution.release import LocalReleaseSource
+
+    state, client = tmp_path / "state", FakeClient()
+    release = make_release_dir(tmp_path / "release")
+    assert _sync(state, release, client).status == "switched"
+    activation_dir = Path(current_shared(state)["manifest_path"]).parent
+    # Pre-maintenance releases kept activated.json + release.json but no pack.
+    next(activation_dir.glob("*.ovpack")).unlink()
+    record = json.loads((activation_dir / "activated.json").read_text())
+    record.pop("root_uri")
+    (activation_dir / "activated.json").write_text(json.dumps(record))
+    DistributionState(state).current_path.write_text("{broken")
+
+    class OfflineSource:
+        def fetch(self):
+            raise SourceUnavailable("offline")
+
+        def cached(self, sha):
+            assert sha == GIT_SHA
+            return LocalReleaseSource(release).fetch()
+
+    result = check_and_sync(state, OfflineSource(), embedding_info=embedding_info(), client=client, verify=True)
+    assert result.ok and result.details["current_recovered"], result.reason
+    assert list(activation_dir.glob("*.ovpack"))
+
+
+def test_same_version_audit_checks_pinned_model_cache(tmp_path):
+    import hashlib
+
+    release = make_release_dir(tmp_path / "release")
+    manifest_path = release / "release.json"
+    data = json.loads(manifest_path.read_text())
+    data["embedding"]["model_files"] = [{"path": "model.bin", "size": 4,
+                                         "sha256": hashlib.sha256(b"good").hexdigest()}]
+    manifest_path.write_text(json.dumps(data))
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    model = cache / "model.bin"
+    model.write_bytes(b"good")
+    state, client = tmp_path / "state", FakeClient()
+    assert _sync(state, release, client, model_cache=cache).status == "switched"
+    old = current_shared(state)
+    model.write_bytes(b"bad!")
+    result = _sync(state, release, client, model_cache=cache, verify=True)
+    assert result.status == "incompatible" and "model.bin" in result.reason
+    assert current_shared(state) == old
+
+
+def test_verified_release_repairs_model_before_connecting(tmp_path):
+    import hashlib
+
+    release = make_release_dir(tmp_path / "release")
+    manifest_path = release / "release.json"
+    data = json.loads(manifest_path.read_text())
+    data["embedding"]["model_files"] = [{"path": "model.bin", "size": 4,
+                                         "sha256": hashlib.sha256(b"good").hexdigest()}]
+    manifest_path.write_text(json.dumps(data))
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    model = cache / "model.bin"
+    events = []
+    client = FakeClient()
+
+    def prepare(manifest):
+        events.append("prepare")
+        assert manifest.source_git_sha == GIT_SHA
+        model.write_bytes(b"good")
+
+    def connect():
+        events.append("connect")
+        assert model.read_bytes() == b"good"
+        return client
+
+    state = tmp_path / "state"
+    kwargs = {"embedding_info": embedding_info(), "model_cache": cache,
+              "prepare_model": prepare, "client_factory": connect}
+    assert check_and_sync(state, str(release), **kwargs).status == "switched"
+    assert events == ["prepare", "connect"]
+    events.clear()
+    assert check_and_sync(state, str(release), **kwargs).status == "unchanged"
+    assert events == []
+    model.write_bytes(b"bad!")
+    assert check_and_sync(state, str(release), verify=True, **kwargs).status == "unchanged"
+    assert events == ["prepare", "connect"]
+    assert model.read_bytes() == b"good"
+
+
+def test_corrupt_pack_cannot_trigger_model_preparation(tmp_path):
+    release = make_release_dir(tmp_path / "release")
+    next(release.glob("*.ovpack")).write_bytes(b"corrupt")
+
+    def unexpected(*_args):
+        raise AssertionError("corrupt release must not prepare a model or connect")
+
+    result = check_and_sync(tmp_path / "state", str(release), embedding_info=embedding_info(),
+                            prepare_model=unexpected, client_factory=unexpected)
+    assert result.status == "corrupt", result.reason
+
+
+def test_failed_model_repair_preserves_active_release_and_never_connects(tmp_path):
+    state, client = tmp_path / "state", FakeClient()
+    assert _sync(state, make_release_dir(tmp_path / "first"), client).status == "switched"
+    previous = current_shared(state)
+    release = make_release_dir(tmp_path / "second", sha=GIT_SHA_2)
+
+    def failed(_manifest):
+        raise OSError("model source unavailable")
+
+    def unexpected():
+        raise AssertionError("failed repair must not connect")
+
+    result = check_and_sync(state, str(release), embedding_info=embedding_info(),
+                            prepare_model=failed, client_factory=unexpected)
+    assert result.status == "error" and "model source unavailable" in result.reason
+    assert current_shared(state) == previous
+
+
+def test_slow_discovery_cannot_replace_a_concurrently_activated_release(tmp_path):
+    from vaws_knowledge.distribution.release import LocalReleaseSource
+
+    state, client = tmp_path / "state", FakeClient()
+    older = make_release_dir(tmp_path / "older")
+    newer = make_release_dir(tmp_path / "newer", sha=GIT_SHA_2)
+
+    class SlowSource:
+        def fetch(self):
+            snapshot = LocalReleaseSource(older).fetch()
+            assert _sync(state, newer, client).status == "switched"
+            return snapshot
+
+    result = check_and_sync(state, SlowSource(), embedding_info=embedding_info(), client=client)
+    assert result.status == "busy" and "changed during discovery" in result.reason
+    assert current_shared(state)["source_git_sha"] == GIT_SHA_2
+    assert len([call for call in client.calls if call[0] == "import_ovpack"]) == 1

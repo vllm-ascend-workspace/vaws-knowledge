@@ -93,7 +93,7 @@ class SharedJoinPoint(unittest.TestCase):
             self.assertIsNone(current_shared(Path(tmp)))
             self.assertEqual(
                 shared_search_uri(Path(tmp)),
-                "viking://resources/shared",
+                "viking://resources/shared/bootstrap",
             )
 
     def test_current_json_selects_active_root(self) -> None:

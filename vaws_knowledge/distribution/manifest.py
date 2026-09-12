@@ -248,6 +248,10 @@ def validate_release_manifest(data: Any, *, expected: ExpectedContract) -> Relea
     _require(isinstance(pack, dict), "release manifest lacks a pack object")
     _require(isinstance(pack.get("file"), str) and pack["file"], "pack.file missing")
     _require(
+        pack["file"] not in {".", ".."} and not any(ch in pack["file"] for ch in "/\\:\x00"),
+        "pack.file must be a single asset filename",
+    )
+    _require(
         re.match(r"^[0-9a-f]{64}$", str(pack.get("sha256") or "")) is not None,
         "pack.sha256 must be 64 lowercase hex",
     )

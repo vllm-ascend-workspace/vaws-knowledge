@@ -1,7 +1,9 @@
-"""Bring the live index in line with mounted Markdown.
+"""Maintain indexes for mounted Markdown without modifying source files.
 
-Markdown files are the stored source. Shared Markdown is indexed until an
-imported OVPack version is active; imported vectors are never re-embedded.
+Bootstrap shared notes and imported releases occupy separate namespaces.
+Only local Markdown records belong to this reconciler; release maintenance
+owns imported vectors. Explicit verification checks content and native
+vector records, not just the local fingerprint ledger.
 """
 
 from __future__ import annotations
@@ -10,14 +12,14 @@ import hashlib
 import json
 import os
 import tempfile
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
 from vaws_knowledge.local.backend import backend_for_config
-from vaws_knowledge.markdown import Document, iter_markdown_files, load_document
-from vaws_knowledge.local.instance import instance_for_config
-from vaws_knowledge.local.shared import current_shared
+from vaws_knowledge.markdown import Document, URI_ROOT, iter_markdown_files, load_document, relative_posix, uri_for
+from vaws_knowledge.local.instance import InstanceLock
 
 INDEX_LAYERS = ("shared", "project", "candidate")
 STATE_NAME = "markdown-index.json"
@@ -29,11 +31,21 @@ class ReconcileReport:
     upserted: int = 0
     deleted: int = 0
     unchanged: int = 0
+    checked: int = 0
+    repaired: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property
     def degraded(self) -> bool:
         return not self.ok or bool(self.errors)
+
+    @property
+    def indexed(self) -> int:
+        return self.upserted
+
+    @property
+    def skipped(self) -> int:
+        return self.unchanged
 
 
 def _state_path(config: Any) -> Path | None:
@@ -77,14 +89,20 @@ def _load_state(config: Any) -> dict[str, Any]:
     return loaded
 
 
-def _save_state(config: Any, state: dict[str, Any]) -> None:
+def _save_state(config: Any, state: dict[str, Any]) -> bool:
     path = _state_path(config)
     if path is None:
-        return
+        return True
     try:
         _atomic_write_json(path, state)
     except OSError:
-        pass
+        return False
+    return True
+
+
+def _state_lock(config: Any):
+    path = _state_path(config)
+    return InstanceLock(path.with_suffix(".lock")) if path is not None else nullcontext()
 
 
 def file_fingerprint(path: Path) -> str:
@@ -119,8 +137,11 @@ def _mount_roots(config: Any, layers: Sequence[str]) -> list[Path]:
     return roots
 
 
-def _scan_documents(config: Any, layers: Sequence[str]) -> dict[str, Document]:
+def _scan_documents(
+    config: Any, layers: Sequence[str], report: ReconcileReport,
+) -> tuple[dict[str, Document], list[Path]]:
     found: dict[str, Document] = {}
+    readable_roots: list[Path] = []
     for layer in layers:
         if layer not in INDEX_LAYERS:
             continue
@@ -129,13 +150,33 @@ def _scan_documents(config: Any, layers: Sequence[str]) -> dict[str, Document]:
             continue
         for root in mount.roots:
             base = Path(root)
-            for path in iter_markdown_files(base):
+            try:
+                # A disappeared/unreadable mount is not proof that its notes
+                # were deliberately deleted. Keep its previous index records.
+                if not base.is_dir():
+                    if layer == "candidate" and not base.exists():
+                        continue  # a never-created candidate directory is empty
+                    raise OSError("mounted source directory is unavailable")
+                paths = iter_markdown_files(base)
+            except OSError as exc:
+                report.ok = False
+                report.errors.append(f"{base}: {exc}")
+                continue
+            readable_roots.append(base)
+            for path in paths:
                 try:
+                    if not _under_roots(path, (base,)):
+                        raise ValueError("document resolves outside its mounted source directory")
                     document = load_document(path, layer=layer, root=base)
-                except (OSError, UnicodeDecodeError):
+                    canonical = uri_for(layer, relative_posix(path, base))
+                    if document.uri != canonical:
+                        raise ValueError("document URI is outside its mounted source identity")
+                except (OSError, UnicodeDecodeError, ValueError) as exc:
+                    report.ok = False
+                    report.errors.append(f"{path}: {exc}")
                     continue
                 found[document.uri] = document
-    return found
+    return found, readable_roots
 
 
 def remember_document(config: Any, document: Document) -> None:
@@ -145,26 +186,46 @@ def remember_document(config: Any, document: Document) -> None:
         fingerprint = file_fingerprint(document.path)
     except OSError:
         return
-    state = _load_state(config)
-    documents = state.setdefault("documents", {})
-    documents[document.uri] = {
-        "path": str(document.path.resolve()),
-        "layer": document.layer,
-        "sha256": fingerprint,
-    }
-    _save_state(config, state)
+    with _state_lock(config):
+        state = _load_state(config)
+        documents = state.setdefault("documents", {})
+        documents[document.uri] = {
+            "path": str(document.path.resolve()),
+            "layer": document.layer,
+            "sha256": fingerprint,
+            "index_fingerprint": dict(backend_for_config(config).index_fingerprint()),
+        }
+        _save_state(config, state)
 
 
-def reconcile_markdown(config: Any, layers: Sequence[str] | None = None) -> ReconcileReport:
-    """Upsert new/changed local Markdown and drop index rows whose files are gone.
+def _owned_record_uri(uri: str, layer: str, path: Path, roots: Sequence[Path]) -> bool:
+    """Require the recorded URI to be derivable from a current source root."""
 
-    An active imported shared pack is never swept. Failures leave Markdown
-    in place and mark the search incomplete.
+    for root in roots:
+        if not _under_roots(path, (root,)):
+            continue
+        relative = relative_posix(path, root)
+        canonical = uri_for(layer, relative)
+        if uri == canonical:
+            return True
+        # Migrate the old local shared namespace only with its recorded local
+        # source path. Never sweep the shared parent or a release subtree.
+        if layer == "shared" and uri == f"{URI_ROOT}/shared/{relative}":
+            return True
+    return False
+
+
+def reconcile_markdown(
+    config: Any, layers: Sequence[str] | None = None, *, verify: bool = False,
+) -> ReconcileReport:
+    """Apply local changes; optionally verify and repair every stored document.
+
+    The ledger is an optimization, not evidence that vectors still exist.
+    Verification repairs missing content/records even when the ledger is
+    intact. A changed engine/model fingerprint rebuilds affected documents.
     """
 
     wanted = [name for name in (layers or INDEX_LAYERS) if name in INDEX_LAYERS]
-    if "shared" in wanted and current_shared(instance_for_config(config).state_root):
-        wanted.remove("shared")
     report = ReconcileReport()
     if not wanted:
         return report
@@ -175,30 +236,53 @@ def reconcile_markdown(config: Any, layers: Sequence[str] | None = None) -> Reco
         report.errors.append(detail)
         return report
 
-    current = _scan_documents(config, wanted)
+    with _state_lock(config):
+        return _reconcile(config, wanted, backend, report, verify=verify)
+
+
+def _reconcile(
+    config: Any, wanted: Sequence[str], backend: Any, report: ReconcileReport, *, verify: bool,
+) -> ReconcileReport:
+    current, readable_roots = _scan_documents(config, wanted, report)
     state = _load_state(config)
     recorded: dict[str, Any] = state.setdefault("documents", {})
-    roots = _mount_roots(config, wanted)
+    fingerprint_contract = dict(backend.index_fingerprint())
+    completed: set[str] = set()
+    current_by_path = {str(document.path.resolve()): document for document in current.values()}
 
     for uri, document in current.items():
         try:
-            fingerprint = file_fingerprint(document.path)
-            content = document.path.read_text(encoding="utf-8")
-        except OSError as exc:
+            raw = document.path.read_bytes()
+            fingerprint = hashlib.sha256(raw).hexdigest()
+            content = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        except (OSError, UnicodeDecodeError) as exc:
             report.ok = False
             report.errors.append(f"{document.path}: {exc}")
             continue
         previous = recorded.get(uri) if isinstance(recorded.get(uri), dict) else None
         resolved = str(document.path.resolve())
-        if (
+        same_file = bool(
             previous
             and previous.get("sha256") == fingerprint
             and previous.get("path") == resolved
-        ):
-            report.unchanged += 1
-            continue
+        )
+        same_index = bool(previous and previous.get("index_fingerprint") == fingerprint_contract)
         try:
+            if same_file and same_index:
+                if verify:
+                    report.checked += 1
+                    intact = backend.check_document(uri, content)
+                else:
+                    intact = True
+                if intact:
+                    report.unchanged += 1
+                    completed.add(uri)
+                    continue
             backend.upsert(uri, content, layer=document.layer)
+            if verify:
+                report.checked += 1
+                if not backend.check_document(uri, content):
+                    raise RuntimeError("content/vector verification failed after indexing")
         except Exception as exc:  # noqa: BLE001 - Markdown stays; search is incomplete
             report.ok = False
             report.errors.append(f"{uri}: {type(exc).__name__}: {exc}")
@@ -207,8 +291,12 @@ def reconcile_markdown(config: Any, layers: Sequence[str] | None = None) -> Reco
             "path": resolved,
             "layer": document.layer,
             "sha256": fingerprint,
+            "index_fingerprint": fingerprint_contract,
         }
         report.upserted += 1
+        if same_file:
+            report.repaired += 1
+        completed.add(uri)
 
     for uri in list(recorded):
         record = recorded.get(uri)
@@ -221,7 +309,15 @@ def reconcile_markdown(config: Any, layers: Sequence[str] | None = None) -> Reco
         if uri in current:
             continue
         path = Path(str(record.get("path") or ""))
-        if path.parts and not _under_roots(path, roots):
+        layer_roots = [root for root in readable_roots if root in config.mount(layer).roots]
+        if not path.is_absolute() or not _owned_record_uri(uri, layer, path, layer_roots):
+            continue
+        try:
+            if path.exists():
+                replacement = current_by_path.get(str(path.resolve()))
+                if not (layer == "shared" and replacement and replacement.uri in completed):
+                    continue
+        except OSError:
             continue
         try:
             backend.delete(uri)
@@ -232,5 +328,8 @@ def reconcile_markdown(config: Any, layers: Sequence[str] | None = None) -> Reco
         recorded.pop(uri, None)
         report.deleted += 1
 
-    _save_state(config, state)
+    state["schema"] = 2
+    if not _save_state(config, state):
+        report.ok = False
+        report.errors.append("could not save the local Markdown index ledger; a later cycle will retry")
     return report

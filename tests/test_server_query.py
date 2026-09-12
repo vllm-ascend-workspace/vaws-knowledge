@@ -13,6 +13,7 @@ import support  # noqa: E402
 from vaws_knowledge.local.backend import MemoryBackend, UnavailableBackend
 from vaws_knowledge.server.capture import capture
 from vaws_knowledge.server.query import explain, query
+from vaws_knowledge.local.reconcile import reconcile_markdown
 
 
 def _config(tmp: str):
@@ -138,6 +139,7 @@ class QueryMarkdown(unittest.TestCase):
                 candidate=str(candidate), project=str(project), shared=False
             )
             config.retrieval = MemoryBackend()
+            reconcile_markdown(config)
             payload = query(
                 config, text="project graph padding projectquartz", layers=["project"]
             ).to_dict()
@@ -159,8 +161,21 @@ class QueryMarkdown(unittest.TestCase):
                 config=config,
             )
             pathlib.Path(saved["path"]).unlink()
+            reconcile_markdown(config)
             after = query(config, text="candidate graph padding", layers=["candidate"]).to_dict()
             self.assertEqual(0, after["count"], after)
+
+    def test_stale_index_hit_is_hidden_when_source_and_ledger_are_gone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _config(tmp)
+            saved = capture(title="removed source", content="stalequartz canary", config=config)
+            pathlib.Path(saved["path"]).unlink()
+            ledger = config.state_root / "markdown-index.json"
+            ledger.write_text("{broken", encoding="utf-8")
+            from unittest.mock import patch
+            with patch.object(config.retrieval, "upsert", side_effect=AssertionError("query mutated index")):
+                self.assertEqual([], query(config, text="stalequartz").results)
+            self.assertTrue(config.retrieval.documents)  # querying did not sweep storage
 
     def test_pending_capture_is_indexed_once_the_engine_returns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -174,6 +189,7 @@ class QueryMarkdown(unittest.TestCase):
             self.assertEqual("pending", pending["index"])
             self.assertTrue(pathlib.Path(pending["path"]).is_file())
             config.retrieval = MemoryBackend()
+            reconcile_markdown(config)
             found = query(config, text="pendingonyx").to_dict()
             self.assertEqual(1, found["count"], found)
             self.assertFalse(found["unavailable"])
@@ -197,12 +213,14 @@ class QueryMarkdown(unittest.TestCase):
                     raise RuntimeError("embed failed")
 
             config.retrieval = Boom()
+            from vaws_knowledge.maintenance import maintain
+            maintain(config)
             payload = query(config, text="keepmequartz", layers=["project"]).to_dict()
             self.assertTrue(path.is_file())
             self.assertTrue(payload["degraded"])
             self.assertEqual([], payload["results"])
 
-    def test_active_shared_pack_is_not_swept_into_the_index(self) -> None:
+    def test_query_does_not_index_mounted_markdown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             shared = root / "shared"
@@ -228,7 +246,7 @@ class QueryMarkdown(unittest.TestCase):
             backend.upsert = tracking  # type: ignore[method-assign]
             config.retrieval = backend
             from unittest.mock import patch
-            with patch("vaws_knowledge.local.reconcile.current_shared", return_value={"root_uri": "viking://resources/shared/active"}):
+            with patch("vaws_knowledge.local.reconcile.reconcile_markdown", side_effect=AssertionError("query indexed")):
                 payload = query(config, text="sharedonyx", layers=["shared"]).to_dict()
             self.assertEqual([], upserts)
             self.assertEqual(0, payload["count"])
@@ -239,7 +257,8 @@ class SharedReferenceRoundTrip(unittest.TestCase):
     def _index_shared_pack(self, config):
         from vaws_knowledge.distribution.sync import CURRENT_SCHEMA, DistributionState
 
-        root_uri = "viking://resources/shared/current-version"
+        version = "v" + "a" * 12
+        root_uri = "viking://resources/shared/" + version
         ref = root_uri + "/corpus/context.md"
         config.retrieval = MemoryBackend()
         config.retrieval.upsert(
@@ -248,11 +267,13 @@ class SharedReferenceRoundTrip(unittest.TestCase):
         )
         DistributionState(config.state_root).write_current({
             "schema": CURRENT_SCHEMA,
-            "version_id": "current-version",
+            "version_id": version,
             "source_git_sha": "a" * 40,
             "root_uri": root_uri,
             "manifest_path": str(config.state_root / "manifest.json"),
         })
+        from vaws_knowledge.distribution.manifest import atomic_write_json
+        atomic_write_json(config.state_root / "maintenance.json", {"ready": True})
         return ref
 
     def test_active_pack_remains_queryable_when_source_directory_is_missing(self):
@@ -302,6 +323,7 @@ class SharedReferenceRoundTrip(unittest.TestCase):
             note.write_text("# Recorded hardware\n\nA theoretical limit, not measured throughput: sharedcanary.\n", encoding="utf-8")
             config = support.build_config(shared=str(shared), project=False, candidate=str(root / "candidate"))
             config.retrieval = MemoryBackend()
+            reconcile_markdown(config)
             hit = query(config, text="sharedcanary").results[0]
             self.assertEqual("shared", hit["layer"])
             original = explain(config, hit["ref"])

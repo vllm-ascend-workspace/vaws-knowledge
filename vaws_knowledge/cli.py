@@ -35,6 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         choices=(
             "server",
+            "prepare",
             "redact",
             "query",
             "capture",
@@ -67,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
         from vaws_knowledge.server.mcp_server import main as server_main
 
         return server_main(rest)
+    if command == "prepare":
+        from vaws_knowledge.maintenance import main as prepare_main
+
+        return prepare_main(rest)
     if command == "redact":
         from vaws_knowledge.redact import main as redact_main
 

@@ -2,7 +2,9 @@
 
 Status: current
 
-For requested setup, `vaws-knowledge publishing configure --config PATH` enables
+Local installation and retrieval preparation do not enable public uploads.
+`shared_sync.enabled` defaults to true and is independent of `publishing.enabled`.
+For explicitly requested contribution setup, `vaws-knowledge publishing configure --config PATH` enables
 sharing according to the user's authorization and configuration. It reuses GitHub CLI authentication, creates
 or reuses the user's corpus fork, and prepares a dedicated contribution clone.
 Existing remotes in business repositories are not changed. Use `--read-only`
@@ -10,7 +12,7 @@ for a client that only consumes releases; downloads of the public corpus do not
 require a login.
 
 The default corpus is `vllm-ascend-workspace/vaws-knowledge-corpus`. The service
-config contains `state_root`, the three layer mounts, and `publishing` settings.
+config contains `state_root`, the three layer mounts, `shared_sync`, and `publishing` settings.
 Set `VAWS_KNOWLEDGE_CONFIG` to that config for MCP and CLI consumers. The workspace
 provides `.agents/scripts/knowledge_setup.py` to set this up with its own paths.
 
@@ -31,12 +33,17 @@ After a corpus merge, CI builds the exact Git commit into a dense OVPack and
 manifest, uploads both to a draft Release, then publishes it. The release tag
 identifies the source commit. A published release is never overwritten.
 
-While MCP is alive, it checks new releases on startup and every 30 minutes;
+While MCP is alive, its maintenance worker checks releases on startup and every 30 minutes;
 failed checks retry after one minute. Submission polling is every 30 seconds.
 Multiple clients share the same OS lock and state. Closing MCP ends its worker;
 the next startup resumes from durable state. No OS timer or additional daemon is
 installed. New packs are verified and imported before the shared pointer moves.
 Failure preserves the previous shared version and all project/candidate content.
+Hourly integrity checks export and compare the active content and vectors against
+the retained verified pack. A missing or damaged import is restored into a new
+staging namespace and activated after verification, including when the release
+version is unchanged. Public contribution errors do not make local retrieval
+unready. Bundled Markdown remains available alongside the current public pack.
 
 The package's local OpenViking instance uses `api_key` auth. Root and tenant keys
 are private local files with restrictive permissions; only the tenant key is

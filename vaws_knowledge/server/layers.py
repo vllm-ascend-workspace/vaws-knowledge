@@ -131,13 +131,14 @@ class ServiceConfig:
     state_root: Path | None = None
     retrieval: Any = None
     publishing: dict[str, Any] = field(default_factory=dict)
+    shared_sync: dict[str, Any] = field(default_factory=dict)
 
     def mount(self, layer: str) -> Mount:
         return self.mounts.get(layer, Mount(layer=layer, absent_reason="unknown layer"))
 
     def _layer_available(self, layer: str) -> bool:
         mount = self.mount(layer)
-        if mount.present:
+        if mount.present and (layer == "candidate" or any(root.is_dir() for root in mount.roots)):
             return True
         # Explicitly disabled layers have no roots. An enabled shared source
         # may disappear after its independent OVPack has been imported.
@@ -216,6 +217,7 @@ def find_config_file(env: Mapping[str, str], start: Path | None = None) -> Path 
     cwd = start or Path.cwd()
     xdg = env.get("XDG_CONFIG_HOME")
     config_home = Path(xdg) if xdg else Path.home() / ".config"
+    candidates.append(cwd / ".vaws-local" / "knowledge" / "service.json")
     for basename in CONFIG_BASENAMES:
         candidates.append(cwd / basename)
         candidates.append(cwd / ".vaws" / basename)
@@ -488,7 +490,7 @@ def load_config(
     backend = str(
         data.get("backend") or env.get(ENV_BACKEND) or "openviking"
     ).strip().lower() or "openviking"
-    state_raw = data.get("state_root") or env.get(ENV_STATE)
+    state_raw = env.get(ENV_STATE) or data.get("state_root")
     if state_raw:
         state_root = _resolve(str(state_raw), base)
     else:
@@ -506,4 +508,5 @@ def load_config(
         backend=backend,
         state_root=state_root,
         publishing=dict(data["publishing"]) if isinstance(data.get("publishing"), Mapping) else {},
+        shared_sync=dict(data["shared_sync"]) if isinstance(data.get("shared_sync"), Mapping) else {},
     )

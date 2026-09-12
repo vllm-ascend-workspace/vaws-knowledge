@@ -35,13 +35,16 @@ from vaws_knowledge.distribution.manifest import (
     ExpectedContract,
     ReleaseManifest,
     atomic_write_json,
+    is_git_sha,
     read_json,
+    sha256_file,
     shared_root_uri,
     utc_now,
     validate_release_manifest,
+    version_id_from_sha,
 )
-from vaws_knowledge.distribution.pack import verify_model_files, verify_pack
-from vaws_knowledge.distribution.release import ReleaseSource, source_from_location
+from vaws_knowledge.distribution.pack import verify_imported_pack, verify_model_files, verify_pack
+from vaws_knowledge.distribution.release import ReleaseSnapshot, ReleaseSource, source_from_location
 
 CURRENT_SCHEMA = "vaws-knowledge-current-shared/1"
 
@@ -108,6 +111,10 @@ class DistributionState:
         for key in ("version_id", "source_git_sha", "root_uri", "manifest_path"):
             if not isinstance(payload.get(key), str) or not payload.get(key):
                 return None
+        if (not is_git_sha(payload["source_git_sha"])
+                or payload["version_id"] != version_id_from_sha(payload["source_git_sha"])
+                or not _owned_version_root(payload["root_uri"], payload["version_id"])):
+            return None
         return payload
 
     def write_current(self, payload: Mapping[str, Any]) -> None:
@@ -298,6 +305,9 @@ def _prune_versions(
     for child in state.versions_dir.iterdir():
         if not child.is_dir() or child.name == keep_id:
             continue
+        if (len(child.name) != 13 or not child.name.startswith("v")
+                or any(ch not in "0123456789abcdef" for ch in child.name[1:])):
+            continue
         activated = read_json(child / "activated.json") or {}
         try:
             at = float(activated.get("at_epoch") or 0)
@@ -308,7 +318,11 @@ def _prune_versions(
     pruned: list[str] = []
     deferred: list[str] = []
     for _at, version_id in entries[ max(keep_inactive, 0) :]:
-        root_uri = shared_root_uri(version_id)
+        activation = read_json(state.version_dir(version_id) / "activated.json") or {}
+        root_uri = activation.get("root_uri") or shared_root_uri(version_id)
+        if not _owned_version_root(root_uri, version_id):
+            deferred.append(version_id)
+            continue
         removed_remote = False
         if client is not None:
             try:
@@ -333,6 +347,96 @@ def _prune_versions(
         details["prune_deferred"] = deferred
 
 
+def _owned_version_root(uri: str, version_id: str) -> bool:
+    if not isinstance(uri, str):
+        return False
+    canonical = shared_root_uri(version_id)
+    if uri == canonical:
+        return True
+    prefix = canonical.rsplit("/", 1)[0] + "/repairs/"
+    suffix = uri.removeprefix(prefix) if isinstance(uri, str) else ""
+    parts = suffix.split("/")
+    return (uri.startswith(prefix) and len(parts) == 2 and parts[1] == version_id
+            and len(parts[0]) == 16 and all(ch in "0123456789abcdef" for ch in parts[0]))
+
+
+def _verify_runtime(client: Any, root_uri: str, pack_path: Path) -> dict[str, int]:
+    export = pack_path.parent / f"audit-{secrets.token_hex(4)}.ovpack"
+    try:
+        client.export_ovpack(root_uri, str(export), include_vectors=True)
+        return verify_imported_pack(export, pack_path)
+    except Exception as exc:
+        raise ImportFailed(f"shared integrity check failed: {type(exc).__name__}: {exc}") from exc
+    finally:
+        export.unlink(missing_ok=True)
+
+
+def _retain_release(state: DistributionState, manifest: ReleaseManifest, pack_path: Path) -> Path:
+    """Keep the verified source for offline audits and repairs, never an export."""
+    directory = state.version_dir(manifest.version_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / manifest.pack["file"]
+    temporary = directory / f".pack-{secrets.token_hex(4)}"
+    try:
+        shutil.copyfile(pack_path, temporary)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    atomic_write_json(directory / "release.json", manifest.data)
+    return directory / "release.json"
+
+
+def _offline_release(state: DistributionState, current: dict | None, source: Any,
+                     contract: ExpectedContract) -> tuple[ReleaseSnapshot, dict] | None:
+    """Recover only versions recorded as activated, newest first if the pointer broke."""
+    candidates: list[tuple[float, dict]] = []
+    if current:
+        candidates.append((0, current))
+    else:
+        for directory in state.versions_dir.iterdir():
+            record = read_json(directory / "activated.json") if directory.is_dir() else None
+            if not record or not is_git_sha(record.get("source_git_sha")):
+                continue
+            version_id = version_id_from_sha(record["source_git_sha"])
+            if directory.name != version_id or record.get("version_id") != version_id:
+                continue
+            root_uri = record.get("root_uri") or shared_root_uri(version_id)
+            if not _owned_version_root(root_uri, version_id):
+                continue
+            try:
+                activated_at = float(record.get("at_epoch", 0))
+            except (TypeError, ValueError):
+                continue
+            candidates.append((activated_at, {"schema": CURRENT_SCHEMA, "version_id": version_id,
+                               "source_git_sha": record["source_git_sha"], "root_uri": root_uri,
+                               "manifest_path": str(directory / "release.json")}))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+    for _at, pointer in candidates:
+        directory = state.version_dir(pointer["version_id"])
+        options: list[ReleaseSnapshot] = []
+        try:
+            manifest = validate_release_manifest(read_json(directory / "release.json"), expected=contract)
+            options.append(ReleaseSnapshot(manifest, directory / manifest.pack["file"], "retained release"))
+        except (DistributionError, OSError, ValueError):
+            pass
+        # Older installations retained the manifest but only kept the pack in
+        # the release source's download cache. Reuse it through that source's
+        # bounded API, tied to the same recorded activation.
+        if hasattr(source, "cached"):
+            cached = source.cached(pointer["source_git_sha"])
+            if cached is not None:
+                options.append(cached)
+        for snapshot in options:
+            if snapshot.manifest.source_git_sha != pointer["source_git_sha"]:
+                continue
+            try:
+                verify_pack(snapshot.pack_path, snapshot.manifest, expected=contract)
+            except (DistributionError, OSError, ValueError):
+                continue
+            return snapshot, pointer
+    return None
+
+
 def check_and_sync(
     state_root: Path,
     source: Any,
@@ -344,8 +448,10 @@ def check_and_sync(
     api_key: str | None = None,
     metrics_reader: MetricsReader | None = None,
     model_cache: Path | None = None,
+    prepare_model: Callable[[ReleaseManifest], Any] | None = None,
     keep_inactive: int = 1,
     smoke_query: str | None = None,
+    verify: bool = False,
 ) -> SyncResult:
     """One periodic check: fetch -> verify -> import new version -> switch.
 
@@ -361,11 +467,28 @@ def check_and_sync(
         state.record(result)
         return result
 
+    current = state.read_current()
+    observed_current = current
+    source_error = ""
+    recovered_pointer = False
+    resolved = source
     try:
         resolved = source if hasattr(source, "fetch") else source_from_location(source)
         snapshot = resolved.fetch()
     except SourceUnavailable as exc:
-        return finish(SyncResult(status="offline", reason=exc.reason))
+        # An offline update source does not prevent checking/repairing the
+        # already installed version from its retained verified release.
+        if not verify:
+            return finish(SyncResult(status="offline", reason=exc.reason))
+        source_error = exc.reason
+        try:
+            recovered = _offline_release(state, current, resolved, ExpectedContract.from_embedding_info(embedding_info))
+            if recovered is None:
+                return finish(SyncResult(status="offline", reason=f"{source_error}; no verified activated release is cached"))
+            recovered_pointer = current is None
+            snapshot, current = recovered
+        except (DistributionError, OSError, ValueError) as cached_error:
+            return finish(SyncResult(status="offline", reason=f"{source_error}; retained release: {cached_error}"))
     except CorruptPack as exc:
         return finish(SyncResult(status="corrupt", reason=exc.reason))
     except IncompatiblePack as exc:
@@ -377,8 +500,13 @@ def check_and_sync(
     root_uri = shared_root_uri(version_id)
     base = {"version_id": version_id, "source_git_sha": sha, "root_uri": root_uri}
 
-    current = state.read_current()
-    if current and current["source_git_sha"] == sha and current["root_uri"] == root_uri:
+    same_version = bool(current and current["source_git_sha"] == sha
+                        and current["version_id"] == version_id
+                        and _owned_version_root(current["root_uri"], version_id))
+    if same_version:
+        root_uri = current["root_uri"]
+        base["root_uri"] = root_uri
+    if same_version and not verify:
         return finish(SyncResult(status="unchanged", **base))
 
     try:
@@ -394,17 +522,6 @@ def check_and_sync(
         status = "incompatible" if isinstance(exc, IncompatiblePack) else "corrupt"
         return finish(SyncResult(status=status, reason=exc.reason, **base))
 
-    if model_cache is not None:
-        problems = verify_model_files(model_cache, manifest)
-        if problems:
-            return finish(
-                SyncResult(
-                    status="incompatible",
-                    reason="; ".join(problems),
-                    **base,
-                )
-            )
-
     lock = SwitchLock(state.lock_path)
     try:
         lock.acquire()
@@ -413,7 +530,18 @@ def check_and_sync(
 
     staging = state.staging_dir / f"{version_id}.{secrets.token_hex(4)}"
     details: dict[str, Any] = {"source": snapshot.label}
+    if source_error:
+        details["source_unavailable"] = source_error
+    if recovered_pointer:
+        details["current_recovered"] = True
+    close_client = False
     try:
+        # Release discovery happens outside the lock. A faster updater may
+        # already have switched while this caller fetched its older snapshot.
+        # Retry discovery rather than activate against a stale pointer.
+        if state.read_current() != observed_current:
+            return finish(SyncResult(status="busy", reason="active shared release changed during discovery; retry",
+                                     details=details, **base))
         _clean_staging(state)
         pack_path = _stage_download(snapshot, staging)
         try:
@@ -427,7 +555,17 @@ def check_and_sync(
             "dense_records": info.dense.get("count"),
         }
 
-        close_client = False
+        # Only a verified release may drive model repair. The package owner
+        # prepares its private cache and may restart the service; defer the
+        # client factory until afterwards so it receives the current URL.
+        if prepare_model is not None:
+            prepare_model(manifest)
+        if model_cache is not None:
+            problems = verify_model_files(model_cache, manifest)
+            if problems:
+                return finish(SyncResult(status="incompatible", reason="; ".join(problems),
+                                         details=details, **base))
+
         if client is None:
             if client_factory is not None:
                 client = client_factory()
@@ -439,30 +577,43 @@ def check_and_sync(
                     "no live OpenViking instance was provided; start the local "
                     "knowledge service and retry"
                 )
-        try:
-            import_details = _import_version(
-                client,
-                pack_path=pack_path,
-                root_uri=root_uri,
-                manifest=manifest,
-                metrics_reader=metrics_reader,
-                smoke_query=smoke_query,
-            )
-        except Exception:
-            if close_client and client is not None:
-                try:
-                    client.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            raise
+        if same_version:
+            try:
+                details.update(_verify_runtime(client, root_uri, pack_path))
+            except ImportFailed as exc:
+                details["integrity_error"] = exc.reason
+                # Do not destroy the active root before a replacement passes.
+                # Native import preserves the pack's root name, so use an
+                # independent parent for this repair of the same Git version.
+                root_uri = (shared_root_uri(version_id).rsplit("/", 1)[0]
+                            + f"/repairs/{secrets.token_hex(8)}/{version_id}")
+                base["root_uri"] = root_uri
+                details["repair_attempted"] = True
+            else:
+                expected_path = state.version_dir(version_id) / "release.json"
+                retained_pack = expected_path.parent / manifest.pack["file"]
+                details["local_release_repaired"] = (
+                    read_json(expected_path) != manifest.data
+                    or current["manifest_path"] != str(expected_path)
+                    or not retained_pack.is_file()
+                    or sha256_file(retained_pack) != manifest.pack["sha256"]
+                )
+                manifest_path = _retain_release(state, manifest, pack_path)
+                state.write_current({**current, "manifest_path": str(manifest_path)})
+                details["verified"] = True
+                return finish(SyncResult(status="unchanged", details=details, **base))
+        import_details = _import_version(
+            client, pack_path=pack_path, root_uri=root_uri, manifest=manifest,
+            metrics_reader=metrics_reader, smoke_query=smoke_query,
+        )
         details.update(import_details)
 
         version_dir = state.version_dir(version_id)
-        version_dir.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(version_dir / "release.json", manifest.data)
+        manifest_path = _retain_release(state, manifest, pack_path)
         atomic_write_json(
             version_dir / "activated.json",
-            {"version_id": version_id, "source_git_sha": sha, "at": utc_now(), "at_epoch": time.time()},
+            {"version_id": version_id, "source_git_sha": sha, "root_uri": root_uri,
+             "at": utc_now(), "at_epoch": time.time()},
         )
         state.write_current(
             {
@@ -470,7 +621,7 @@ def check_and_sync(
                 "version_id": version_id,
                 "source_git_sha": sha,
                 "root_uri": root_uri,
-                "manifest_path": str(version_dir / "release.json"),
+                "manifest_path": str(manifest_path),
                 "openviking_version": contract.openviking_version,
                 "embedding": {
                     "model": contract.embedding_model,
@@ -479,12 +630,9 @@ def check_and_sync(
                 "activated_at": utc_now(),
             }
         )
+        if details.get("repair_attempted"):
+            details["repaired"] = True
         _prune_versions(state, client=client, keep_inactive=keep_inactive, details=details)
-        if close_client and client is not None:
-            try:
-                client.close()
-            except Exception:  # noqa: BLE001
-                pass
         return finish(SyncResult(status="switched", details=details, **base))
     except ImportFailed as exc:
         return finish(SyncResult(status="error", reason=exc.reason, details=details, **base))
@@ -500,6 +648,11 @@ def check_and_sync(
             )
         )
     finally:
+        if close_client and client is not None:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
         lock.release()
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -521,8 +674,12 @@ def _import_version(
         if _uri_exists(client, root_uri):
             consistency = client.check_consistency(uri=root_uri)
             if consistency.get("ok"):
-                resumed = True
-            else:
+                try:
+                    details.update(_verify_runtime(client, root_uri, pack_path))
+                    resumed = True
+                except ImportFailed:
+                    pass
+            if not resumed:
                 # Leftover of an interrupted attempt: drop it and import fresh.
                 client.rm(root_uri, recursive=True, wait=True, timeout=600)
     except Exception as exc:  # noqa: BLE001
@@ -631,4 +788,7 @@ def _import_version(
         query_calls = metrics_delta(before, after)
         if query_calls:
             details["query_embedding_calls"] = query_calls
+    if not resumed:
+        details.update(_verify_runtime(client, root_uri, pack_path))
+    details["verified"] = True
     return details
