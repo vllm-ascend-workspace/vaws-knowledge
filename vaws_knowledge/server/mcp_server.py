@@ -180,6 +180,9 @@ class KnowledgeService:
     ):
         self.today = today
         self.maintenance = None
+        # The stdio lifecycle supplies this factory without creating a backend.
+        # Direct library use continues to leave maintenance with its caller.
+        self.maintenance_factory = None
         self.config_error: str | None = None
         if config is not None:
             self.config = config
@@ -231,14 +234,31 @@ class KnowledgeService:
 
     # -- tools ------------------------------------------------------------
 
+    def activate_maintenance(self, *, changed: bool = False) -> None:
+        if self.maintenance is None:
+            if self.maintenance_factory is None:
+                return
+            self.maintenance = self.maintenance_factory(self.config)
+            # Set the wakeup before starting a new worker so a capture is not
+            # delayed by a fresh next_check or raced by the initial pass.
+            if changed:
+                self.maintenance.request()
+            self.maintenance.start()
+        elif changed:
+            self.maintenance.request()
+
     def knowledge_query(self, args: Mapping[str, Any]) -> dict[str, Any]:
         text = str(args.get("text") or "").strip()
         if not text:
             raise ValueError("text is required")
+        limit = int(args.get("limit", 8))
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        self.activate_maintenance()
         response = query(
             self.config,
             text=text,
-            limit=int(args.get("limit", 8)),
+            limit=limit,
         )
         payload = response.to_dict()
         payload = self.with_environment(payload)
@@ -271,8 +291,7 @@ class KnowledgeService:
             index=False,
         )
         payload = self.with_environment(payload)
-        if self.maintenance is not None:
-            self.maintenance.request()
+        self.activate_maintenance(changed=True)
         return payload
 
     def call_tool(self, name: str, args: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -300,6 +319,11 @@ class KnowledgeService:
             unknown = set(args) - set(schema["properties"])
             if unknown:
                 raise ValueError(f"unsupported arguments: {', '.join(sorted(unknown))}")
+            for key, value in args.items():
+                kind = schema["properties"][key]["type"]
+                if ((kind == "string" and not isinstance(value, str))
+                        or (kind == "integer" and type(value) is not int)):
+                    raise ValueError(f"{key} must be {kind}")
             return handler(args), False
         except CaptureRefused as exc:
             return (
@@ -499,13 +523,12 @@ def main(argv: list[str] | None = None) -> int:
 
     from vaws_knowledge.maintenance import MaintenanceWorker
 
-    worker = MaintenanceWorker(service.config)
-    service.maintenance = worker
-    worker.start()
+    service.maintenance_factory = MaintenanceWorker
     try:
         return serve(service=service)
     finally:
-        worker.stop()
+        if service.maintenance is not None:
+            service.maintenance.stop()
 
 
 if __name__ == "__main__":  # pragma: no cover

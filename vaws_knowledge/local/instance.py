@@ -101,9 +101,11 @@ def without_proxies() -> Iterator[None]:
 
 
 def _popen_kwargs() -> dict[str, Any]:
-    kwargs: dict[str, Any] = {}
+    # MCP is already reading its stdin. Inheriting that pipe can block a child
+    # Python during Windows stdio initialization, before any module executes.
+    kwargs: dict[str, Any] = {"stdin": subprocess.DEVNULL}
     if os.name == "nt":
-        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         kwargs["creationflags"] = flags
     else:
         kwargs["start_new_session"] = True

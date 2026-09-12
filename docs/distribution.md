@@ -68,7 +68,7 @@ caches integrity-checked assets and verifies the source tag before importing.
 
 ## Client side (local knowledge service)
 
-The existing knowledge lifecycle calls one function at startup and
+After actual knowledge use activates it, the existing lifecycle calls one function when due and
 periodically while alive; this module installs no OS timer and no daemon:
 
 ```python

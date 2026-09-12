@@ -109,14 +109,14 @@ class Maintenance(unittest.TestCase):
                 worker.start()
                 worker.stop()
             tick.assert_called()
-            self.assertTrue(tick.call_args.kwargs["verify"])
+            self.assertEqual({"force": False}, tick.call_args.kwargs)
 
     def test_query_without_readiness_record_is_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
             self.assertTrue(query(config, text="maintenancecanary").degraded)
 
-    def test_new_connection_rechecks_existing_ledger_after_index_loss(self):
+    def test_new_connection_reuses_fresh_audit_but_expiry_repairs_index_loss(self):
         import threading
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
@@ -134,6 +134,29 @@ class Maintenance(unittest.TestCase):
                     worker.start()
                     self.assertTrue(completed.wait(3))
                     worker.stop()
+                # Reconnection is no longer a forced full audit. The fresh
+                # receipt remains reusable until its explicit audit deadline.
+                self.assertEqual([], query(config, text="maintenancecanary").results)
+                receipt = json.loads((config.state_root / "maintenance.json").read_text())
+                with patch("vaws_knowledge.maintenance.time.time", return_value=receipt["next_verify"] + 1):
+                    self.assertTrue(maintain(config)["ready"])
+                self.assertEqual(1, len(query(config, text="maintenancecanary").results))
+
+    def test_fresh_deadlines_skip_backend_work_and_expired_audit_overrides_next_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            with patch("vaws_knowledge.publishing.run_once", return_value={"status": "disabled"}):
+                result = maintain(config, verify=True)
+                with patch("vaws_knowledge.maintenance.backend_for_config", side_effect=AssertionError("unneeded backend")):
+                    self.assertEqual(result, maintain(config))
+                # Even an inconsistent/future next_check cannot postpone an
+                # already due explicit audit of the saved vectors.
+                result["next_check"] = result["next_verify"] + 100
+                (config.state_root / "maintenance.json").write_text(json.dumps(result))
+                config.retrieval.documents.clear()
+                with patch("vaws_knowledge.maintenance.time.time", return_value=result["next_verify"] + 1):
+                    repaired = maintain(config)
+                self.assertTrue(repaired["ready"])
                 self.assertEqual(1, len(query(config, text="maintenancecanary").results))
 
     def test_project_prepare_preserves_config_and_does_not_enable_upload(self):
