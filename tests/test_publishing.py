@@ -178,6 +178,7 @@ def test_summary_capture_is_local_without_public_publishing(tmp_path):
     ("cursor", {"hook_event_name": "afterAgentResponse", "text": "A useful local reference, with its cause still uncertain."}),
     ("codex", {"hook_event_name": "Stop", "last_assistant_message": "A useful local reference, with its cause still uncertain."}),
     ("claude", {"hook_event_name": "Stop", "last_assistant_message": "A useful local reference, with its cause still uncertain."}),
+    ("kimi", {"hook_event_name": "Stop", "last_assistant_message": "A useful local reference, with its cause still uncertain."}),
     ("grok", {"hookEventName": "stop", "hook_event_name": "Stop", "lastAssistantMessage": "A useful local reference, with its cause still uncertain."}),
 ])
 def test_native_summary_shapes_save_only_supplied_final_text(tmp_path, client, payload):

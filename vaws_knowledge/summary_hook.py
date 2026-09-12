@@ -24,11 +24,11 @@ def capture_summary(payload: dict[str, Any], *, config: ServiceConfig, client: s
         return {"status": "no_summary"}
     elif client == "cursor" and payload.get("hook_event_name") == "afterAgentResponse":
         text = payload.get("text")
-    elif client in {"codex", "claude"} and payload.get("hook_event_name") == "Stop":
+    elif client in {"codex", "claude", "kimi"} and payload.get("hook_event_name") == "Stop":
         text = payload.get("last_assistant_message")
     else:
-        # Kimi Code's Stop currently carries no final response text. It still
-        # uses the same MCP tools; do not read transcripts or invent a summary.
+        # Client adapters may supply their native final response. Storage stays
+        # here; locating a particular client's response stays with its adapter.
         return {"status": "no_summary"}
     if not isinstance(text, str) or not text.strip():
         return {"status": "no_summary"}
