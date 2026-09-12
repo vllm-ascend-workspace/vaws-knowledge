@@ -44,6 +44,20 @@ def test_valid_manifest_passes(tmp_path):
     assert manifest.source_git_sha == GIT_SHA
     assert manifest.embedding["model"] == EMBEDDING_MODEL
     assert len(manifest.content_files) == 2
+    assert manifest.content_layout == "legacy"
+
+
+def test_typed_manifest_requires_typed_paths_and_matching_digest(tmp_path):
+    data = _valid_manifest(tmp_path)
+    data["content"]["layout"] = "kinds/v1"
+    with pytest.raises(CorruptPack, match="typed content path"):
+        validate_release_manifest(data, expected=ExpectedContract())
+    for entry in data["content"]["files"]:
+        entry["path"] = "knowledge/" + entry["path"]
+    with pytest.raises(CorruptPack, match="differs from content.files"):
+        validate_release_manifest(data, expected=ExpectedContract())
+    data["content"]["content_sha256"] = content_digest(data["content"]["files"])
+    assert validate_release_manifest(data, expected=ExpectedContract()).content_layout == "kinds/v1"
 
 
 @pytest.mark.parametrize("asset", ["../escape.ovpack", "C:\\escape.ovpack", "subdir/pack.ovpack"])

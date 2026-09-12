@@ -15,7 +15,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
 OPENVIKING_VERSION = "0.4.19"
@@ -27,6 +27,7 @@ EMBEDDING_PROVIDER = "openai"
 RELEASE_SCHEMA = "vaws-knowledge-release/1"
 SHARED_PARENT_URI = "viking://resources/shared"
 PACK_VECTOR_MODE = "require"
+CONTENT_LAYOUT = "kinds/v1"
 
 from vaws_knowledge.distribution.errors import CorruptPack, IncompatiblePack
 
@@ -213,6 +214,11 @@ class ReleaseManifest:
     def content_files(self) -> list[dict[str, Any]]:
         return self.data["content"]["files"]
 
+    @property
+    def content_layout(self) -> str:
+        """Old releases retain their verified flat layout until rebuilt."""
+        return self.data["content"].get("layout", "legacy")
+
 
 def _require(condition: bool, reason: str) -> None:
     if not condition:
@@ -272,6 +278,9 @@ def validate_release_manifest(data: Any, *, expected: ExpectedContract) -> Relea
     _require(isinstance(content, dict), "release manifest lacks a content object")
     files = content.get("files")
     _require(isinstance(files, list) and len(files) > 0, "content.files must be a non-empty list")
+    layout = content.get("layout", "legacy")
+    _require(layout in {"legacy", CONTENT_LAYOUT}, "unknown content.layout")
+    paths: set[str] = set()
     for entry in files:
         _require(
             isinstance(entry, dict)
@@ -280,6 +289,15 @@ def validate_release_manifest(data: Any, *, expected: ExpectedContract) -> Relea
             and isinstance(entry.get("size"), int),
             f"content.files entry is malformed: {entry!r}",
         )
+        path = entry["path"]
+        parts = PurePosixPath(path).parts
+        _require(bool(parts) and not path.startswith("/") and not any(ch in path for ch in "\\:\x00")
+                 and all(part not in {".", ".."} for part in parts), "unsafe content.files path")
+        _require(path not in paths, "duplicate content.files path")
+        paths.add(path)
+        if layout == CONTENT_LAYOUT:
+            _require(len(parts) > 1 and parts[0] in {"knowledge", "experience"},
+                     "typed content path must start with knowledge/ or experience/")
     _require(
         content.get("count") == len(files),
         f"content.count {content.get('count')!r} != number of content.files {len(files)}",
@@ -288,6 +306,7 @@ def validate_release_manifest(data: Any, *, expected: ExpectedContract) -> Relea
         re.match(r"^[0-9a-f]{64}$", str(content.get("content_sha256") or "")) is not None,
         "content.content_sha256 must be 64 lowercase hex",
     )
+    _require(content["content_sha256"] == content_digest(files), "content.content_sha256 differs from content.files")
 
     build = data.get("build") if isinstance(data.get("build"), dict) else {}
     openviking = str(build.get("openviking") or "")

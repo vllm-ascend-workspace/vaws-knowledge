@@ -14,7 +14,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from vaws_knowledge.markdown import parse_markdown, render_markdown
+from vaws_knowledge.markdown import parse_markdown, render_markdown, validate_kind as require_kind
 from vaws_knowledge.contribution.errors import DocumentRejected, IdentityError
 
 _SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
@@ -61,9 +61,9 @@ def require_git_sha(value: object) -> str:
     return value.lower()
 
 
-def branch_for_digest(digest: str) -> str:
+def branch_for_digest(digest: str, kind: str = "knowledge") -> str:
     token = digest_token(digest)
-    return f"contrib/{token[:12]}"
+    return f"contrib/{require_kind(kind)}/{token[:12]}"
 
 
 def public_filename(digest: str, title: str) -> str:

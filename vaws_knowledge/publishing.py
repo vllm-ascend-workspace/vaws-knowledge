@@ -29,8 +29,9 @@ def queue_capture(config: ServiceConfig, candidate: Path) -> dict[str, Any]:
         return {"status": "local_only"}
     try:
         root = instance_for_config(config).state_root
-        record = prepare_candidate(candidate, state_root=root, public_root=root / "contribution" / "public")
-        return {"status": record.status, "pr_url": record.pr_url}
+        record = prepare_candidate(candidate, state_root=root, public_root=root / "contribution" / "public",
+                                   kind=config.kind)
+        return {"status": record.status, "pr_url": record.pr_url, "kind": record.kind}
     except Exception as exc:  # local capture is already durable
         return {"status": "prepare_failed", "reason": str(exc)[:600]}
 
@@ -83,14 +84,15 @@ def run_once(config: ServiceConfig, *, force: bool = False, verify: bool = False
                             if pull.get("state") == "closed":
                                 record.status = "merged" if pull.get("merged") else "closed"
                                 save_pending(root, record)
-                            result["contributions"].append({"status": record.status, "pr_url": record.pr_url})
+                            result["contributions"].append({"status": record.status, "pr_url": record.pr_url,
+                                                             "kind": record.kind})
                             continue
                         saved = submit_pending(
                             record, state_root=root, public_root=root / "contribution" / "public",
                             git_repo=Path(settings["git_repo"]), github=github, config=submit_config,
                         )
                         result["contributions"].append({"status": saved.status, "pr_url": saved.pr_url,
-                                                         "reason": saved.last_error})
+                                                         "reason": saved.last_error, "kind": saved.kind})
                 except Exception as exc:
                     result["contribution_error"] = str(exc)[:1000]
                     result["status"] = "partial"
@@ -185,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
             result = run_once(config, force=True) if args.command == "once" else {
                 "enabled": bool(config.publishing.get("enabled")),
                 "last_check": read_json(root / "publishing.json"),
-                "contributions": [{"title": r.title, "status": r.status, "pr_url": r.pr_url,
+                "contributions": [{"title": r.title, "status": r.status, "pr_url": r.pr_url, "kind": r.kind,
                                     "reason": r.last_error} for r in iter_pending(root)],
             }
     except Exception as exc:

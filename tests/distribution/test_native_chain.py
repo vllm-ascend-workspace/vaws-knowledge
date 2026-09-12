@@ -40,6 +40,8 @@ from vaws_knowledge.distribution import (  # noqa: E402
     make_release,
 )
 from vaws_knowledge.distribution.manifest import EMBEDDING_MODEL  # noqa: E402
+from vaws_knowledge.local.openviking import OpenVikingBackend  # noqa: E402
+from vaws_knowledge.server.layers import load_config  # noqa: E402
 
 MODEL_CACHE = os.environ.get("VAWS_DIST_TEST_MODEL_CACHE", "")
 SERVER_BIN = os.environ.get("VAWS_DIST_TEST_OPENVIKING_SERVER", "")
@@ -221,7 +223,8 @@ def _commit_corpus(repo: Path, files: dict[str, str]) -> str:
 
 
 CORPUS_V1 = {
-    "zh/graph-launch.md": "# 图模式启动失败排查\n\n紫金色调试探针：图模式下显存预留不足会导致启动卡死，调低预留后恢复。\n",
+    "knowledge/zh/graph-launch.md": "# 图模式启动失败排查\n\n紫金色调试探针：当前检查图模式显存预留配置及启动日志。\n",
+    "experience/zh/graph-launch.md": "# 图模式启动失败排查\n\n紫金色调试探针历史案例：当时图模式启动卡死，调低显存预留后恢复，只在当时环境观察过。\n",
     "zh/cache-move.md": "# 缓存目录迁移\n\n移动模型缓存后要同时更新环境变量，否则静默回退到默认路径。\n",
     "en/benchmark-warmup.md": "# Benchmark warmup\n\nThe first benchmark run compiles graphs; discard its numbers.\n",
     "en/profiling-gap.md": "# Profiling gap\n\nA missing kernel interval usually means the capture stopped early.\n",
@@ -229,12 +232,26 @@ CORPUS_V1 = {
 }
 
 CORPUS_V2 = {
-    "zh/graph-launch.md": "# 图模式启动失败排查\n\n紫金色调试探针更新：除了显存预留，还要检查编译缓存目录的剩余空间。\n",
+    "knowledge/zh/graph-launch.md": "# 图模式启动失败排查\n\n紫金色调试探针更新：除了显存预留，还要检查编译缓存目录的剩余空间。\n",
+    "experience/zh/graph-launch.md": CORPUS_V1["experience/zh/graph-launch.md"],
     "zh/cache-move.md": "# 缓存目录迁移\n\n移动模型缓存后要同时更新环境变量，否则静默回退到默认路径。\n",
     "en/profiling-gap.md": "# Profiling gap\n\nA missing kernel interval usually means the capture stopped early.\n",
     "ops/restart-note.md": "# Restart note\n\nAfter a restart the service needs the same workspace path to reuse state.\n",
     "ops/disk-budget.md": "# Disk budget\n\n预留空间至少为知识包体积的三倍，给新旧版本切换留余量。\n",
 }
+
+
+def _assert_kind_queries(client, state_root: Path, root_uri: str) -> None:
+    # Reuse only the isolated fixture's tenant connection; execute the actual
+    # production backend search and its pre-ranking kind target selection.
+    backend = OpenVikingBackend(load_config({"state_root": str(state_root)}, env={}))
+    backend._reader = client
+    for kind in ("knowledge", "experience"):
+        hits = backend.search("紫金色调试探针 图模式启动失败", layers=["shared"], limit=1, kind=kind)
+        assert hits and hits[0].uri == f"{root_uri}/{kind}/zh/graph-launch.md"
+        assert hits[0].kind == kind
+        content = client.read(hits[0].uri)
+        assert ("历史案例" in content) == (kind == "experience")
 
 
 def test_native_build_release_sync_chain(tmp_path):
@@ -285,13 +302,18 @@ def test_native_build_release_sync_chain(tmp_path):
         target.wait_processed(timeout=300)
 
         # Private layers on the target must survive every shared update.
-        target.mkdir("viking://resources/candidate")
-        target.write(
-            "viking://resources/candidate/local-note.md",
-            "# 本地候选\n\n未经审核的本地经验，共享更新不得覆盖。\n",
-            wait=True,
-            options={"processing_mode": "vectors_only"},
-        )
+        for uri in ("viking://resources/candidate", "viking://resources/shared",
+                    "viking://resources/shared/bootstrap"):
+            target.mkdir(uri)
+        for kind in ("knowledge", "experience"):
+            target.mkdir(f"viking://resources/shared/bootstrap/{kind}")
+            target.mkdir(f"viking://resources/candidate/{kind}")
+            target.write(
+                f"viking://resources/candidate/{kind}/local-note.md",
+                f"# 本地候选\n\n未经审核的本地 {kind}，共享更新不得覆盖。\n",
+                wait=True,
+                options={"processing_mode": "vectors_only"},
+            )
         target.wait_processed(timeout=300)
 
         # v1: fixed Git content -> dense OVPack -> local release.
@@ -306,6 +328,7 @@ def test_native_build_release_sync_chain(tmp_path):
             metrics_reader=metrics_reader,
         )
         assert build1.manifest["source"]["git_sha"] == sha1
+        assert build1.manifest["content"]["layout"] == "kinds/v1"
         assert build1.manifest["embedding"]["model_files"], "model files must be pinned"
         build_texts = build1.details["embedding_calls"].get("texts", 0)
         assert build_texts >= len(CORPUS_V1), "build must embed the documents once"
@@ -332,12 +355,15 @@ def test_native_build_release_sync_chain(tmp_path):
         assert current1 and current1["source_git_sha"] == sha1
         root1 = current1["root_uri"]
 
-        hits = target.find(
-            "图模式启动", target_uri=root1, limit=3, options={"level": 2, "read_content": False}
-        )["resources"]
-        assert hits and hits[0]["uri"].endswith("graph-launch.md")
-        assert "紫金色调试探针" in target.read(hits[0]["uri"])
-        assert "未经审核的本地经验" in target.read("viking://resources/candidate/local-note.md")
+        _assert_kind_queries(target, state_root, root1)
+        # Legacy manifests provide exact file targets rather than a broad
+        # release parent. Verify that the pinned SDK supports that scope.
+        exact_uri = f"{root1}/knowledge/zh/graph-launch.md"
+        exact = target.find("图模式启动", target_uri=[exact_uri], limit=1,
+                            options={"level": 2, "read_content": True, "score_threshold": 0})
+        assert [item["uri"] for item in exact["resources"]] == [exact_uri]
+        for kind in ("knowledge", "experience"):
+            assert f"本地 {kind}" in target.read(f"viking://resources/candidate/{kind}/local-note.md")
 
         # Same release again: quiet no-change.
         assert (
@@ -378,12 +404,14 @@ def test_native_build_release_sync_chain(tmp_path):
         root2 = current2["root_uri"]
         assert root2 != root1
 
-        updated = target.read(f"{root2}/zh/graph-launch.md")
+        updated = target.read(f"{root2}/knowledge/zh/graph-launch.md")
         assert "编译缓存目录" in updated
         with pytest.raises(Exception):
-            target.read(f"{root2}/en/benchmark-warmup.md")  # deleted upstream
-        assert "三倍" in target.read(f"{root2}/ops/disk-budget.md")
-        assert "未经审核的本地经验" in target.read("viking://resources/candidate/local-note.md")
+            target.read(f"{root2}/knowledge/en/benchmark-warmup.md")  # deleted upstream
+        assert "三倍" in target.read(f"{root2}/knowledge/ops/disk-budget.md")
+        _assert_kind_queries(target, state_root, root2)
+        for kind in ("knowledge", "experience"):
+            assert f"本地 {kind}" in target.read(f"viking://resources/candidate/{kind}/local-note.md")
 
         # Restart the target server: the switched version keeps working.
         target.close()
@@ -399,16 +427,11 @@ def test_native_build_release_sync_chain(tmp_path):
         restarted = connect_client(f"http://127.0.0.1:{target_port}", api_key=target_key)
         try:
             restarted.wait_processed(timeout=300)
-            hits = restarted.find(
-                "编译缓存目录", target_uri=root2, limit=3, options={"level": 2, "read_content": False}
-            )["resources"]
-            # Ranking across near-duplicate notes is model-dependent; what must
-            # survive a restart is retrieval from the active root plus exact reads.
-            assert hits and all(hit["uri"].startswith(root2 + "/") for hit in hits)
-            assert "编译缓存目录" in restarted.read(f"{root2}/zh/graph-launch.md")
-            assert "未经审核的本地经验" in restarted.read(
-                "viking://resources/candidate/local-note.md"
-            )
+            _assert_kind_queries(restarted, state_root, root2)
+            assert "编译缓存目录" in restarted.read(f"{root2}/knowledge/zh/graph-launch.md")
+            assert restarted.read(f"{root2}/experience/zh/graph-launch.md") == CORPUS_V1["experience/zh/graph-launch.md"]
+            for kind in ("knowledge", "experience"):
+                assert f"本地 {kind}" in restarted.read(f"viking://resources/candidate/{kind}/local-note.md")
         finally:
             restarted.close()
     finally:

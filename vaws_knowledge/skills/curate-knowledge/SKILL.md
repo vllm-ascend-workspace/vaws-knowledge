@@ -14,10 +14,22 @@ Start from the relevant material already available. If more context would help,
 `knowledge_query(text)` finds related notes and `knowledge_explain(ref)` reads the
 original. Query failure does not prevent independent edits. Useful judgments:
 
+Use `experience_query(text)` and `experience_explain(ref)` for historical cases.
+Knowledge and experience have separate storage and retrieval. Current knowledge
+needs evidence against current source; an experience retains what was attempted
+and observed under its original conditions. Historical commands and code are
+investigation clues, not current instructions. Neither store's write interface
+certifies a claim. Use `experience_capture(title, content)` for a case, and
+`knowledge_capture(title, content)` for an assessed current conclusion; link
+related notes when useful. Do not bulk move old notes into current knowledge.
+
 - Merge duplicates only when they describe the same behavior under compatible
   conditions. Keep differing versions, topologies or observations visible.
 - Separate a confirmed cause from a plausible explanation. Preserve useful
   observations without inventing coordinates or requiring a verification label.
+- Correct an experience's mistaken causal interpretation while preserving its
+  observed outcome. Superseded implementation details can remain in a dated case
+  when they help explain the investigation; they do not belong in current guidance.
 - Retain evidence that limits a claim; do not turn one successful run into
   unconditional support. Link an unresolved conflict rather than choosing a
   winner without evidence.

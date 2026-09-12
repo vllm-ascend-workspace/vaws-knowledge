@@ -12,13 +12,31 @@ from vaws_knowledge.markdown import SHARED_BOOTSTRAP_URI, load_document, meta_pa
 from vaws_knowledge.server.layers import load_config
 
 
+def test_legacy_manifest_selects_exact_kind_files_without_searching_parent(tmp_path, monkeypatch):
+    manifest = tmp_path / "release.json"
+    manifest.write_text(json.dumps({"content": {"files": [
+        {"path": "references/legacy.md"}, {"path": "knowledge/current.md"},
+        {"path": "experience/case.md"}, {"path": "../outside.md"},
+    ]}}))
+    active = "viking://resources/shared/v0123456789ab"
+    monkeypatch.setattr("vaws_knowledge.local.shared.current_shared", lambda root: {
+        "root_uri": active, "manifest_path": str(manifest),
+    })
+    assert shared_search_uris(tmp_path, kind="knowledge") == (
+        SHARED_BOOTSTRAP_URI + "/knowledge", active + "/references/legacy.md", active + "/knowledge/current.md",
+    )
+    assert shared_search_uris(tmp_path, kind="experience") == (
+        SHARED_BOOTSTRAP_URI + "/experience", active + "/experience/case.md",
+    )
+
+
 @pytest.mark.parametrize("active", [
     "viking://resources/shared/v0123456789ab",
     "viking://resources/shared/repairs/0123456789abcdef/v0123456789ab",
 ])
 def test_bootstrap_and_exact_active_root_are_both_searched(active, monkeypatch):
     monkeypatch.setattr("vaws_knowledge.local.shared.current_shared", lambda root: {"root_uri": active})
-    assert shared_search_uris(None) == (SHARED_BOOTSTRAP_URI, active)
+    assert shared_search_uris(None) == (SHARED_BOOTSTRAP_URI + "/knowledge", active + "/knowledge")
 
 
 @pytest.mark.parametrize("active", [
@@ -28,7 +46,7 @@ def test_bootstrap_and_exact_active_root_are_both_searched(active, monkeypatch):
 ])
 def test_broad_parent_pointers_never_expand_the_search_scope(active, monkeypatch):
     monkeypatch.setattr("vaws_knowledge.local.shared.current_shared", lambda root: {"root_uri": active})
-    assert shared_search_uris(None) == (SHARED_BOOTSTRAP_URI,)
+    assert shared_search_uris(None) == (SHARED_BOOTSTRAP_URI + "/knowledge",)
 
 
 def test_legacy_shared_sidecar_is_normalized_without_changing_the_source(tmp_path):
@@ -38,7 +56,7 @@ def test_legacy_shared_sidecar_is_normalized_without_changing_the_source(tmp_pat
     sidecar.write_text(json.dumps({"uri": "viking://resources/shared/note.md", "source": {"kind": "recorded"}}), encoding="utf-8")
     before = note.read_bytes(), sidecar.read_bytes()
     document = load_document(note, layer="shared", root=tmp_path)
-    assert document.uri == SHARED_BOOTSTRAP_URI + "/note.md"
+    assert document.uri == SHARED_BOOTSTRAP_URI + "/knowledge/note.md"
     assert document.source == {"kind": "recorded"}
     assert (note.read_bytes(), sidecar.read_bytes()) == before
 
@@ -61,7 +79,7 @@ def test_bundled_corpus_and_project_notes_survive_an_active_release(tmp_path, mo
     active = "viking://resources/shared/v0123456789ab"
     stale = "viking://resources/shared/vffffffffffff"
     monkeypatch.setattr("vaws_knowledge.local.shared.current_shared", lambda root: {"root_uri": active})
-    backend.upsert(active + "/corpus/public.md", "# Public\n\npubliccanary", layer="shared")
+    backend.upsert(active + "/knowledge/corpus/public.md", "# Public\n\npubliccanary", layer="shared")
     backend.upsert(stale + "/corpus/old.md", "# Stale\n\npubliccanary", layer="shared")
     report = reconcile_markdown(config, verify=True)
     bundled = list(corpus_root().rglob("*.md"))
@@ -73,5 +91,5 @@ def test_bundled_corpus_and_project_notes_survive_an_active_release(tmp_path, mo
     for i in range(22):
         hits = backend.search(f"projectcanary{i} ", layers=["project"])
         assert any(hit.uri == uri_for("project", f"case-{i}.md") for hit in hits)
-    assert [hit.uri for hit in backend.search("publiccanary", layers=["shared"])] == [active + "/corpus/public.md"]
+    assert [hit.uri for hit in backend.search("publiccanary", layers=["shared"])] == [active + "/knowledge/corpus/public.md"]
     assert stale + "/corpus/old.md" in backend.documents

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from vaws_knowledge import redact
-from vaws_knowledge.contribution.documents import MarkdownDocument, public_filename, render_markdown
+from vaws_knowledge.contribution.documents import MarkdownDocument, public_filename, render_markdown, require_kind
 from vaws_knowledge.contribution.errors import DocumentRejected
 
 
@@ -45,6 +45,7 @@ class PublicCopy:
     profile: str = redact.REDACTION_PROFILE
     blocked: bool = False
     reason: str | None = None
+    kind: str = "knowledge"
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -53,6 +54,7 @@ class PublicCopy:
             "redaction_profile": self.profile,
             "redacted_spans": list(self.redacted_spans),
             "blocked": self.blocked,
+            "kind": self.kind,
             "path": str(self.path) if self.path is not None else None,
         }
         if self.reason:
@@ -65,9 +67,11 @@ def prepare_public_copy(
     *,
     public_root: Path | None = None,
     allow: redact.Allowlist | None = None,
+    kind: str = "knowledge",
 ) -> PublicCopy:
     """Return a public Markdown copy. The caller must not write back to the candidate."""
 
+    kind = require_kind(kind)
     try:
         original = MarkdownDocument.from_text(source_text)
     except DocumentRejected as exc:
@@ -77,6 +81,7 @@ def prepare_public_copy(
             path=None,
             blocked=True,
             reason=str(exc),
+            kind=kind,
         )
     rendered = original.render()
     masked, findings = _mask_text(rendered, allow)
@@ -89,6 +94,7 @@ def prepare_public_copy(
             redacted_spans=[item.rule for item in findings],
             blocked=True,
             reason="redaction could not produce a clean public copy",
+            kind=kind,
         )
     try:
         public_doc = MarkdownDocument.from_text(masked)
@@ -100,11 +106,12 @@ def prepare_public_copy(
             redacted_spans=[item.rule for item in findings],
             blocked=True,
             reason="redaction removed the title or body",
+            kind=kind,
         )
     public_text = render_markdown(public_doc.title, public_doc.body)
     dest: Path | None = None
     if public_root is not None:
-        dest = Path(public_root) / public_filename(public_doc.digest, public_doc.title)
+        dest = Path(public_root) / kind / public_filename(public_doc.digest, public_doc.title)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(public_text, encoding="utf-8", newline="\n")
     return PublicCopy(
@@ -112,4 +119,5 @@ def prepare_public_copy(
         text=public_text,
         path=dest,
         redacted_spans=[item.rule for item in findings],
+        kind=kind,
     )

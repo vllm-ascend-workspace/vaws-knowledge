@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
             "redact",
             "query",
             "capture",
+            "experience-query",
+            "experience-capture",
             "contribution",
             "distribution",
             "publishing",
@@ -76,14 +78,15 @@ def main(argv: list[str] | None = None) -> int:
         from vaws_knowledge.redact import main as redact_main
 
         return _dispatch(redact_main, rest)
-    if command == "query":
+    if command in {"query", "experience-query"}:
         from vaws_knowledge.server.query import main as query_main
 
-        return query_main(rest)
-    if command == "capture":
+        return query_main(rest, kind="experience" if command == "experience-query" else "knowledge")
+    if command in {"capture", "experience-capture"}:
         from vaws_knowledge.server.capture_cli import main as capture_main
 
-        return _dispatch(capture_main, rest)
+        kind = "experience" if command == "experience-capture" else "knowledge"
+        return _dispatch(lambda arguments: capture_main(arguments, kind=kind), rest)
     if command == "contribution":
         from vaws_knowledge.contribution.__main__ import main as contribution_main
 

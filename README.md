@@ -10,9 +10,26 @@ current evidence and judgment; a review or release does not prove a hardware cla
 
 ## Read and capture
 
-`knowledge_query(text, limit=8)` finds related notes, `knowledge_explain(ref)`
-reads the original, and `knowledge_capture(title, content)` saves a local note.
-Capturing the same title updates that local note.
+Knowledge describes current conclusions that need review when code or conditions
+change. Experience records what happened, what was tried and what evidence was
+obtained, including unsuccessful attempts and unresolved causes. Historical steps
+are clues to investigate, not current operating guidance. Correct mistaken
+interpretations in an experience without erasing the original observations.
+
+The stores have separate directories and retrieval namespaces, using the same
+OpenViking service and embedding model:
+
+| Purpose | Query | Read | Save |
+| --- | --- | --- | --- |
+| Current knowledge | `knowledge_query(text, limit=8)` | `knowledge_explain(ref)` | `knowledge_capture(title, content)` |
+| Historical cases | `experience_query(text, limit=8)` | `experience_explain(ref)` | `experience_capture(title, content)` |
+
+Capturing the same title updates that note within the selected store. A knowledge
+write does not certify correctness or freshness; Agents must assess evidence and
+current source before making a current claim. Related notes can link to each
+other. Existing notes are not automatically moved or promoted between stores.
+Untyped legacy notes remain reachable through knowledge for compatibility; this
+does not assert that they have been checked against current main.
 A title and non-empty Markdown body are enough. Keep known conditions, versions,
 evidence and uncertainty in the prose. No frontmatter, fixed headings, runtime
 coordinates, verification label or task association is required.
@@ -31,13 +48,14 @@ them in the background. A standalone installation can use the same command;
 it creates local configuration without enabling public contribution.
 
 ```sh
-vaws-knowledge capture --title "Graph replay observation" \
+vaws-knowledge experience-capture --title "Graph replay observation" \
   --content "Eager passed; graph replay differed after the input layout changed."
-vaws-knowledge query --text "graph replay input layout"
-vaws-knowledge query --ref "REFERENCE_RETURNED_BY_QUERY"
+vaws-knowledge experience-query --text "graph replay input layout"
+vaws-knowledge experience-query --ref "REFERENCE_RETURNED_BY_EXPERIENCE_QUERY"
+vaws-knowledge query --text "current graph replay requirements"
 ```
 
-Shared, project and candidate notes are searched together by relevance. Their
+Within each store, shared, project and candidate notes are searched together by relevance. Their
 location and recorded context remain visible; there is no trust tier or automatic
 condition verdict. A missing or unavailable result means unknown and does not
 block independent development.
@@ -46,14 +64,14 @@ Markdown files retain the original content. MCP capture saves locally without
 waiting for retrieval startup or indexing. Background maintenance reconciles
 added, edited and deleted files and periodically checks actual content and vectors.
 Queries use the ready index without downloads or repairs. Shared updates preserve project and candidate
-files. Configured summary hooks save locally even when public sharing is off;
+files. Configured summary hooks save final responses as local experiences even when public sharing is off;
 sharing itself follows the publishing configuration. Reuse an existing useful
 summary for capture instead of writing another one.
 
 Bundled and configured Markdown remains searchable alongside the active shared
 release; installing a smaller release does not hide the packaged notes.
 A retrieved shared note can be read through
-`knowledge_explain(ref)` just like a local note. The package handles indexing
+the matching `knowledge_explain(ref)` or `experience_explain(ref)` just like a local note. The package handles indexing
 and active shared versions internally.
 
 `VAWS_KNOWLEDGE_CONFIG` selects storage and backend configuration;
@@ -61,6 +79,15 @@ and active shared versions internally.
 uses CPU embedding on loopback. `VAWS_KNOWLEDGE_EMBEDDING_CACHE` can supply an
 existing model cache; preparation downloads an uncached model.
 See [the service reference](vaws_knowledge/server/README.md) for setup details.
+
+Project preparation uses `.agents/knowledge/` and `.agents/experiences/` for
+project Markdown, and `.vaws-local/knowledge/candidate/` and
+`.vaws-local/experience/candidate/` for local captures. Both use the state in
+`.vaws-local/knowledge/instance/`. Existing configured roots remain authoritative;
+`experience.layers` can configure experience roots independently. Generic service
+configurations without experience roots derive separate sibling directories.
+Public corpus source retains separate `corpus/knowledge/` and `corpus/experience/`
+directories within one release.
 
 ## Optional maintenance
 

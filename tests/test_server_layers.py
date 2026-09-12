@@ -249,5 +249,63 @@ class ReferenceConfiguration(unittest.TestCase):
                     load_config(path=path, env={})
 
 
+class ContentKinds(unittest.TestCase):
+    def test_views_share_runtime_and_keep_distinct_default_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            config = load_config({"layers": {"candidate": "candidate", "project": "project"}},
+                                 env={}, base_dir=base)
+            experience = config.for_kind("experience")
+            self.assertEqual((base / "experience" / "candidate",), experience.mount("candidate").roots)
+            self.assertEqual((base / "experience" / "project",), experience.mount("project").roots)
+            self.assertEqual(config.state_root, experience.state_root)
+            self.assertIs(config._shared_runtime, experience._shared_runtime)
+            self.assertEqual(config.mounts, experience.for_kind("knowledge").mounts)
+            self.assertEqual("knowledge", config.describe()["kind"])
+            self.assertEqual("experience", experience.describe()["kind"])
+            with self.assertRaises(ValueError):
+                config.for_kind("historical")
+
+    def test_experience_roots_accept_config_and_environment_overrides(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            config = load_config({
+                "layers": {"candidate": "candidate"},
+                "experience": {"layers": {"candidate": "cases", "project": "project-cases"}},
+            }, env={"VAWS_EXPERIENCE_CANDIDATE_ROOT": "observations"}, base_dir=base)
+            experience = config.for_kind("experience")
+            self.assertEqual((base / "observations",), experience.mount("candidate").roots)
+            self.assertEqual((base / "project-cases",), experience.mount("project").roots)
+            self.assertEqual((base / "candidate",), config.mount("candidate").roots)
+
+    def test_corpus_subdirectories_select_distinct_types(self):
+        from vaws_knowledge.markdown import iter_markdown_files
+
+        with tempfile.TemporaryDirectory() as temporary:
+            corpus = pathlib.Path(temporary) / "corpus"
+            experience = corpus / "experience"
+            experience.mkdir(parents=True)
+            (experience / "case.md").write_text("# Case\n\nObserved once.\n")
+            (corpus / "legacy.md").write_text("# Legacy\n\nExisting reference.\n")
+            legacy = load_config({"layers": {"shared": str(corpus)}}, env={})
+            self.assertEqual((corpus,), legacy.mount("shared").roots)
+            self.assertEqual((experience,), legacy.for_kind("experience").mount("shared").roots)
+            self.assertEqual([corpus / "legacy.md"], iter_markdown_files(corpus, kind="knowledge"))
+            knowledge = corpus / "knowledge"
+            knowledge.mkdir()
+            current = load_config({"layers": {"shared": str(corpus)}}, env={})
+            self.assertEqual((knowledge,), current.mount("shared").roots)
+            self.assertEqual((experience,), current.for_kind("experience").mount("shared").roots)
+
+    def test_overlapping_stores_are_rejected_before_capture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            for experience in ("candidate", "candidate/history", "."):
+                with self.assertRaisesRegex(ConfigError, "separate directory"):
+                    load_config({"layers": {"candidate": "candidate"},
+                                 "experience": {"layers": {"candidate": experience}}},
+                                env={}, base_dir=base)
+
+
 if __name__ == "__main__":
     unittest.main()

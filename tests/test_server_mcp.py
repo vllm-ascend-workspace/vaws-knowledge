@@ -120,10 +120,11 @@ class Handshake(unittest.TestCase):
         self.assertTrue(info["degraded"])
         self.assertIn("does not exist", info["layers_absent"]["shared"])
 
-    def test_tools_list_exposes_exactly_the_three_tools(self):
+    def test_tools_list_exposes_separate_knowledge_and_experience_tools(self):
         result = handle_message(service(), {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]
         self.assertEqual(
-            ["knowledge_query", "knowledge_capture", "knowledge_explain"],
+            ["knowledge_query", "knowledge_capture", "knowledge_explain",
+             "experience_query", "experience_capture", "experience_explain"],
             [tool["name"] for tool in result["tools"]],
         )
         for tool in result["tools"]:
@@ -136,6 +137,9 @@ class Handshake(unittest.TestCase):
             "knowledge_query": {"text", "limit"},
             "knowledge_capture": {"title", "content"},
             "knowledge_explain": {"ref"},
+            "experience_query": {"text", "limit"},
+            "experience_capture": {"title", "content"},
+            "experience_explain": {"ref"},
         }, properties)
 
     def test_notifications_get_no_response(self):
@@ -150,6 +154,29 @@ class Handshake(unittest.TestCase):
 
 
 class Tools(unittest.TestCase):
+    def test_same_title_and_query_stay_in_the_selected_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = KnowledgeService(config=support.build_config(candidate=tmp, shared=False, project=False))
+            saved = {}
+            for kind, body in (("knowledge", "Atlas current graph layout"),
+                               ("experience", "Atlas old graph layout failed")):
+                result = call(svc, f"{kind}_capture", {"title": "Atlas graph layout", "content": body})
+                self.assertFalse(result["isError"], result)
+                saved[kind] = result["structuredContent"]
+                self.assertEqual(saved[kind]["kind"], kind)
+            self.assertNotEqual(saved["knowledge"]["path"], saved["experience"]["path"])
+            self.assertNotEqual(saved["knowledge"]["ref"], saved["experience"]["ref"])
+            reconcile_markdown(svc.config)
+            for kind, other in (("knowledge", "experience"), ("experience", "knowledge")):
+                result = call(svc, f"{kind}_query", {"text": "Atlas graph layout", "limit": 1})["structuredContent"]
+                self.assertEqual(result["kind"], kind)
+                self.assertEqual([hit["ref"] for hit in result["results"]], [saved[kind]["ref"]])
+                explained = call(svc, f"{kind}_explain", {"ref": saved[kind]["ref"]})["structuredContent"]
+                self.assertTrue(explained["found"])
+                self.assertFalse(call(svc, f"{kind}_explain", {"ref": saved[other]["ref"]})["structuredContent"]["found"])
+            bad = call(svc, "experience_capture", {"title": "", "content": ""})["structuredContent"]
+            self.assertEqual(bad["kind"], "experience")
+
     def test_capture_then_query_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             svc = KnowledgeService(config=support.build_config(candidate=tmp), today=TODAY)
@@ -362,7 +389,8 @@ class StdioSubprocessHandshake(unittest.TestCase):
             send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             listed = recv()
             names = [tool["name"] for tool in listed["result"]["tools"]]
-            self.assertEqual(names, ["knowledge_query", "knowledge_capture", "knowledge_explain"])
+            self.assertEqual(names, ["knowledge_query", "knowledge_capture", "knowledge_explain",
+                                     "experience_query", "experience_capture", "experience_explain"])
             send(
                 {
                     "jsonrpc": "2.0",

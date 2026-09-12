@@ -20,9 +20,27 @@ With public sharing enabled, a new capture saves a private Markdown candidate an
 prepares a redacted public copy in local state. The MCP service retries pending
 submissions in the background, pushes the content branch to the fork, then opens
 or reuses a PR. Offline or authentication failure keeps the pending record.
-Re-delivery of the same content reuses the record. Closed/merged PRs are recorded
+Re-delivery of the same content and kind reuses the record. Closed/merged PRs are recorded
 and are not reopened automatically. Existing private candidates are not bulk
 submitted when configuration is enabled.
+
+Shared source files live in separate `knowledge/` and `experience/` directories
+under the configured corpus prefix: `corpus/knowledge/` and `corpus/experience/`
+in the default repository. This preserves the existing release build's
+`--corpus-subdir corpus` input.
+Knowledge records current conclusions that may need updating; experience records
+what happened under its observed conditions, including unsuccessful attempts and
+corrections. Both remain references. A historical command in an experience does
+not become a current recommendation through publication.
+
+Capture preserves the kind through redaction, the local public copy, pending
+record, branch and repository path. Identical Markdown in the two kinds remains
+two independent contributions. Manual preparation accepts
+`vaws-knowledge contribution prepare --kind experience --candidate PATH
+--state-root STATE --public-root PUBLIC`; omitting `--kind` keeps the existing
+knowledge entry. `contribution submit --kind experience` selects that pending
+kind; without the option it can resume either kind. Preparation never rewrites
+the private source.
 
 PR checks validate Markdown and redaction. **Human reviewers merge knowledge
 PRs.** This path needs no automatic reviewer or model credential. PR preparation,
@@ -32,6 +50,17 @@ workflow; ordinary tasks do not need a fork, publication commands or review wait
 After a corpus merge, CI builds the exact Git commit into a dense OVPack and
 manifest, uploads both to a draft Release, then publishes it. The release tag
 identifies the source commit. A published release is never overwritten.
+
+New packs preserve the two directories inside their version root, for example
+`viking://resources/shared/VERSION/experience/CASE.md`. The release manifest
+records `content.layout: kinds/v1` and hashes the actual paths inside the pack.
+Legacy Markdown outside either directory is placed under `knowledge/` when a new
+pack is built, with its bytes unchanged; a colliding legacy and typed path must
+be resolved explicitly. This compatibility mapping does not certify that old
+content still matches current code. Existing releases without the layout marker
+retain their original verified files and vectors; their manifest identifies the
+legacy files available to knowledge lookup. Experience lookup does not search
+the broad shared version root. Integrity repair preserves the same separation.
 
 While MCP is alive, its maintenance worker checks releases on startup and every 30 minutes;
 failed checks retry after one minute. Submission polling is every 30 seconds.
@@ -56,7 +85,7 @@ or verification pass; normal capture does not need this command.
 
 ## Native-client summaries
 
-All five workspace clients use the same knowledge MCP tools. Automatic capture
+All five workspace clients use the same knowledge and experience MCP tools. Automatic capture
 uses only a native event that supplies final response text. The observed support
 as of 2026-09-12 is:
 
@@ -79,6 +108,8 @@ delivery of the same text reuses its local note. Grok's native marker prevents
 its imported hooks from capturing the same event again. Empty or absent summaries
 are a no-op, and optional capture errors do not interrupt the client. Lookup and
 capture remain optional for every client.
+Hook capture writes experience, reusing the supplied final response as the record
+of that work. It does not automatically promote it to current knowledge.
 Hook capture saves locally even when public publishing is disabled. Public
 queuing follows the publishing setting; local persistence does not enable sharing.
 Native hook trust remains managed by the client; configuration does not bypass it.

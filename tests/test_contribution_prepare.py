@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import json
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,7 @@ from vaws_knowledge.contribution.documents import (  # noqa: E402
     require_git_sha,
 )
 from vaws_knowledge.contribution.errors import IdentityError  # noqa: E402
-from vaws_knowledge.contribution.pending import STATUS_AWAITING, STATUS_BLOCKED, load_pending  # noqa: E402
+from vaws_knowledge.contribution.pending import STATUS_AWAITING, STATUS_BLOCKED, load_pending, iter_pending, pending_path, save_pending  # noqa: E402
 from vaws_knowledge.contribution.public import prepare_public_copy  # noqa: E402
 from vaws_knowledge.contribution.submit import after_capture, prepare_candidate  # noqa: E402
 
@@ -89,6 +90,33 @@ class PendingAndCapture(unittest.TestCase):
             first.content_digest,
         )
         self.assertEqual(self.candidate.read_text(encoding="utf-8"), ORDINARY)
+
+    def test_identical_knowledge_and_experience_have_independent_pending_and_public_paths(self):
+        records = [prepare_candidate(self.candidate, state_root=self.state, public_root=self.public, kind=kind)
+                   for kind in ("knowledge", "experience")]
+        self.assertEqual(records[0].content_digest, records[1].content_digest)
+        self.assertNotEqual(records[0].branch, records[1].branch)
+        self.assertNotEqual(records[0].public_relpath, records[1].public_relpath)
+        for record in records:
+            self.assertTrue(record.public_relpath.startswith(record.kind + "/"))
+            self.assertEqual((self.public / record.public_relpath).read_text(encoding="utf-8"), ORDINARY)
+            self.assertEqual(load_pending(self.state, record.content_digest, record.kind).kind, record.kind)
+        self.assertEqual(len(iter_pending(self.state)), 2)
+        self.assertEqual(self.candidate.read_text(encoding="utf-8"), ORDINARY)
+
+    def test_old_pending_record_is_knowledge_and_is_not_duplicated_after_save(self):
+        record = prepare_candidate(self.candidate, state_root=self.state, public_root=self.public)
+        path = pending_path(self.state, record.content_digest)
+        legacy = path.parent.parent / path.name
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("kind")
+        legacy.write_text(json.dumps(payload), encoding="utf-8")
+        path.unlink()
+        restored = load_pending(self.state, record.content_digest)
+        self.assertEqual(restored.kind, "knowledge")
+        self.assertIsNone(load_pending(self.state, record.content_digest, "experience"))
+        save_pending(self.state, restored)
+        self.assertEqual(len(iter_pending(self.state)), 1)
 
     def test_after_capture_never_blocks_and_leaves_pending_without_transport(self):
         result = after_capture(

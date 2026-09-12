@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from vaws_knowledge.contribution.documents import digest_token
+from vaws_knowledge.contribution.documents import digest_token, require_kind
 from vaws_knowledge.contribution.errors import IdentityError
 
 SCHEMA = "vaws-knowledge-contribution-pending/v1"
@@ -44,8 +44,8 @@ def pending_dir(state_root: Path) -> Path:
     return Path(state_root) / "contribution" / "pending"
 
 
-def pending_path(state_root: Path, digest: str) -> Path:
-    return pending_dir(state_root) / f"{digest_token(digest)}.json"
+def pending_path(state_root: Path, digest: str, kind: str = "knowledge") -> Path:
+    return pending_dir(state_root) / require_kind(kind) / f"{digest_token(digest)}.json"
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -79,6 +79,7 @@ class PendingRecord:
     created_at: str = ""
     updated_at: str = ""
     notes: list[str] = field(default_factory=list)
+    kind: str = "knowledge"
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -111,6 +112,7 @@ class PendingRecord:
             created_at=str(payload.get("created_at") or ""),
             updated_at=str(payload.get("updated_at") or ""),
             notes=list(payload.get("notes") or []),
+            kind=require_kind(str(payload.get("kind") or "knowledge")),
         )
 
 
@@ -118,12 +120,15 @@ def save_pending(state_root: Path, record: PendingRecord) -> PendingRecord:
     record.updated_at = utc_now()
     if not record.created_at:
         record.created_at = record.updated_at
-    _atomic_write_json(pending_path(state_root, record.content_digest), record.to_dict())
+    _atomic_write_json(pending_path(state_root, record.content_digest, record.kind), record.to_dict())
     return record
 
 
-def load_pending(state_root: Path, digest: str) -> PendingRecord | None:
-    path = pending_path(state_root, digest)
+def load_pending(state_root: Path, digest: str, kind: str = "knowledge") -> PendingRecord | None:
+    path = pending_path(state_root, digest, kind)
+    if not path.is_file() and kind == "knowledge":
+        # Old pending records predate content kinds and remain readable.
+        path = pending_dir(state_root) / f"{digest_token(digest)}.json"
     if not path.is_file():
         return None
     try:
@@ -132,15 +137,18 @@ def load_pending(state_root: Path, digest: str) -> PendingRecord | None:
         return None
     if not isinstance(payload, Mapping):
         return None
-    return PendingRecord.from_dict(payload)
+    record = PendingRecord.from_dict(payload)
+    return record if record.kind == kind else None
 
 
 def iter_pending(state_root: Path) -> list[PendingRecord]:
     root = pending_dir(state_root)
     if not root.is_dir():
         return []
-    records: list[PendingRecord] = []
-    for path in sorted(root.glob("*.json")):
+    records: dict[tuple[str, str], PendingRecord] = {}
+    # Typed records supersede their legacy location after the next save.
+    paths = sorted(root.glob("*.json")) + sorted(root.glob("*/*.json"))
+    for path in paths:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -148,7 +156,8 @@ def iter_pending(state_root: Path) -> list[PendingRecord]:
         if not isinstance(payload, Mapping):
             continue
         try:
-            records.append(PendingRecord.from_dict(payload))
+            record = PendingRecord.from_dict(payload)
+            records[(record.kind, record.content_digest)] = record
         except (IdentityError, KeyError, TypeError, ValueError):
             continue
-    return records
+    return list(records.values())

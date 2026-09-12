@@ -21,6 +21,7 @@ _SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
 _TITLE_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 
 LAYERS = ("shared", "project", "candidate")
+KINDS = ("knowledge", "experience")
 URI_ROOT = "viking://resources"
 SHARED_BOOTSTRAP_URI = f"{URI_ROOT}/shared/bootstrap"
 _TITLE_DIGEST_LEN = 12
@@ -64,12 +65,35 @@ def relative_posix(path: Path, root: Path | None = None) -> str:
     return Path(path).name
 
 
-def uri_for(layer: str, relative: str) -> str:
+def _in_store(path: Path, root: Path, kind: str) -> bool:
+    """Follow aliases before deciding whether a file belongs to this store."""
+
+    opposite = set(KINDS) - {kind}
+    try:
+        lexical = path.relative_to(root)
+        resolved = path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return not opposite.intersection(lexical.parts[:-1] + resolved.parts[:-1])
+
+
+def validate_kind(kind: str) -> str:
+    if kind not in KINDS:
+        raise ValueError(f"unknown content kind: {kind!r}")
+    return kind
+
+
+def uri_for(layer: str, relative: str, *, kind: str = "knowledge") -> str:
+    validate_kind(kind)
+    if layer not in LAYERS:
+        raise ValueError(f"unknown layer: {layer!r}")
     name = str(relative or "").replace("\\", "/").lstrip("/")
+    if any(part in {"", ".", ".."} for part in name.split("/")):
+        raise ValueError("document identity must be a relative file path")
     if not name.endswith(".md"):
         name = f"{name}.md"
     root = SHARED_BOOTSTRAP_URI if layer == "shared" else f"{URI_ROOT}/{layer}"
-    return f"{root}/{name}"
+    return f"{root}/{kind}/{name}"
 
 
 def layer_from_uri(uri: str) -> str | None:
@@ -80,6 +104,29 @@ def layer_from_uri(uri: str) -> str | None:
     rest = text[len(prefix) :]
     layer = rest.split("/", 1)[0]
     return layer if layer in LAYERS else None
+
+
+def kind_from_uri(uri: str) -> str:
+    """Read an explicit namespace; old untyped identities are not current facts."""
+
+    prefix = URI_ROOT + "/"
+    if not str(uri).startswith(prefix):
+        return ""
+    parts = str(uri)[len(prefix):].split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return ""
+    if len(parts) < 3 or parts[0] not in LAYERS:
+        return ""
+    index = 1
+    if parts[0] == "shared":
+        index = 4 if parts[1] == "repairs" else 2
+        if parts[1] == "repairs" and (
+            len(parts) < 6
+            or not re.fullmatch(r"[0-9a-f]{16}", parts[2])
+            or not re.fullmatch(r"v[0-9a-f]{12}", parts[3])
+        ):
+            return ""
+    return parts[index] if len(parts) > index + 1 and parts[index] in KINDS else ""
 
 
 def parse_markdown(text: str) -> tuple[str, str]:
@@ -147,6 +194,7 @@ class Document:
     slug: str
     path: Path
     uri: str
+    kind: str = "knowledge"
     status: str | None = None
     source: dict[str, Any] | None = None
     conditions: dict[str, str] = field(default_factory=dict)
@@ -162,6 +210,7 @@ class Document:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "layer": self.layer,
+            "kind": self.kind,
             "title": self.title,
             "content": self.content,
             "slug": self.slug,
@@ -186,7 +235,10 @@ def meta_path(markdown_path: Path) -> Path:
     return markdown_path.with_suffix(".meta.json")
 
 
-def load_document(path: Path, *, layer: str, root: Path | None = None) -> Document:
+def load_document(
+    path: Path, *, layer: str, root: Path | None = None, kind: str = "knowledge",
+) -> Document:
+    validate_kind(kind)
     text = path.read_text(encoding="utf-8")
     title, content = parse_markdown(text)
     rel = relative_posix(path, root)
@@ -209,13 +261,14 @@ def load_document(path: Path, *, layer: str, root: Path | None = None) -> Docume
     source = _clean_mapping(meta.get("source"))
     return Document(
         layer=layer,
+        kind=kind,
         title=str(meta.get("title") or title),
         content=content,
         slug=str(meta.get("slug") or rel_slug),
         path=path,
-        # Files mounted as shared are the local bootstrap source. Old sidecar
-        # identities must not place them inside a versioned imported pack.
-        uri=uri_for(layer, rel) if layer == "shared" else str(meta.get("uri") or uri_for(layer, rel)),
+        # The selected store owns identity. Historical sidecars cannot redirect
+        # local files into another kind, layer or imported release.
+        uri=uri_for(layer, rel, kind=kind),
         status=str(meta["status"]) if meta.get("status") else None,
         source=source,
         conditions=conditions,
@@ -224,14 +277,14 @@ def load_document(path: Path, *, layer: str, root: Path | None = None) -> Docume
     )
 
 
-def find_by_title(root: Path, title: str, *, layer: str) -> Document | None:
+def find_by_title(root: Path, title: str, *, layer: str, kind: str = "knowledge") -> Document | None:
     heading = (title or "").strip()
     if not heading or not root.is_dir():
         return None
     matches: list[Document] = []
-    for path in iter_markdown_files(root):
+    for path in iter_markdown_files(root, kind=kind):
         try:
-            document = load_document(path, layer=layer, root=root)
+            document = load_document(path, layer=layer, root=root, kind=kind)
         except (OSError, UnicodeDecodeError):
             continue
         if document.title.strip() == heading:
@@ -249,6 +302,7 @@ def save_document(
     root: Path,
     *,
     layer: str,
+    kind: str = "knowledge",
     title: str,
     content: str,
     slug: str | None = None,
@@ -259,6 +313,7 @@ def save_document(
     evidence: Any = None,
     captured_at: str | None = None,
 ) -> Document:
+    validate_kind(kind)
     heading = (title or "").strip()
     body = (content or "").strip()
     if not heading:
@@ -271,9 +326,12 @@ def save_document(
     else:
         ident = slug or document_slug(heading)
         target = root / f"{ident}.md"
+    if not _in_store(target, root, kind):
+        raise ValueError("document path is outside the selected content store")
+    if path is None:
         if target.is_file():
             try:
-                existing = load_document(target, layer=layer, root=root)
+                existing = load_document(target, layer=layer, root=root, kind=kind)
             except (OSError, UnicodeDecodeError):
                 existing = None
             if existing is not None and existing.title.strip() != heading:
@@ -301,7 +359,8 @@ def save_document(
         "slug": ident,
         "title": heading,
         "layer": layer,
-        "uri": uri_for(layer, rel),
+        "kind": validate_kind(kind),
+        "uri": uri_for(layer, rel, kind=kind),
         "captured_at": captured_at or utc_now(),
     }
     if status is not None:
@@ -319,7 +378,7 @@ def save_document(
     if evidence is not None:
         meta["evidence"] = evidence
     _atomic_write_text(meta_path(target), json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
-    return load_document(target, layer=layer, root=root)
+    return load_document(target, layer=layer, root=root, kind=kind)
 
 
 def delete_document(path: Path) -> None:
@@ -328,7 +387,12 @@ def delete_document(path: Path) -> None:
     sidecar.unlink(missing_ok=True)
 
 
-def iter_markdown_files(root: Path) -> list[Path]:
+def iter_markdown_files(root: Path, *, kind: str | None = None) -> list[Path]:
+    if kind is not None:
+        validate_kind(kind)
     if not root.is_dir():
         return []
-    return sorted(path for path in root.rglob("*.md") if path.is_file())
+    return sorted(
+        path for path in root.rglob("*.md")
+        if path.is_file() and (kind is None or _in_store(path, root, kind))
+    )

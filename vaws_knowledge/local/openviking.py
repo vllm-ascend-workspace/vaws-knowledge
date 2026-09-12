@@ -9,8 +9,8 @@ from typing import Any, Mapping, Sequence
 from vaws_knowledge.local.backend import Hit, UnavailableBackend
 from vaws_knowledge.local.embedding import EMBEDDING_DIMENSION, EMBEDDING_MODEL, model_fingerprint
 from vaws_knowledge.local.instance import OPENVIKING_VERSION, instance_for_config, without_proxies
-from vaws_knowledge.local.shared import shared_search_uris
-from vaws_knowledge.markdown import LAYERS, SHARED_BOOTSTRAP_URI, URI_ROOT, layer_from_uri, parse_markdown
+from vaws_knowledge.local.shared import matches_targets, shared_search_uris
+from vaws_knowledge.markdown import KINDS, LAYERS, SHARED_BOOTSTRAP_URI, URI_ROOT, layer_from_uri, parse_markdown, validate_kind
 
 LAYER_ROOTS = {layer: f"{URI_ROOT}/{layer}" for layer in LAYERS}
 LAYER_ROOTS["shared"] = SHARED_BOOTSTRAP_URI
@@ -130,7 +130,9 @@ class OpenVikingBackend:
         *,
         layers: Sequence[str] | None = None,
         limit: int = 8,
+        kind: str = "knowledge",
     ) -> list[Hit]:
+        validate_kind(kind)
         client = self._read_client()
         wanted = [name for name in (layers or LAYERS) if name in LAYER_ROOTS]
         fetch = max(int(limit or 8) * 4, 16)
@@ -138,7 +140,7 @@ class OpenVikingBackend:
         state_root = getattr(self.instance, "state_root", None)
         targets: list[str] = []
         for layer in wanted:
-            targets.extend(shared_search_uris(state_root) if layer == "shared" else (LAYER_ROOTS[layer],))
+            targets.extend(shared_search_uris(state_root, kind=kind) if layer == "shared" else (f"{LAYER_ROOTS[layer]}/{kind}",))
         targets = list(dict.fromkeys(targets))
         if not targets:
             return []
@@ -153,7 +155,7 @@ class OpenVikingBackend:
             if not isinstance(item, dict):
                 continue
             uri = str(item.get("uri") or "")
-            if not any(uri.startswith(root + "/") for root in targets):
+            if not matches_targets(uri, targets):
                 continue
             content = str(item.get("content") or item.get("text") or "")
             title, body = parse_markdown(content) if content else ("", "")
@@ -163,6 +165,7 @@ class OpenVikingBackend:
                 uri=uri, score=score, title=title,
                 excerpt=" ".join((body or content).split())[:240],
                 layer=layer_from_uri(uri) or "", content=content,
+                kind=kind,
             )
             if uri not in hits or hit.score > hits[uri].score:
                 hits[uri] = hit
@@ -213,6 +216,7 @@ class OpenVikingBackend:
 
     def _ensure_layer(self, client: Any, layer: str) -> None:
         roots = (f"{URI_ROOT}/shared", SHARED_BOOTSTRAP_URI) if layer == "shared" else (LAYER_ROOTS[layer],)
+        roots = (*roots, *(f"{roots[-1]}/{kind}" for kind in KINDS))
         for uri in roots:
             try:
                 client.mkdir(uri)

@@ -24,6 +24,40 @@ def _config(tmp: str):
 
 
 class CaptureMarkdown(unittest.TestCase):
+    def test_other_kind_alias_cannot_be_found_updated_or_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _config(str(pathlib.Path(tmp) / "candidate"))
+            experience = config.for_kind("experience")
+            observed = capture(title="Graph case", content="Original historical failure.", config=experience)
+            root = config.mount("candidate").roots[0]
+            root.mkdir(parents=True, exist_ok=True)
+            alias = root / "alias.md"
+            alias.symlink_to(observed["path"])
+            self.assertEqual([], query(config, text="historical failure", layers=["candidate"]).results)
+            with self.assertRaises(CaptureRejected):
+                delete("alias.md", config=config)
+            current = capture(title="Graph case", content="Current reference.", config=config)
+            self.assertNotEqual(str(alias), current["path"])
+            self.assertIn("Original historical", pathlib.Path(observed["path"]).read_text())
+
+    def test_same_title_in_each_kind_is_stored_and_deleted_independently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _config(str(pathlib.Path(tmp) / "candidate"))
+            experience = config.for_kind("experience")
+            current = capture(title="Graph metadata", content="Current allocation contract.", config=config)
+            observed = capture(title="Graph metadata", content="Observed a failure on an old revision.", config=experience)
+            corrected = capture(title="Graph metadata", content="Corrected the earlier causal interpretation.", config=experience)
+            self.assertNotEqual(current["path"], observed["path"])
+            self.assertEqual(observed["path"], corrected["path"])
+            self.assertIn("Current allocation", pathlib.Path(current["path"]).read_text())
+            self.assertEqual("experience", corrected["kind"])
+            with self.assertRaises(CaptureRejected):
+                delete(observed["uri"], config=config)
+            delete(current["uri"], config=config)
+            self.assertFalse(pathlib.Path(current["path"]).exists())
+            self.assertTrue(pathlib.Path(observed["path"]).is_file())
+            self.assertIn(observed["uri"], config.retrieval.documents)
+
     def test_title_and_content_are_enough(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = _config(tmp)

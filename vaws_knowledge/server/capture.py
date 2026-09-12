@@ -50,18 +50,24 @@ def candidate_root(config: ServiceConfig, *, create: bool = True) -> Path:
     if mount.read_only:
         raise CaptureRefused("candidate layer is read-only", layer="candidate")
     root = Path(mount.roots[0])
+    other = config.for_kind("experience" if config.kind == "knowledge" else "knowledge")
+    resolved = root.resolve()
+    for other_mount in other.mounts.values():
+        if any(resolved.is_relative_to(path.resolve()) or path.resolve().is_relative_to(resolved)
+               for path in other_mount.roots):
+            raise CaptureRefused("candidate directory overlaps another content store", layer="candidate")
     if create:
         root.mkdir(parents=True, exist_ok=True)
     return root
 
 
-def _proposed_identity(root: Path, heading: str) -> tuple[str, str, Path, bool]:
-    existing = find_by_title(root, heading, layer="candidate")
+def _proposed_identity(root: Path, heading: str, *, kind: str) -> tuple[str, str, Path, bool]:
+    existing = find_by_title(root, heading, layer="candidate", kind=kind)
     if existing is not None:
         return existing.slug, existing.uri, existing.path, True
     ident = document_slug(heading)
     path = root / f"{ident}.md"
-    return ident, uri_for("candidate", relative_posix(path, root)), path, False
+    return ident, uri_for("candidate", relative_posix(path, root), kind=kind), path, False
 
 
 def capture(
@@ -99,7 +105,7 @@ def capture(
 
     config = config or load_config()
     root = candidate_root(config, create=not dry_run)
-    ident, uri, path, updating = _proposed_identity(root, heading)
+    ident, uri, path, updating = _proposed_identity(root, heading, kind=config.kind)
     if dry_run:
         return {
             "ok": True,
@@ -109,6 +115,7 @@ def capture(
             "uri": uri,
             "path": str(path),
             "layer": "candidate",
+            "kind": config.kind,
             "index": "skipped",
             "would_update": updating,
         }
@@ -116,6 +123,7 @@ def capture(
     document = save_document(
         root,
         layer="candidate",
+        kind=config.kind,
         title=heading,
         content=body,
         path=path if updating else None,
@@ -147,6 +155,7 @@ def capture(
         "ref": document.uri,
         "path": str(document.path),
         "layer": "candidate",
+        "kind": document.kind,
         "index": "ready" if indexed else "pending",
         "document": document.to_dict(),
     }
@@ -173,8 +182,8 @@ def delete(
     config = config or load_config()
     root = candidate_root(config)
     target = None
-    for path in iter_markdown_files(root):
-        document = load_document(path, layer="candidate", root=root)
+    for path in iter_markdown_files(root, kind=config.kind):
+        document = load_document(path, layer="candidate", root=root, kind=config.kind)
         if ref in {document.uri, document.slug, str(document.path), document.path.name}:
             target = document
             break
@@ -188,4 +197,4 @@ def delete(
         except Exception:  # noqa: BLE001 - still delete the file
             pass
     delete_document(target.path)
-    return {"ok": True, "deleted": target.uri, "path": str(target.path)}
+    return {"ok": True, "deleted": target.uri, "path": str(target.path), "kind": target.kind}

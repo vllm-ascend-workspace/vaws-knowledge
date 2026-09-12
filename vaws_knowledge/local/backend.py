@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
-from vaws_knowledge.markdown import layer_from_uri
+from vaws_knowledge.markdown import kind_from_uri, layer_from_uri, validate_kind
 
 _TOKEN_RE = re.compile(r"[a-z0-9_.+/-]{2,}")
 
@@ -24,6 +24,7 @@ class Hit:
     excerpt: str = ""
     layer: str = ""
     content: str = ""
+    kind: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +33,7 @@ class Hit:
             "title": self.title,
             "excerpt": self.excerpt,
             "layer": self.layer,
+            "kind": self.kind or kind_from_uri(self.uri),
         }
 
 
@@ -62,6 +64,7 @@ class RetrievalBackend(Protocol):
         *,
         layers: Sequence[str] | None = None,
         limit: int = 8,
+        kind: str = "knowledge",
     ) -> list[Hit]:
         """Return ranked reference hits without deciding applicability."""
 
@@ -101,8 +104,9 @@ class UnavailableBackend:
         *,
         layers: Sequence[str] | None = None,
         limit: int = 8,
+        kind: str = "knowledge",
     ) -> list[Hit]:
-        del text, layers, limit
+        del text, layers, limit, kind
         return []
 
     def read(self, uri: str) -> str | None:
@@ -168,7 +172,9 @@ class MemoryBackend:
         *,
         layers: Sequence[str] | None = None,
         limit: int = 8,
+        kind: str = "knowledge",
     ) -> list[Hit]:
+        validate_kind(kind)
         wanted = set(layers or ())
         query_tokens = set(_TOKEN_RE.findall((text or "").lower()))
         hits: list[Hit] = []
@@ -178,12 +184,14 @@ class MemoryBackend:
             layer = str(record.get("layer") or layer_from_uri(uri) or "")
             if wanted and layer not in wanted:
                 continue
-            if layer == "shared" and self.config is not None:
-                from vaws_knowledge.local.shared import shared_search_uris
+            if layer == "shared":
+                from vaws_knowledge.local.shared import matches_targets, shared_search_uris
 
-                roots = shared_search_uris(getattr(self.config, "state_root", None))
-                if not any(uri.startswith(root + "/") for root in roots):
+                roots = shared_search_uris(getattr(self.config, "state_root", None), kind=kind)
+                if not matches_targets(uri, roots):
                     continue
+            elif kind_from_uri(uri) != kind:
+                continue
             haystack = str(record.get("content") or "").lower()
             score = 0.0
             if text and text.lower() in haystack:
@@ -202,6 +210,7 @@ class MemoryBackend:
                     excerpt=" ".join(content.split())[:240],
                     layer=layer,
                     content=content,
+                    kind=kind,
                 )
             )
         hits.sort(key=lambda hit: (-hit.score, hit.uri))
@@ -211,8 +220,12 @@ class MemoryBackend:
 def backend_for_config(config: Any) -> RetrievalBackend:
     """Select the retrieval backend from config/env. Never invent a second product index."""
 
+    shared = getattr(config, "_shared_runtime", {})
     existing = getattr(config, "retrieval", None)
+    if existing is None:
+        existing = shared.get("retrieval")
     if existing is not None:
+        shared["retrieval"] = existing
         if isinstance(existing, MemoryBackend):
             existing.config = config
         return existing
@@ -234,4 +247,5 @@ def backend_for_config(config: Any) -> RetrievalBackend:
         config.retrieval = backend
     except Exception:  # noqa: BLE001 - frozen/simple configs still work
         pass
+    shared["retrieval"] = backend
     return backend

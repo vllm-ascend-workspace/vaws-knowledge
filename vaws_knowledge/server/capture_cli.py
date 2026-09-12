@@ -10,8 +10,8 @@ from vaws_knowledge.server.capture import capture, delete
 from vaws_knowledge.server.layers import load_config
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Capture or delete a local candidate")
+def main(argv: list[str], *, kind: str = "knowledge") -> int:
+    parser = argparse.ArgumentParser(description=f"Capture or delete a local {kind} candidate")
     parser.add_argument("--title", default="")
     parser.add_argument("--content", default="")
     parser.add_argument("--content-file", default="")
@@ -20,7 +20,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--backend", default="")
     args = parser.parse_args(argv)
     mapping = {"backend": args.backend} if args.backend else None
-    config = load_config(mapping, path=args.config or None)
+    config = load_config(mapping, path=args.config or None).for_kind(kind)
     if args.delete:
         print(json.dumps(delete(args.delete, config=config), ensure_ascii=False, indent=2))
         return 0
