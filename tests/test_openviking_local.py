@@ -66,7 +66,8 @@ class LiveOpenViking(unittest.TestCase):
             content="Eager passed but ACL graph replay diverged on padding metadata.",
             config=self.config,
         )
-        self.assertTrue(first["ok"])
+        self.assertTrue(first["ok"], first)
+        self.assertEqual("ready", first["index"], first)
         found = query(self.config, text="graph replay padding").to_dict()
         self.assertGreaterEqual(found["count"], 1, found)
         self.assertFalse(found.get("unavailable"))
@@ -87,7 +88,8 @@ class LiveOpenViking(unittest.TestCase):
 
         instance_for_config(self.config).stop()
         self.assertTrue(query(self.config, text="slot mapping").unavailable)
-        self.assertTrue(maintain(self.config, verify=True)["ready"])
+        prepared = maintain(self.config, verify=True)
+        self.assertTrue(prepared["ready"], prepared)
         restarted = query(self.config, text="slot mapping").to_dict()
         self.assertGreaterEqual(restarted["count"], 1, restarted)
 
@@ -101,7 +103,8 @@ class LiveOpenViking(unittest.TestCase):
             "# Project graph knowledge\n\nProject graph padding uses a unique canary named projectquartz.\n",
             encoding="utf-8",
         )
-        self.assertTrue(maintain(self.config, verify=True)["ready"])
+        prepared = maintain(self.config, verify=True)
+        self.assertTrue(prepared["ready"], prepared)
         found = query(
             self.config, text="project graph padding projectquartz", layers=["project"]
         ).to_dict()

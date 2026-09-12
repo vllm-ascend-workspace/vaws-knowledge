@@ -187,10 +187,12 @@ def _download_model(cache: Path, manifest: Any | None) -> None:
             ref.parent.mkdir(parents=True, exist_ok=True)
             ref.write_text(revision, encoding="utf-8")
     else:
-        from fastembed.text.onnx_embedding import OnnxTextEmbedding
+        from fastembed import TextEmbedding
 
-        description = OnnxTextEmbedding._get_model_description(EMBEDDING_MODEL)
-        OnnxTextEmbedding.download_model(description, str(cache))
+        # The public registry includes pooled implementations as well as the
+        # basic ONNX models. This multilingual model belongs to PooledEmbedding.
+        description = TextEmbedding._get_model_description(EMBEDDING_MODEL)
+        TextEmbedding.download_model(description, str(cache))
 
 
 def _clear_owned_stage(stage: Path, cache: Path) -> None:

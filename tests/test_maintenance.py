@@ -142,7 +142,7 @@ class Maintenance(unittest.TestCase):
             config = project_config(root)
             self.assertFalse(config.publishing["enabled"])
             self.assertTrue(config.shared_sync["enabled"])
-            self.assertEqual((root / ".agents" / "knowledge",), config.mount("project").roots)
+            self.assertEqual(((root / ".agents" / "knowledge").resolve(),), config.mount("project").roots)
             payload = json.loads(config.config_path.read_text(encoding="utf-8"))
             payload["publishing"] = {"enabled": True, "repository": "existing/repo", "fork": "existing/fork"}
             config.config_path.write_text(json.dumps(payload), encoding="utf-8")

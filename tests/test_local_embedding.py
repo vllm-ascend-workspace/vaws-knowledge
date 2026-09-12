@@ -92,6 +92,19 @@ def test_cold_cache_downloads_and_probes_before_activation(tmp_path, loaders):
     assert all(entry["sha256"] for entry in record["files"])
 
 
+def test_cold_download_resolves_pooled_model_from_full_fastembed_registry(tmp_path, monkeypatch):
+    from fastembed import TextEmbedding
+
+    download = Mock()
+    monkeypatch.setattr(TextEmbedding, "download_model", download)
+    embedding._download_model(tmp_path, None)
+    description, cache = download.call_args.args
+    assert description.model == embedding.EMBEDDING_MODEL
+    assert description.dim == embedding.EMBEDDING_DIMENSION
+    assert description.sources.hf == "qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q"
+    assert cache == str(tmp_path)
+
+
 def test_release_checksum_rejects_loadable_bad_seed(tmp_path, loaders):
     source = tmp_path / "external"
     model_files(source)
