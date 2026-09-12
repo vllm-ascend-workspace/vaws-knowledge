@@ -14,7 +14,7 @@ from typing import Any, Sequence
 from vaws_knowledge import package_version
 from vaws_knowledge.local.backend import Hit, backend_for_config
 from vaws_knowledge.local.instance import instance_for_config
-from vaws_knowledge.local.shared import active_shared_uris, current_shared, matches_targets, shared_search_problem
+from vaws_knowledge.local.shared import active_shared_uris, current_shared, matches_targets
 from vaws_knowledge.markdown import Document, iter_markdown_files, layer_from_uri, load_document, parse_markdown
 from vaws_knowledge.server.layers import LAYERS, ServiceConfig, shared_source
 
@@ -179,9 +179,6 @@ def query(
     catalog = documents_by_uri(config, wanted_layers)
     active = current_shared(instance_for_config(config).state_root) if "shared" in searched_layers else None
     active_targets = active_shared_uris(active, kind=config.kind)
-    shared_problem = shared_search_problem(active)
-    if shared_problem:
-        notes.append(shared_problem)
     kept: list[dict[str, Any]] = []
     for hit in hits:
         document = catalog.get(hit.uri)
@@ -195,7 +192,7 @@ def query(
     return QueryResponse(
         kind=config.kind,
         results=kept[:cap],
-        degraded=consulted["degraded"] or pending or bool(shared_problem),
+        degraded=consulted["degraded"] or pending,
         unavailable=False,
         index_detail=detail,
         notes=notes,
@@ -245,9 +242,6 @@ def explain(
     if match is None and "shared" in consulted["layers_available"] and layer_from_uri(ident) == "shared":
         active = current_shared(instance_for_config(config).state_root)
         targets = active_shared_uris(active, kind=config.kind)
-        problem = shared_search_problem(active)
-        if problem:
-            base.update(degraded=True, notes=[problem])
         if matches_targets(ident, targets):
             backend = backend_for_config(config)
             try:

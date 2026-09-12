@@ -24,7 +24,7 @@ EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 EMBEDDING_DIMENSION = 384
 EMBEDDING_PROVIDER = "openai"
 
-RELEASE_SCHEMA = "vaws-knowledge-release/1"
+RELEASE_SCHEMA = "vaws-knowledge-release/2"
 SHARED_PARENT_URI = "viking://resources/shared"
 PACK_VECTOR_MODE = "require"
 CONTENT_LAYOUT = "kinds/v1"
@@ -216,8 +216,7 @@ class ReleaseManifest:
 
     @property
     def content_layout(self) -> str:
-        """Old releases retain their verified flat layout until rebuilt."""
-        return self.data["content"].get("layout", "legacy")
+        return self.data["content"]["layout"]
 
 
 def _require(condition: bool, reason: str) -> None:
@@ -236,7 +235,7 @@ def validate_release_manifest(data: Any, *, expected: ExpectedContract) -> Relea
     _require(isinstance(data, dict), "release manifest is not a JSON object")
     _require(
         data.get("schema") == RELEASE_SCHEMA,
-        f"release manifest schema must be {RELEASE_SCHEMA!r}, got {data.get('schema')!r}",
+        f"unsupported release manifest schema: {data.get('schema')!r}",
     )
     version_id = data.get("version_id")
     _require(isinstance(version_id, str) and version_id, "release manifest lacks version_id")
@@ -278,8 +277,10 @@ def validate_release_manifest(data: Any, *, expected: ExpectedContract) -> Relea
     _require(isinstance(content, dict), "release manifest lacks a content object")
     files = content.get("files")
     _require(isinstance(files, list) and len(files) > 0, "content.files must be a non-empty list")
-    layout = content.get("layout", "legacy")
-    _require(layout in {"legacy", CONTENT_LAYOUT}, "unknown content.layout")
+    _require(
+        content.get("layout") == CONTENT_LAYOUT,
+        f"content.layout must be {CONTENT_LAYOUT!r}",
+    )
     paths: set[str] = set()
     for entry in files:
         _require(
@@ -295,9 +296,8 @@ def validate_release_manifest(data: Any, *, expected: ExpectedContract) -> Relea
                  and all(part not in {".", ".."} for part in parts), "unsafe content.files path")
         _require(path not in paths, "duplicate content.files path")
         paths.add(path)
-        if layout == CONTENT_LAYOUT:
-            _require(len(parts) > 1 and parts[0] in {"knowledge", "experience"},
-                     "typed content path must start with knowledge/ or experience/")
+        _require(len(parts) > 1 and parts[0] in {"knowledge", "experience"},
+                 "typed content path must start with knowledge/ or experience/")
     _require(
         content.get("count") == len(files),
         f"content.count {content.get('count')!r} != number of content.files {len(files)}",

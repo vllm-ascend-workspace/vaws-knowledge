@@ -264,9 +264,7 @@ def build_pack(
             for entry in files:
                 client.write(
                     f"{build_root}/{entry['path']}",
-                    (materialized / Path(*PurePosixPath(entry['path']).parts)).read_text(
-                        encoding="utf-8"
-                    ),
+                    (materialized / Path(*PurePosixPath(entry['path']).parts)).read_bytes().decode("utf-8"),
                     wait=False,
                     options={"processing_mode": "vectors_only"},
                 )

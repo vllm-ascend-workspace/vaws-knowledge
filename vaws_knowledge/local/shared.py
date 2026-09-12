@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from vaws_knowledge.markdown import SHARED_BOOTSTRAP_URI, URI_ROOT, validate_kind
@@ -64,20 +64,15 @@ def shared_search_uri(state_root: Path | None, *, kind: str = "knowledge") -> st
 
 
 def matches_targets(uri: str, targets: tuple[str, ...] | list[str]) -> bool:
-    """Directories include descendants; manifest-selected files match exactly."""
+    """Match a selected kind directory or its descendants."""
 
     if any(part in {".", ".."} for part in uri.split("/")):
         return False
-    return any(uri == root or (not root.endswith(".md") and uri.startswith(root + "/")) for root in targets)
+    return any(uri == root or uri.startswith(root + "/") for root in targets)
 
 
 def active_shared_uris(current: dict[str, Any] | None, *, kind: str = "knowledge") -> tuple[str, ...]:
-    """Select a kind before ranking, including old packs with untyped paths.
-
-    An old pack's manifest supplies exact document targets. Searching the
-    version parent would mix the two kinds and consume the wrong top-k slots.
-    Missing manifests permit only the explicitly typed subtree.
-    """
+    """Select the kind directory before ranking, never the version parent."""
 
     validate_kind(kind)
     active = str(current.get("root_uri") or "").rstrip("/") if current else ""
@@ -90,27 +85,7 @@ def active_shared_uris(current: dict[str, Any] | None, *, kind: str = "knowledge
     repair = re.fullmatch(r"repairs/[0-9a-f]{16}/v[0-9a-f]{12}", version)
     if not (direct or repair):
         return ()
-    manifest_path = current.get("manifest_path") if current else None
-    try:
-        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8")) if manifest_path else {}
-    except (OSError, ValueError, TypeError):
-        manifest = {}
-    content = manifest.get("content", {}) if isinstance(manifest, dict) else {}
-    if not isinstance(content, dict) or content.get("layout") == "kinds/v1":
-        return (f"{active}/{kind}",)
-    entries = content.get("files")
-    if not isinstance(entries, list):
-        return (f"{active}/{kind}",)
-    targets: list[str] = []
-    for entry in entries:
-        path = str(entry.get("path") or "") if isinstance(entry, dict) else ""
-        parts = PurePosixPath(path).parts
-        if not parts or path.startswith("/") or "\\" in path or any(p in {".", ".."} for p in path.split("/")) or not path.endswith(".md"):
-            continue
-        recorded_kind = parts[0] if parts[0] in {"knowledge", "experience"} else "knowledge"
-        if recorded_kind == kind:
-            targets.append(f"{active}/{path}")
-    return tuple(dict.fromkeys(targets))
+    return (f"{active}/{kind}",)
 
 
 def shared_search_uris(state_root: Path | None, *, kind: str = "knowledge") -> tuple[str, ...]:
@@ -118,18 +93,3 @@ def shared_search_uris(state_root: Path | None, *, kind: str = "knowledge") -> t
 
     validate_kind(kind)
     return (f"{SHARED_BOOTSTRAP_URI}/{kind}", *active_shared_uris(current_shared(state_root), kind=kind))
-
-
-def shared_search_problem(current: dict[str, Any] | None) -> str | None:
-    """Expose incomplete legacy scope when the active manifest was lost."""
-
-    if not current:
-        return None
-    path = current.get("manifest_path")
-    try:
-        manifest = json.loads(Path(path).read_text(encoding="utf-8")) if path else None
-        if isinstance(manifest, dict) and isinstance(manifest.get("content", {}).get("files"), list):
-            return None
-    except (OSError, ValueError, TypeError, AttributeError):
-        pass
-    return "The active shared manifest is unavailable; only explicit knowledge/experience subtrees can be searched."

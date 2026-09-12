@@ -54,13 +54,16 @@ identifies the source commit. A published release is never overwritten.
 New packs preserve the two directories inside their version root, for example
 `viking://resources/shared/VERSION/experience/CASE.md`. The release manifest
 records `content.layout: kinds/v1` and hashes the actual paths inside the pack.
-Legacy Markdown outside either directory is placed under `knowledge/` when a new
+Only release schema `vaws-knowledge-release/2` with `content.layout: kinds/v1`
+is accepted. Schema 1 and releases without the two-store layout must be rebuilt;
+there is no flat-pack query fallback. Shared queries search only the selected
+kind directory under the active release and local bootstrap roots, never their
+parents or individual paths selected from an old manifest.
+Source Markdown outside either directory is placed under `knowledge/` when a new
 pack is built, with its bytes unchanged; a colliding legacy and typed path must
-be resolved explicitly. This compatibility mapping does not certify that old
-content still matches current code. Existing releases without the layout marker
-retain their original verified files and vectors; their manifest identifies the
-legacy files available to knowledge lookup. Experience lookup does not search
-the broad shared version root. Integrity repair preserves the same separation.
+be resolved explicitly. This build-time mapping does not certify that old
+content still matches current code. Integrity repair preserves the same kind
+directories.
 
 While MCP is alive, its maintenance worker checks releases on startup and every 30 minutes;
 failed checks retry after one minute. Submission polling is every 30 seconds.

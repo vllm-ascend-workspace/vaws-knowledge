@@ -69,10 +69,25 @@ def _repo(tmp_path: Path, files: dict[str, str]) -> tuple[Path, str]:
     for relpath, text in files.items():
         path = repo / relpath
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(text.encode("utf-8"))
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "corpus")
     return repo, _git(repo, "rev-parse", "HEAD")
+
+
+def test_build_preserves_committed_crlf_bytes(tmp_path):
+    text = "# Historical experience\r\n\r\nThe committed line endings remain intact.\r\n"
+    repo, _ = _repo(tmp_path, {"experience/crlf.md": text})
+    _git(repo, "config", "core.autocrlf", "false")
+    (repo / "experience/crlf.md").write_bytes(text.encode("utf-8"))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "--allow-empty", "-qm", "preserve exact CRLF source")
+    sha = _git(repo, "rev-parse", "HEAD")
+    result = build_pack(repo=repo, out_dir=tmp_path / "out", client=BuildFakeClient(), expected_sha=sha)
+    manifest = validate_release_manifest(result.manifest, expected=ExpectedContract())
+    verify_pack(result.pack_path, manifest, expected=ExpectedContract())
+    with zipfile.ZipFile(result.pack_path) as archive:
+        assert archive.read(f"{version_id_from_sha(sha)}/files/experience/crlf.md") == text.encode("utf-8")
 
 
 def test_build_from_fixed_commit(tmp_path):

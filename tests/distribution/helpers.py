@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from vaws_knowledge.distribution.manifest import (
+    CONTENT_LAYOUT,
     EMBEDDING_DIMENSION,
     EMBEDDING_MODEL,
     EMBEDDING_PROVIDER,
@@ -33,7 +34,7 @@ DOC_B = "# Beta note\n\nThe beta body records the measurement.\n"
 
 
 def make_corpus(files: dict[str, str] | None = None) -> list[dict[str, Any]]:
-    docs = files if files is not None else {"alpha.md": DOC_A, "notes/beta.md": DOC_B}
+    docs = files if files is not None else {"knowledge/alpha.md": DOC_A, "experience/notes/beta.md": DOC_B}
     entries = []
     for path in sorted(docs):
         raw = docs[path].encode("utf-8")
@@ -170,6 +171,7 @@ def make_manifest(
             "index": index,
         },
         "content": {
+            "layout": CONTENT_LAYOUT,
             "files": content_files,
             "count": len(content_files),
             "content_sha256": content_digest(content_files),

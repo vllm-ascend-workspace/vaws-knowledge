@@ -12,31 +12,14 @@ from vaws_knowledge.markdown import SHARED_BOOTSTRAP_URI, load_document, meta_pa
 from vaws_knowledge.server.layers import load_config
 
 
-def test_legacy_manifest_selects_exact_kind_files_without_searching_parent(tmp_path, monkeypatch):
-    manifest = tmp_path / "release.json"
-    manifest.write_text(json.dumps({"content": {"files": [
-        {"path": "references/legacy.md"}, {"path": "knowledge/current.md"},
-        {"path": "experience/case.md"}, {"path": "../outside.md"},
-    ]}}))
-    active = "viking://resources/shared/v0123456789ab"
-    monkeypatch.setattr("vaws_knowledge.local.shared.current_shared", lambda root: {
-        "root_uri": active, "manifest_path": str(manifest),
-    })
-    assert shared_search_uris(tmp_path, kind="knowledge") == (
-        SHARED_BOOTSTRAP_URI + "/knowledge", active + "/references/legacy.md", active + "/knowledge/current.md",
-    )
-    assert shared_search_uris(tmp_path, kind="experience") == (
-        SHARED_BOOTSTRAP_URI + "/experience", active + "/experience/case.md",
-    )
-
-
 @pytest.mark.parametrize("active", [
     "viking://resources/shared/v0123456789ab",
     "viking://resources/shared/repairs/0123456789abcdef/v0123456789ab",
 ])
 def test_bootstrap_and_exact_active_root_are_both_searched(active, monkeypatch):
     monkeypatch.setattr("vaws_knowledge.local.shared.current_shared", lambda root: {"root_uri": active})
-    assert shared_search_uris(None) == (SHARED_BOOTSTRAP_URI + "/knowledge", active + "/knowledge")
+    for kind in ("knowledge", "experience"):
+        assert shared_search_uris(None, kind=kind) == (f"{SHARED_BOOTSTRAP_URI}/{kind}", f"{active}/{kind}")
 
 
 @pytest.mark.parametrize("active", [
