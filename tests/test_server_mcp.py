@@ -124,7 +124,7 @@ class Handshake(unittest.TestCase):
         result = handle_message(service(), {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]
         self.assertEqual(
             ["knowledge_query", "knowledge_capture", "knowledge_explain",
-             "experience_query", "experience_capture", "experience_explain"],
+             "experience_query", "experience_capture", "experience_explain", "experience_feedback"],
             [tool["name"] for tool in result["tools"]],
         )
         for tool in result["tools"]:
@@ -135,11 +135,12 @@ class Handshake(unittest.TestCase):
         properties = {tool["name"]: set(tool["inputSchema"]["properties"]) for tool in result["tools"]}
         self.assertEqual({
             "knowledge_query": {"text", "limit"},
-            "knowledge_capture": {"title", "content"},
+            "knowledge_capture": {"title", "content", "ref", "public_relpath"},
             "knowledge_explain": {"ref"},
             "experience_query": {"text", "limit"},
-            "experience_capture": {"title", "content"},
+            "experience_capture": {"title", "content", "ref", "public_relpath"},
             "experience_explain": {"ref"},
+            "experience_feedback": {"ref", "vote"},
         }, properties)
 
     def test_notifications_get_no_response(self):
@@ -390,7 +391,7 @@ class StdioSubprocessHandshake(unittest.TestCase):
             listed = recv()
             names = [tool["name"] for tool in listed["result"]["tools"]]
             self.assertEqual(names, ["knowledge_query", "knowledge_capture", "knowledge_explain",
-                                     "experience_query", "experience_capture", "experience_explain"])
+                                     "experience_query", "experience_capture", "experience_explain", "experience_feedback"])
             send(
                 {
                     "jsonrpc": "2.0",

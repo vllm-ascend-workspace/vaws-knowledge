@@ -23,6 +23,16 @@ certifies a claim. Use `experience_capture(title, content)` for a case, and
 `knowledge_capture(title, content)` for an assessed current conclusion; link
 related notes when useful. Do not bulk move old notes into current knowledge.
 
+Maintain knowledge by its fixed category/entry path. Two knowledge entries do not
+become one because their text matches. Experiences have persistent case identities;
+similar titles or symptoms can describe distinct investigations. Correct an existing
+candidate with `ref` when calling capture, especially when changing its title.
+Use `public_relpath="knowledge/CATEGORY/ENTRY.md"` to create or update a classified
+entry, or an existing `experience/CASE.md` to correct a shared case. Omit the outer
+`corpus/` prefix. Shared changes become local candidates and follow authorized
+redacted contribution; do not write a release or allocate a new filename for a
+correction. Existing filenames, including old hash prefixes, remain stable.
+
 - Merge duplicates only when they describe the same behavior under compatible
   conditions. Keep differing versions, topologies or observations visible.
 - Separate a confirmed cause from a plausible explanation. Preserve useful
@@ -60,3 +70,9 @@ work. Internal publishing formats and states are not Agent authoring inputs.
 Report the substantive edits, any unresolved differences, and contribution
 status when relevant. Reuse the existing summary instead of authoring another
 report for the knowledge store.
+
+For a published experience, optional `experience_feedback(ref, vote)` records
+`+1` when it helped or `-1` when it misled the work. No reason or extra summary is
+required. Configured sharing reuses the GitHub account's reaction on a feedback
+Issue, without changing the article or creating a contribution PR. Do not treat
+reaction counts as truth, and do not make feedback a task completion step.

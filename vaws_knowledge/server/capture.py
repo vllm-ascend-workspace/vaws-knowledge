@@ -11,12 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from vaws_knowledge.contribution.documents import require_public_relpath, safe_file_path
+from vaws_knowledge.contribution.errors import IdentityError
 from vaws_knowledge.local.backend import backend_for_config
 from vaws_knowledge.local.reconcile import remember_document
 from vaws_knowledge.markdown import (
     delete_document,
     document_slug,
-    find_by_title,
     iter_markdown_files,
     load_document,
     relative_posix,
@@ -61,9 +62,38 @@ def candidate_root(config: ServiceConfig, *, create: bool = True) -> Path:
     return root
 
 
-def _proposed_identity(root: Path, heading: str, *, kind: str) -> tuple[str, str, Path, bool]:
-    existing = find_by_title(root, heading, layer="candidate", kind=kind)
-    if existing is not None:
+def _proposed_identity(
+    root: Path, heading: str, *, kind: str, ref: str | None = None,
+    public_relpath: str | None = None,
+) -> tuple[str, str, Path, bool]:
+    if ref is not None and public_relpath is not None:
+        raise CaptureRejected(["use either a candidate ref or a public_relpath"])
+    if ref is not None:
+        matches = []
+        for candidate in iter_markdown_files(root, kind=kind):
+            document = load_document(candidate, layer="candidate", root=root, kind=kind)
+            if ref in {document.uri, str(document.path), document.path.name, document.slug}:
+                matches.append(document)
+        if len(matches) != 1:
+            raise CaptureRejected(["candidate ref must identify exactly one document in this store"])
+        document = matches[0]
+        return document.slug, document.uri, document.path, True
+    if public_relpath is not None:
+        try:
+            relative = require_public_relpath(public_relpath, kind).split("/", 1)[1]
+            path = safe_file_path(root, relative)
+        except IdentityError as exc:
+            raise CaptureRejected([str(exc)]) from exc
+        return path.stem, uri_for("candidate", relative, kind=kind), path, path.is_file()
+    matches = []
+    for candidate in iter_markdown_files(root, kind=kind):
+        existing = load_document(candidate, layer="candidate", root=root, kind=kind)
+        if existing.title.strip() == heading:
+            matches.append(existing)
+    if len(matches) > 1:
+        raise CaptureRejected(["multiple candidates share this title; specify ref or public_relpath"])
+    if matches:
+        existing = matches[0]
         return existing.slug, existing.uri, existing.path, True
     ident = document_slug(heading)
     path = root / f"{ident}.md"
@@ -74,6 +104,8 @@ def capture(
     *,
     title: str | None = None,
     content: str | None = None,
+    ref: str | None = None,
+    public_relpath: str | None = None,
     layer: str = "candidate",
     config: ServiceConfig | None = None,
     source: Mapping[str, Any] | None = None,
@@ -105,7 +137,9 @@ def capture(
 
     config = config or load_config()
     root = candidate_root(config, create=not dry_run)
-    ident, uri, path, updating = _proposed_identity(root, heading, kind=config.kind)
+    ident, uri, path, updating = _proposed_identity(
+        root, heading, kind=config.kind, ref=ref, public_relpath=public_relpath,
+    )
     if dry_run:
         return {
             "ok": True,
@@ -126,7 +160,7 @@ def capture(
         kind=config.kind,
         title=heading,
         content=body,
-        path=path if updating else None,
+        path=path if updating or public_relpath is not None else None,
         slug=None if updating else ident,
         source=source,
         conditions=conditions,
@@ -168,7 +202,7 @@ def capture(
         payload["degraded"] = bool(index)
     from vaws_knowledge.publishing import queue_capture
 
-    payload["contribution"] = queue_capture(config, document.path)
+    payload["contribution"] = queue_capture(config, document.path, public_relpath=public_relpath)
     return payload
 
 

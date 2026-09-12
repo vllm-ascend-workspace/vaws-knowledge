@@ -130,7 +130,8 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "knowledge_capture",
         "description": (
-            "Save a current knowledge note; the same title updates its body in the knowledge store. "
+            "Save a current knowledge note; use ref to revise a candidate even when renaming it, "
+            "or public_relpath to create or revise a fixed knowledge entry. Without either, an unambiguous matching title updates its body. "
             "Writing does not certify correctness or freshness. No template or separate report is required. "
             "Keep known conditions, sources and uncertainty in the prose. "
             "Sharing follows the user's existing publishing configuration."
@@ -138,7 +139,11 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "required": ["title", "content"],
-            "properties": {"title": {"type": "string"}, "content": {"type": "string"}},
+            "properties": {
+                "title": {"type": "string"}, "content": {"type": "string"},
+                "ref": {"type": "string", "description": "Existing candidate reference returned by capture/query; exclusive with public_relpath."},
+                "public_relpath": {"type": "string", "description": "Corpus path including kind: knowledge/graph/buffers.md creates or updates a fixed entry; experience/case.md revises an existing case. Writes a local candidate; public transport follows configured authorization."},
+            },
             "additionalProperties": False,
         },
     },
@@ -163,7 +168,9 @@ EXPERIENCE_DESCRIPTIONS = {
     "capture": (
         "Save a historical experience in a separate local Markdown store. Keep what happened, "
         "conditions, evidence and uncertainty in ordinary prose; the same title updates this "
-        "experience. Reuse useful existing text. Sharing follows configured authorization."
+        "experience. Use ref to revise a candidate including its title, or public_relpath with "
+        "experience/relative-file.md to revise a shared experience. Reuse useful existing text. "
+        "Sharing follows configured authorization."
     ),
     "explain": (
         "Read a historical experience and its recorded context. Distinguish observed results "
@@ -175,6 +182,22 @@ TOOLS += [
      "description": EXPERIENCE_DESCRIPTIONS[tool["name"].removeprefix("knowledge_")]}
     for tool in TOOLS
 ]
+TOOLS.append({
+    "name": "experience_feedback",
+    "description": (
+        "Optionally react +1 when a published experience helped, or -1 when it misled the work. "
+        "No explanation or extra summary is required. Uses the configured GitHub account and "
+        "sharing authorization; repeated votes do not accumulate. Feedback is usefulness, not proof of correctness."
+    ),
+    "inputSchema": {
+        "type": "object", "required": ["ref", "vote"],
+        "properties": {
+            "ref": {"type": "string", "description": "Published shared experience reference, or experience/relative-file.md."},
+            "vote": {"type": "string", "enum": ["+1", "-1"]},
+        },
+        "additionalProperties": False,
+    },
+})
 
 
 def _sdk_available() -> bool:
@@ -311,11 +334,18 @@ class KnowledgeService:
     def experience_capture(self, args: Mapping[str, Any]) -> dict[str, Any]:
         return self._capture(args, kind="experience")
 
+    def experience_feedback(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        from vaws_knowledge.feedback import experience_feedback
+
+        return experience_feedback(self.config, args.get("ref"), args.get("vote"))
+
     def _capture(self, args: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
         config = self.config.for_kind(kind)
         payload = capture(
             title=str(args.get("title") or ""),
             content=str(args.get("content") or ""),
+            ref=args.get("ref"),
+            public_relpath=args.get("public_relpath"),
             config=config,
             index=False,
         )
@@ -334,6 +364,7 @@ class KnowledgeService:
             "experience_query": self.experience_query,
             "experience_capture": self.experience_capture,
             "experience_explain": self.experience_explain,
+            "experience_feedback": self.experience_feedback,
         }
         handler = handlers.get(name)
         if handler is None:

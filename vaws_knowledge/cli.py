@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
             "capture",
             "experience-query",
             "experience-capture",
+            "experience-feedback",
             "contribution",
             "distribution",
             "publishing",
@@ -91,6 +92,10 @@ def main(argv: list[str] | None = None) -> int:
         from vaws_knowledge.contribution.__main__ import main as contribution_main
 
         return contribution_main(rest)
+    if command == "experience-feedback":
+        from vaws_knowledge.feedback_cli import main as feedback_main
+
+        return feedback_main(rest)
     if command == "distribution":
         from vaws_knowledge.distribution.__main__ import main as distribution_main
 

@@ -23,15 +23,16 @@ from vaws_knowledge.server.layers import ServiceConfig, load_config
 DEFAULT_CORPUS = "vllm-ascend-workspace/vaws-knowledge-corpus"
 
 
-def queue_capture(config: ServiceConfig, candidate: Path) -> dict[str, Any]:
+def queue_capture(config: ServiceConfig, candidate: Path, *, public_relpath: str | None = None) -> dict[str, Any]:
     settings = config.publishing
     if not settings.get("enabled") or not settings.get("fork"):
         return {"status": "local_only"}
     try:
         root = instance_for_config(config).state_root
         record = prepare_candidate(candidate, state_root=root, public_root=root / "contribution" / "public",
-                                   kind=config.kind)
-        return {"status": record.status, "pr_url": record.pr_url, "kind": record.kind}
+                                   kind=config.kind, public_relpath=public_relpath)
+        return {"status": record.status, "pr_url": record.pr_url, "kind": record.kind,
+                "public_relpath": record.public_relpath}
     except Exception as exc:  # local capture is already durable
         return {"status": "prepare_failed", "reason": str(exc)[:600]}
 
@@ -83,16 +84,17 @@ def run_once(config: ServiceConfig, *, force: bool = False, verify: bool = False
                             pull = github.get(f"/repos/{settings['repository']}/pulls/{record.pr_number}")
                             if pull.get("state") == "closed":
                                 record.status = "merged" if pull.get("merged") else "closed"
-                                save_pending(root, record)
+                                record = save_pending(root, record, expected_revision=record.revision)
                             result["contributions"].append({"status": record.status, "pr_url": record.pr_url,
-                                                             "kind": record.kind})
+                                                             "kind": record.kind, "public_relpath": record.public_relpath})
                             continue
                         saved = submit_pending(
                             record, state_root=root, public_root=root / "contribution" / "public",
                             git_repo=Path(settings["git_repo"]), github=github, config=submit_config,
                         )
                         result["contributions"].append({"status": saved.status, "pr_url": saved.pr_url,
-                                                         "reason": saved.last_error, "kind": saved.kind})
+                                                         "reason": saved.last_error, "kind": saved.kind,
+                                                         "public_relpath": saved.public_relpath})
                 except Exception as exc:
                     result["contribution_error"] = str(exc)[:1000]
                     result["status"] = "partial"
@@ -188,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
                 "enabled": bool(config.publishing.get("enabled")),
                 "last_check": read_json(root / "publishing.json"),
                 "contributions": [{"title": r.title, "status": r.status, "pr_url": r.pr_url, "kind": r.kind,
-                                    "reason": r.last_error} for r in iter_pending(root)],
+                                    "reason": r.last_error, "public_relpath": r.public_relpath} for r in iter_pending(root)],
             }
     except Exception as exc:
         print(json.dumps({"status": "error", "reason": str(exc)}, ensure_ascii=False))

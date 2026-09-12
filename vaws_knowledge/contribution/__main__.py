@@ -22,6 +22,7 @@ def _cmd_prepare(args: argparse.Namespace) -> int:
         state_root=Path(args.state_root),
         public_root=Path(args.public_root),
         kind=args.kind,
+        public_relpath=args.public_relpath,
     )
     return _print(record.to_dict())
 
@@ -63,6 +64,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare.add_argument("--state-root", required=True)
     prepare.add_argument("--public-root", required=True)
     prepare.add_argument("--kind", choices=("knowledge", "experience"), default="knowledge")
+    prepare.add_argument("--public-relpath", help="fixed knowledge/entry.md or existing experience/case.md corpus path")
     prepare.set_defaults(func=_cmd_prepare)
 
     submit = sub.add_parser("submit", help="submit pending public copies (needs transport)")

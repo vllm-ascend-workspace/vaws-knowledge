@@ -24,12 +24,24 @@ OpenViking service and embedding model:
 | Current knowledge | `knowledge_query(text, limit=8)` | `knowledge_explain(ref)` | `knowledge_capture(title, content)` |
 | Historical cases | `experience_query(text, limit=8)` | `experience_explain(ref)` | `experience_capture(title, content)` |
 
-Capturing the same title updates that note within the selected store. A knowledge
+Capturing an unambiguous matching title updates that note within the selected store.
+Use optional `ref` to correct a candidate while changing its title. Knowledge uses
+fixed semantic paths: optional `public_relpath="knowledge/graph/buffers.md"` creates
+or updates that entry. Experiences keep a persistent case ID; an existing
+`experience/CASE.md` selects a shared case for correction. Public filenames stay
+fixed across edits, and content hashes only detect changes and check integrity.
+A knowledge
 write does not certify correctness or freshness; Agents must assess evidence and
 current source before making a current claim. Related notes can link to each
 other. Existing notes are not automatically moved or promoted between stores.
 Untyped legacy notes remain reachable through knowledge for compatibility; this
 does not assert that they have been checked against current main.
+For a published case, `experience_feedback(ref, vote="+1")` or `vote="-1"`
+optionally records whether it helped or misled the work. No reason is required.
+The tool reuses configured GitHub sharing and reacts on a feedback Issue; one
+account's repeated vote does not accumulate. Votes do not certify correctness
+or alter retrieval ranking. See [publishing](docs/publishing.md#experience-feedback).
+
 A title and non-empty Markdown body are enough. Keep known conditions, versions,
 evidence and uncertainty in the prose. No frontmatter, fixed headings, runtime
 coordinates, verification label or task association is required.

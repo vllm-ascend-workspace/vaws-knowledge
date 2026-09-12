@@ -20,8 +20,11 @@ With public sharing enabled, a new capture saves a private Markdown candidate an
 prepares a redacted public copy in local state. The MCP service retries pending
 submissions in the background, pushes the content branch to the fork, then opens
 or reuses a PR. Offline or authentication failure keeps the pending record.
-Re-delivery of the same content and kind reuses the record. Closed/merged PRs are recorded
-and are not reopened automatically. Existing private candidates are not bulk
+Re-delivery of an unchanged revision reuses the record. Document paths are stable:
+knowledge has semantic entry paths and experience has persistent case IDs.
+Content corrections update the same file and open PR. After a closed or merged
+PR, a new revision starts a fresh branch and PR against current upstream at the
+same path; unchanged content does not reopen it. Existing private candidates are not bulk
 submitted when configuration is enabled.
 
 Shared source files live in separate `knowledge/` and `experience/` directories
@@ -41,6 +44,16 @@ two independent contributions. Manual preparation accepts
 knowledge entry. `contribution submit --kind experience` selects that pending
 kind; without the option it can resume either kind. Preparation never rewrites
 the private source.
+
+Capture accepts optional `ref` to correct an existing local candidate, including
+its title, or `public_relpath` to select a corpus entry. For knowledge,
+`knowledge/CATEGORY/ENTRY.md` creates or updates that fixed entry. For experience,
+`experience/CASE.md` must already exist on the submission base. These options are
+mutually exclusive; the equivalent CLI options are `--ref` and `--public-relpath`.
+Contribution preparation also accepts `--public-relpath`. Capture and publishing
+status return the assigned public path, without the outer `corpus/` prefix.
+Different knowledge paths are independent even when their content matches.
+Existing names stay unchanged; content hashes do not dictate filenames.
 
 PR checks validate Markdown and redaction. **Human reviewers merge knowledge
 PRs.** This path needs no automatic reviewer or model credential. PR preparation,
@@ -85,6 +98,31 @@ tenant contract. Status output carries no keys.
 `vaws-knowledge publishing status --config PATH` reports the last check and PRs.
 `vaws-knowledge publishing once --config PATH` performs one explicit recovery
 or verification pass; normal capture does not need this command.
+
+## Experience feedback
+
+`experience_feedback(ref, vote)` is an optional lightweight signal: `+1` if a
+published case helped, `-1` if it misled the work. It requires no explanation,
+new summary or candidate capture. Not using a case does not require feedback.
+The CLI equivalent is `vaws-knowledge experience-feedback --ref experience/CASE.md
+--vote=+1` (or `--vote=-1`). Shared experience result references are also accepted;
+local candidates, knowledge and project references are not public feedback targets.
+
+With configured sharing authorization, the tool reuses GitHub authentication,
+checks the case exists in the canonical corpus, then creates or reuses its feedback
+Issue and adds a [GitHub reaction](https://docs.github.com/en/rest/reactions/reactions#create-reaction-for-an-issue).
+It uploads only the public case path and vote, with no session content or reason.
+The response contains the Issue link and reaction counts. Issues remain separate
+from source Markdown and release packs; feedback does not rewrite the case,
+change retrieval ranking or promote it into maintained knowledge.
+
+Votes belong to GitHub accounts, not tasks: retrying the same vote does not add
+another, and changing one's vote replaces the prior reaction. Counts reflect
+reported usefulness, not proof of correctness or applicability. GitHub remains
+the feedback authority; there is no separate feedback database. Transport failure
+is returned for retry without failing unrelated work. Concurrent first submissions
+from different clients can create duplicate Issues because GitHub provides no
+unique creation key; maintainers can consolidate those rare duplicates.
 
 ## Native-client summaries
 

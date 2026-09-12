@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import os
+import tempfile
 
 from vaws_knowledge import redact
-from vaws_knowledge.contribution.documents import MarkdownDocument, public_filename, render_markdown, require_kind
+from vaws_knowledge.contribution.documents import MarkdownDocument, public_filename, render_markdown, require_kind, require_public_relpath, safe_file_path
 from vaws_knowledge.contribution.errors import DocumentRejected
 
 
@@ -68,10 +70,13 @@ def prepare_public_copy(
     public_root: Path | None = None,
     allow: redact.Allowlist | None = None,
     kind: str = "knowledge",
+    public_relpath: str | None = None,
 ) -> PublicCopy:
     """Return a public Markdown copy. The caller must not write back to the candidate."""
 
     kind = require_kind(kind)
+    if public_relpath is not None:
+        require_public_relpath(public_relpath, kind)
     try:
         original = MarkdownDocument.from_text(source_text)
     except DocumentRejected as exc:
@@ -111,9 +116,9 @@ def prepare_public_copy(
     public_text = render_markdown(public_doc.title, public_doc.body)
     dest: Path | None = None
     if public_root is not None:
-        dest = Path(public_root) / kind / public_filename(public_doc.digest, public_doc.title)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(public_text, encoding="utf-8", newline="\n")
+        relative = public_relpath or f"{kind}/{public_filename(public_doc.title, kind)}"
+        dest = safe_file_path(public_root, relative)
+        write_public_text(dest, public_text)
     return PublicCopy(
         document=public_doc,
         text=public_text,
@@ -121,3 +126,16 @@ def prepare_public_copy(
         redacted_spans=[item.rule for item in findings],
         kind=kind,
     )
+
+
+def write_public_text(dest: Path, text: str) -> None:
+    """Readers see either the complete old revision or the complete new one."""
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".public-", dir=str(dest.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(temporary, dest)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
