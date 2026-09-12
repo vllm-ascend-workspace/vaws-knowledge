@@ -22,6 +22,7 @@ _TITLE_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 
 LAYERS = ("shared", "project", "candidate")
 URI_ROOT = "viking://resources"
+SHARED_BOOTSTRAP_URI = f"{URI_ROOT}/shared/bootstrap"
 _TITLE_DIGEST_LEN = 12
 
 
@@ -67,7 +68,8 @@ def uri_for(layer: str, relative: str) -> str:
     name = str(relative or "").replace("\\", "/").lstrip("/")
     if not name.endswith(".md"):
         name = f"{name}.md"
-    return f"{URI_ROOT}/{layer}/{name}"
+    root = SHARED_BOOTSTRAP_URI if layer == "shared" else f"{URI_ROOT}/{layer}"
+    return f"{root}/{name}"
 
 
 def layer_from_uri(uri: str) -> str | None:
@@ -211,7 +213,9 @@ def load_document(path: Path, *, layer: str, root: Path | None = None) -> Docume
         content=content,
         slug=str(meta.get("slug") or rel_slug),
         path=path,
-        uri=str(meta.get("uri") or uri_for(layer, rel)),
+        # Files mounted as shared are the local bootstrap source. Old sidecar
+        # identities must not place them inside a versioned imported pack.
+        uri=uri_for(layer, rel) if layer == "shared" else str(meta.get("uri") or uri_for(layer, rel)),
         status=str(meta["status"]) if meta.get("status") else None,
         source=source,
         conditions=conditions,

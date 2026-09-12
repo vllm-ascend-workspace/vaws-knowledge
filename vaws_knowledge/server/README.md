@@ -24,7 +24,8 @@ without trust ranking, status filtering or applicability verdicts.
 Responses identify unavailable storage or indexes separately from an empty
 result. Neither is evidence that a claim is absent, supported or safe to ignore.
 The Agent can continue independent work. MCP capture saves the Markdown without
-waiting for an index or retrieval startup; queries reconcile local changes later.
+waiting for an index or retrieval startup; the MCP worker reconciles changes later.
+Queries only read the ready index and report pending maintenance when necessary.
 Configured public sharing uses a separate redacted copy and follows the existing
 authorization. Summary hooks can save locally while public sharing is disabled.
 
@@ -41,12 +42,26 @@ These locations are package configuration, not an author-managed lifecycle:
 Shared updates preserve the project and candidate locations. There is no
 promotion requirement from one location to another. Missing project configuration
 does not prevent using local notes.
-Bundled or mounted shared Markdown is indexed when queried; no release build is
+Preparation indexes bundled or mounted shared Markdown; no release build is
 needed first. Once a prebuilt shared pack is active, its stored vectors are reused
 and `knowledge_explain(ref)` reads its original Markdown. Both paths are internal
-to the package.
+to the package. Bundled notes and the current pack use separate namespaces and
+remain available together; obsolete pack versions are excluded from retrieval.
 
 For a standalone configured project:
+
+```sh
+vaws-knowledge prepare --project /path/to/project
+```
+
+This creates `.vaws-local/knowledge/service.json`, downloads the CPU model as
+needed, prepares the available sources, and verifies index readiness. It returns
+JSON with `ready` and status, with exit code 0 for ready or 1 for pending. Offline
+or partial preparation remains explicit; the MCP worker retries quietly.
+Existing mounts and public contribution settings are preserved. The workspace's
+dependency installation invokes this entry internally.
+
+Storage can also be configured directly:
 
 ```json
 {
@@ -72,6 +87,11 @@ The installed package owns the local OpenViking instance and CPU embedding.
 This service performs no NPU execution. Index reconciliation and configured
 submission/sync run inside the package; callers do not sequence these operations
 after each capture.
+Every ten seconds the worker checks local changes; hourly integrity passes
+compare stored content and actual index records. Shared sync verifies the active
+pack even when its release version has not changed. Missing derived content is
+restored from Markdown or a verified pack. One process lock shares maintenance
+across MCP connections; failed work retries without changing source notes.
 
 ## Implementation reference
 

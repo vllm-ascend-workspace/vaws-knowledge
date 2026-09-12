@@ -58,11 +58,19 @@ def make_pack(
     """Write a synthetic OVPack zip; returns the embedded index block."""
 
     root = root_name or version_id_from_sha(GIT_SHA)
-    dense_raw = b"\x00\x00\x80?" * dimensions * max(len(entries), 1)
+    count = len(entries) + 1
+    dense_raw = b"\x00\x00\x80?" * dimensions * count
     dense_sha = hashlib.sha256(dense_raw).hexdigest()
     if corrupt_dense:
         dense_raw = dense_raw + b"corrupt"  # content no longer matches the index sha
-    records_raw = (json.dumps({"entries": len(entries)}) + "\n").encode("utf-8")
+    rows = []
+    for position, (path, kind, level) in enumerate(
+        [("", "directory", 0)] + [(entry["path"], "file", 2) for entry in entries]
+    ):
+        rows.append({"record_id": f"r{position + 1:06d}", "path": path, "kind": kind,
+                     "level": level, "vector": {"dense": {"offset": position * dimensions,
+                                                             "dimensions": dimensions}}})
+    records_raw = ("\n".join(json.dumps(row) for row in rows) + "\n").encode("utf-8")
     index = {
         "dense": {
             "byte_order": byte_order,
@@ -199,6 +207,7 @@ class FakeClient:
         self.consistency_ok = consistency_ok
         self.import_kwargs: dict[str, Any] = {}
         self.on_wait_processed: Any = None
+        self.corrupt_vectors: set[str] = set()
 
     def stat(self, uri: str) -> dict[str, Any]:
         self.calls.append(("stat", uri))
@@ -233,7 +242,24 @@ class FakeClient:
 
     def export_ovpack(self, uri: str, to: str, include_vectors: bool = False) -> str:
         self.calls.append(("export_ovpack", {"uri": uri, "include_vectors": include_vectors}))
-        raise NotImplementedError("logic tests stub export via make_pack")
+        if uri not in self.trees:
+            raise RuntimeError(f"NOT_FOUND: {uri}")
+        root = uri.rsplit("/", 1)[-1]
+        entries = make_corpus(self.trees[uri])
+        make_pack(Path(to), entries, root_name=root)
+        if uri in self.corrupt_vectors:
+            with zipfile.ZipFile(to) as archive:
+                members = {name: archive.read(name) for name in archive.namelist()}
+            dense_path = f"{root}/_ovpack/dense.f32"
+            members[dense_path] = b"\x00\x00\x00@" + members[dense_path][4:]
+            manifest_path = f"{root}/_ovpack/manifest.json"
+            embedded = json.loads(members[manifest_path])
+            embedded["index"]["dense"]["sha256"] = hashlib.sha256(members[dense_path]).hexdigest()
+            members[manifest_path] = json.dumps(embedded).encode()
+            with zipfile.ZipFile(to, "w") as archive:
+                for name, raw in members.items():
+                    archive.writestr(name, raw)
+        return to
 
     def import_ovpack(
         self,

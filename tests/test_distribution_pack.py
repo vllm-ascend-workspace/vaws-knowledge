@@ -14,7 +14,7 @@ from distribution.helpers import GIT_SHA, make_corpus, make_manifest, make_pack
 
 from vaws_knowledge.distribution.errors import CorruptPack, IncompatiblePack
 from vaws_knowledge.distribution.manifest import ExpectedContract, validate_release_manifest
-from vaws_knowledge.distribution.pack import inspect_pack, verify_model_files, verify_pack
+from vaws_knowledge.distribution.pack import inspect_pack, verify_imported_pack, verify_model_files, verify_pack
 
 
 def _verified_inputs(tmp_path: Path, **pack_kwargs):
@@ -32,6 +32,49 @@ def test_good_pack_verifies(tmp_path):
     info = verify_pack(pack_path, manifest, expected=ExpectedContract())
     assert info.root_name == "v" + GIT_SHA[:12]
     assert info.dense["dimensions"] == 384
+
+
+def test_runtime_export_record_order_and_ids_do_not_change_integrity(tmp_path):
+    import hashlib
+    import struct
+
+    source, _manifest = _verified_inputs(tmp_path)
+    info = inspect_pack(source)
+    root = info.root_name
+    with zipfile.ZipFile(source) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    manifest_name = f"{root}/_ovpack/manifest.json"
+    records_name = f"{root}/_ovpack/index_records.jsonl"
+    dense_name = f"{root}/_ovpack/dense.f32"
+    rows = [json.loads(line) for line in members[records_name].splitlines()]
+    dimension = info.dense["dimensions"]
+    values = [struct.pack("<f", float(index + 1)) * dimension for index in range(len(rows))]
+
+    def write_pack(path, reordered):
+        exported = dict(members)
+        ordered = list(reversed(list(zip(rows, values)))) if reordered else list(zip(rows, values))
+        copied_rows = []
+        for index, (row, _raw) in enumerate(ordered):
+            copied = json.loads(json.dumps(row))
+            copied["record_id"] = f"changed-{index}"
+            copied["vector"]["dense"]["offset"] = index * dimension
+            copied_rows.append(copied)
+        exported[records_name] = ("\n".join(json.dumps(row) for row in copied_rows) + "\n").encode()
+        exported[dense_name] = b"".join(raw for _row, raw in ordered)
+        embedded = json.loads(exported[manifest_name])
+        embedded["root"]["uri"] = "viking://resources/shared/different-location"
+        embedded["index"]["records"]["sha256"] = hashlib.sha256(exported[records_name]).hexdigest()
+        embedded["index"]["dense"]["sha256"] = hashlib.sha256(exported[dense_name]).hexdigest()
+        exported[manifest_name] = json.dumps(embedded).encode()
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, raw in exported.items():
+                archive.writestr(name, raw)
+
+    original, reordered = tmp_path / "original.ovpack", tmp_path / "reordered.ovpack"
+    write_pack(original, False)
+    write_pack(reordered, True)
+    result = verify_imported_pack(reordered, original)
+    assert result == {"verified_files": 2, "verified_vectors": 3}
 
 
 def test_size_mismatch_rejected(tmp_path):

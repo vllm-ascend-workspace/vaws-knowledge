@@ -179,6 +179,7 @@ class KnowledgeService:
         today: _dt.date | None = None,
     ):
         self.today = today
+        self.maintenance = None
         self.config_error: str | None = None
         if config is not None:
             self.config = config
@@ -270,6 +271,8 @@ class KnowledgeService:
             index=False,
         )
         payload = self.with_environment(payload)
+        if self.maintenance is not None:
+            self.maintenance.request()
         return payload
 
     def call_tool(self, name: str, args: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -491,9 +494,13 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(service.server_info(), indent=2, ensure_ascii=False))
         return 0
 
-    from vaws_knowledge.publishing import PublishingWorker
+    if service.config_error:
+        return serve(service=service)
 
-    worker = PublishingWorker(service.config)
+    from vaws_knowledge.maintenance import MaintenanceWorker
+
+    worker = MaintenanceWorker(service.config)
+    service.maintenance = worker
     worker.start()
     try:
         return serve(service=service)

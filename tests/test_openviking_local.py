@@ -12,6 +12,8 @@ from pathlib import Path
 from vaws_knowledge.server.capture import capture, delete
 from vaws_knowledge.server.layers import load_config
 from vaws_knowledge.server.query import explain, query
+from vaws_knowledge.local.reconcile import reconcile_markdown
+from vaws_knowledge.maintenance import maintain
 
 
 def _openviking_ready() -> bool:
@@ -41,6 +43,7 @@ class LiveOpenViking(unittest.TestCase):
         self.config = load_config(
             {
                 "backend": "openviking",
+                "shared_sync": {"enabled": False},
                 "state_root": str(state),
                 "layers": {
                     "shared": {"enabled": False},
@@ -83,6 +86,8 @@ class LiveOpenViking(unittest.TestCase):
         from vaws_knowledge.local.instance import instance_for_config
 
         instance_for_config(self.config).stop()
+        self.assertTrue(query(self.config, text="slot mapping").unavailable)
+        self.assertTrue(maintain(self.config, verify=True)["ready"])
         restarted = query(self.config, text="slot mapping").to_dict()
         self.assertGreaterEqual(restarted["count"], 1, restarted)
 
@@ -96,6 +101,7 @@ class LiveOpenViking(unittest.TestCase):
             "# Project graph knowledge\n\nProject graph padding uses a unique canary named projectquartz.\n",
             encoding="utf-8",
         )
+        self.assertTrue(maintain(self.config, verify=True)["ready"])
         found = query(
             self.config, text="project graph padding projectquartz", layers=["project"]
         ).to_dict()
@@ -108,6 +114,7 @@ class LiveOpenViking(unittest.TestCase):
             "# Project graph knowledge\n\nUpdated project padding canary named projectonyx.\n",
             encoding="utf-8",
         )
+        self.assertTrue(reconcile_markdown(self.config).ok)
         edited = query(self.config, text="projectonyx", layers=["project"]).to_dict()
         self.assertGreaterEqual(edited["count"], 1, edited)
         body = explain(self.config, str(note), layers=["project"])
@@ -115,6 +122,7 @@ class LiveOpenViking(unittest.TestCase):
         self.assertNotIn("projectquartz", body["content"])
 
         note.unlink()
+        self.assertTrue(reconcile_markdown(self.config).ok)
         removed = query(self.config, text="projectonyx", layers=["project"]).to_dict()
         self.assertEqual(0, removed["count"], removed)
 
@@ -123,5 +131,6 @@ class LiveOpenViking(unittest.TestCase):
             "# Offline pending\n\nPending recovery canary named pendingonyx.\n",
             encoding="utf-8",
         )
+        self.assertTrue(reconcile_markdown(self.config).ok)
         recovered = query(self.config, text="pendingonyx", layers=["candidate"]).to_dict()
         self.assertGreaterEqual(recovered["count"], 1, recovered)

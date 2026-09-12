@@ -3,17 +3,18 @@
 distribution.current_shared(state_root) will return None or
 {source_git_sha, root_uri, manifest_path}. This module reads that result when
 the distribution package is present, otherwise a local current.json. Search
-must use the active root only so an imported new version cannot mix with an
-old one.
+uses the local bootstrap and the active release as separate roots. It never
+searches their shared parent, which can also contain inactive releases.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
-from vaws_knowledge.markdown import URI_ROOT
+from vaws_knowledge.markdown import SHARED_BOOTSTRAP_URI, URI_ROOT
 
 DEFAULT_SHARED_URI = f"{URI_ROOT}/shared"
 
@@ -57,7 +58,24 @@ def current_shared(state_root: Path | None) -> dict[str, Any] | None:
 
 
 def shared_search_uri(state_root: Path | None) -> str:
+    """The active release root, or bootstrap when no safe release is active."""
+
+    return shared_search_uris(state_root)[-1]
+
+
+def shared_search_uris(state_root: Path | None) -> tuple[str, ...]:
+    """Return non-overlapping bootstrap and active-release search roots."""
+
+    roots = [SHARED_BOOTSTRAP_URI]
     current = current_shared(state_root)
-    if current and current.get("root_uri"):
-        return str(current["root_uri"])
-    return DEFAULT_SHARED_URI
+    active = str(current.get("root_uri") or "").rstrip("/") if current else ""
+    # Releases are direct children, or one exact repair generation. Reject
+    # broad parents rather than retrieving inactive versions or bootstrap a
+    # second time. The repair layout is owned by distribution.sync.
+    prefix = DEFAULT_SHARED_URI + "/"
+    version = active[len(prefix):] if active.startswith(prefix) else ""
+    direct = version and version not in {".", "..", "bootstrap", "repairs"} and "/" not in version
+    repair = re.fullmatch(r"repairs/[0-9a-f]{16}/v[0-9a-f]{12}", version)
+    if direct or repair:
+        roots.append(active)
+    return tuple(roots)

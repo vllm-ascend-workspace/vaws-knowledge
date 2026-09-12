@@ -236,6 +236,90 @@ def verify_pack(
     return info
 
 
+def _portable_snapshot(pack_path: Path) -> tuple[dict[str, str], dict[tuple[str, str, int], str]]:
+    """Content and dense values, independent of export order and destination URI.
+
+    OpenViking 0.4.19 exports JSONL records with path/kind/level and a dense
+    offset measured in float32 values. Record ids and offsets can change on a
+    second export, so compare values by their portable identity instead.
+    """
+    info = inspect_pack(pack_path)
+    dense, records = info.dense, info.index.get("records") or {}
+    if dense.get("dtype") != "float32" or dense.get("byte_order") != "little":
+        raise CorruptPack("runtime export has no compatible float32 dense snapshot")
+    dimension = dense.get("dimensions")
+    if not isinstance(dimension, int) or dimension <= 0:
+        raise CorruptPack("runtime export has an invalid dense dimension")
+    files: dict[str, str] = {}
+    vectors: dict[tuple[str, str, int], str] = {}
+    with zipfile.ZipFile(pack_path) as archive:
+        parts = []
+        for part in (records, dense):
+            path = part.get("path")
+            if not isinstance(path, str) or _unsafe_member_reason(path):
+                raise CorruptPack("runtime export has an invalid index part path")
+            raw = archive.read(f"{info.root_name}/{path}")
+            if hashlib.sha256(raw).hexdigest() != part.get("sha256"):
+                raise CorruptPack("runtime export index part checksum differs")
+            parts.append(raw)
+        records_raw, dense_raw = parts
+        try:
+            rows = [json.loads(line) for line in records_raw.splitlines() if line.strip()]
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CorruptPack("runtime export has invalid index records") from exc
+        if len(rows) != records.get("count") or len(rows) != dense.get("count"):
+            raise CorruptPack("runtime export dense and record counts differ")
+        occupied: set[int] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise CorruptPack("runtime export has a non-object index record")
+            path, kind, level = row.get("path"), row.get("kind"), row.get("level")
+            ref = (row.get("vector") or {}).get("dense") or {}
+            offset = ref.get("offset")
+            if (not isinstance(path, str) or (path and _unsafe_member_reason(path))
+                    or kind not in {"file", "directory"} or not isinstance(level, int)
+                    or not isinstance(offset, int) or offset < 0
+                    or ref.get("dimensions") != dimension or offset % dimension):
+                raise CorruptPack("runtime export has an invalid dense record")
+            key = (path, kind, level)
+            if key in vectors or offset in occupied:
+                raise CorruptPack("runtime export has duplicate dense records")
+            occupied.add(offset)
+            raw = dense_raw[offset * 4:(offset + dimension) * 4]
+            if len(raw) != dimension * 4:
+                raise CorruptPack("runtime export dense record is truncated")
+            vectors[key] = hashlib.sha256(raw).hexdigest()
+        if len(dense_raw) != len(rows) * dimension * 4:
+            raise CorruptPack("runtime export dense data length differs from its records")
+        for entry in info.entries:
+            if entry.get("kind") != "file":
+                continue
+            path = entry.get("path")
+            if not isinstance(path, str) or _unsafe_member_reason(path) or path in files:
+                raise CorruptPack("runtime export has an invalid or duplicate file entry")
+            digest = _sha256_member(archive, f"{info.root_name}/files/{path}")
+            if digest != entry.get("sha256"):
+                raise CorruptPack("runtime export file checksum differs")
+            files[path] = digest
+    return files, vectors
+
+
+def verify_imported_pack(exported: Path, verified_source: Path) -> dict[str, int]:
+    """Audit materialized Markdown and vectors against the verified release.
+
+    This uses the native vector-inclusive export, not check_consistency alone:
+    a record can exist while its source text or dense vector has been damaged.
+    No document embedding is performed by this audit.
+    """
+    expected_files, expected_vectors = _portable_snapshot(verified_source)
+    actual_files, actual_vectors = _portable_snapshot(exported)
+    if actual_files != expected_files:
+        raise CorruptPack("imported shared files differ from the verified release")
+    if actual_vectors != expected_vectors:
+        raise CorruptPack("imported shared dense vectors differ from the verified release")
+    return {"verified_files": len(actual_files), "verified_vectors": len(actual_vectors)}
+
+
 def verify_model_files(model_cache: Path, manifest: ReleaseManifest) -> list[str]:
     """Check the local read-only model cache against pinned model/tokenizer checksums.
 
