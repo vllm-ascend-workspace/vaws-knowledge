@@ -189,8 +189,19 @@ def test_shared_reference_is_resolved_to_a_stable_experience_path(ref):
     "viking://resources/shared/bootstrap/experience/%2E%2E/knowledge/example.md",
     "viking://resources/shared/bootstrap/experience/example.md?candidate=private",
     "viking://resources/shared/bootstrap/experience/example.md#private",
+    "viking://resources/shared/bootstrap/experience/exam\nple.md",
 ])
 def test_nonpublic_and_ambiguous_refs_are_rejected_before_remote_access(config, ref):
     github = FeedbackAPI()
     assert experience_feedback(config, ref, "+1", github=github)["status"] == "invalid_ref"
     assert github.calls == []
+
+
+def test_malformed_transport_payload_is_retryable(config):
+    class MalformedAPI(FeedbackAPI):
+        def get(self, path):
+            raise ValueError("malformed JSON from GitHub")
+
+    result = experience_feedback(config, RELATIVE, "+1", github=MalformedAPI())
+    assert result["status"] == "error" and result["retryable"]
+    assert "configuration" not in result["reason"]

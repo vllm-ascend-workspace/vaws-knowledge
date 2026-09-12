@@ -47,7 +47,7 @@ class _FeedbackError(Exception):
 def experience_path(ref: str) -> str:
     """Resolve only an experience path or one of the package's shared URIs."""
 
-    if not isinstance(ref, str) or not ref or ref != ref.strip():
+    if not isinstance(ref, str) or not ref or ref != ref.strip() or any(ord(char) < 32 for char in ref):
         raise IdentityError("expected a public experience path or shared experience URI")
     relative = ref
     if "://" in ref:
@@ -137,6 +137,9 @@ def experience_feedback(config: Any, ref: str, vote: str, *, github: FeedbackGit
         if prefix:
             require_relative_path(prefix)
         repo_path = "/".join(part for part in (prefix, relative) if part)
+    except (IdentityError, ValueError, TypeError, AttributeError):
+        return {"status": "error", "reason": "Feedback repository configuration is invalid.", "retryable": False}
+    try:
         github = github or UrllibFeedbackGitHub(github_token())
         try:
             document = github.get(f"/repos/{repository}/contents/{quote(repo_path, safe='/')}?ref={quote(base_ref, safe='')}")
@@ -181,7 +184,5 @@ def experience_feedback(config: Any, ref: str, vote: str, *, github: FeedbackGit
         reason = ("GitHub authentication or permission is unavailable." if exc.status in {401, 403}
                   else "GitHub feedback is temporarily unavailable.")
         return {"status": "error", **result, "reason": reason, "retryable": True}
-    except (IdentityError, ValueError, TypeError):
-        return {"status": "error", **result, "reason": "Feedback repository configuration is invalid.", "retryable": False}
     except Exception:  # Feedback is optional; failed auth/transport must not interrupt the calling task.
         return {"status": "error", **result, "reason": "GitHub feedback transport is unavailable.", "retryable": True}
