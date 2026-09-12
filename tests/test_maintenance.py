@@ -109,19 +109,36 @@ class Maintenance(unittest.TestCase):
                 worker.start()
                 worker.stop()
             tick.assert_called()
-            self.assertTrue(tick.call_args.kwargs["verify"])
+            self.assertNotIn("verify", tick.call_args.kwargs)
+
+    def test_new_connection_reuses_fresh_preparation_and_event_still_forces_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            self.assertTrue(maintain(config, verify=True)["ready"])
+            worker = MaintenanceWorker(config)
+            with patch.object(worker.wakeup, "wait", side_effect=lambda _: worker.closed.set()), \
+                    patch("vaws_knowledge.maintenance.reconcile_markdown") as reconcile:
+                worker._run()
+                reconcile.assert_not_called()
+            worker.closed.clear()
+            worker.request()
+            with patch.object(worker.wakeup, "wait", side_effect=lambda _: worker.closed.set()), \
+                    patch("vaws_knowledge.maintenance.maintain", wraps=maintain) as tick:
+                worker._run()
+            tick.assert_called_once_with(config, force=True)
 
     def test_query_without_readiness_record_is_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
             self.assertTrue(query(config, text="maintenancecanary").degraded)
 
-    def test_new_connection_rechecks_existing_ledger_after_index_loss(self):
+    def test_new_connection_rechecks_index_loss_when_shared_verification_is_due(self):
         import threading
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
             with patch("vaws_knowledge.publishing.run_once", return_value={"status": "disabled"}):
-                self.assertTrue(maintain(config, verify=True)["ready"])
+                ready = maintain(config, verify=True)
+                self.assertTrue(ready["ready"])
                 config.retrieval.documents.clear()
                 worker = MaintenanceWorker(config)
                 completed = threading.Event()
@@ -130,7 +147,8 @@ class Maintenance(unittest.TestCase):
                     worker.closed.set()
                     completed.set()
                     return result
-                with patch("vaws_knowledge.maintenance.maintain", side_effect=first_pass):
+                with patch("vaws_knowledge.maintenance.maintain", side_effect=first_pass), \
+                        patch("vaws_knowledge.maintenance.time.time", return_value=ready["next_verify"] + 1):
                     worker.start()
                     self.assertTrue(completed.wait(3))
                     worker.stop()
