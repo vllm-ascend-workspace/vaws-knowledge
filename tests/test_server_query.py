@@ -259,7 +259,7 @@ class SharedReferenceRoundTrip(unittest.TestCase):
 
         version = "v" + "a" * 12
         root_uri = "viking://resources/shared/" + version
-        ref = root_uri + "/corpus/context.md"
+        ref = root_uri + "/knowledge/corpus/context.md"
         config.retrieval = MemoryBackend()
         config.retrieval.upsert(
             ref, "# Shared observation\n\npackcanary: Only observed once; cause unknown.\n",
@@ -273,6 +273,10 @@ class SharedReferenceRoundTrip(unittest.TestCase):
             "manifest_path": str(config.state_root / "manifest.json"),
         })
         from vaws_knowledge.distribution.manifest import atomic_write_json
+        atomic_write_json(config.state_root / "manifest.json", {
+            "schema": "vaws-knowledge-release/2",
+            "content": {"layout": "kinds/v1", "files": [{"path": "knowledge/corpus/context.md"}]},
+        })
         atomic_write_json(config.state_root / "maintenance.json", {"ready": True})
         return ref
 
@@ -338,7 +342,7 @@ class SharedReferenceRoundTrip(unittest.TestCase):
             config = support.build_config(shared=str(shared), project=False, candidate=str(pathlib.Path(tmp) / "candidate"))
             config.retrieval = MemoryBackend()
             config.state_root = pathlib.Path(tmp) / "state"
-            ref = "viking://resources/shared/current-version/corpus/context.md"
+            ref = "viking://resources/shared/current-version/knowledge/corpus/context.md"
             config.retrieval.upsert(ref, "# Shared observation\n\nOnly observed once; cause unknown.\n", layer="shared")
             active = {"root_uri": "viking://resources/shared/current-version", "source_git_sha": "a" * 40}
             with patch("vaws_knowledge.server.query.current_shared", return_value=active):

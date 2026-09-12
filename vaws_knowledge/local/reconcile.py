@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from vaws_knowledge.local.backend import backend_for_config
-from vaws_knowledge.markdown import Document, URI_ROOT, iter_markdown_files, load_document, relative_posix, uri_for
+from vaws_knowledge.markdown import KINDS, Document, URI_ROOT, iter_markdown_files, load_document, relative_posix, uri_for
 from vaws_knowledge.local.instance import InstanceLock
 
 INDEX_LAYERS = ("shared", "project", "candidate")
@@ -157,7 +157,7 @@ def _scan_documents(
                     if layer == "candidate" and not base.exists():
                         continue  # a never-created candidate directory is empty
                     raise OSError("mounted source directory is unavailable")
-                paths = iter_markdown_files(base)
+                paths = iter_markdown_files(base, kind=config.kind)
             except OSError as exc:
                 report.ok = False
                 report.errors.append(f"{base}: {exc}")
@@ -167,8 +167,8 @@ def _scan_documents(
                 try:
                     if not _under_roots(path, (base,)):
                         raise ValueError("document resolves outside its mounted source directory")
-                    document = load_document(path, layer=layer, root=base)
-                    canonical = uri_for(layer, relative_posix(path, base))
+                    document = load_document(path, layer=layer, root=base, kind=config.kind)
+                    canonical = uri_for(layer, relative_posix(path, base), kind=config.kind)
                     if document.uri != canonical:
                         raise ValueError("document URI is outside its mounted source identity")
                 except (OSError, UnicodeDecodeError, ValueError) as exc:
@@ -192,25 +192,29 @@ def remember_document(config: Any, document: Document) -> None:
         documents[document.uri] = {
             "path": str(document.path.resolve()),
             "layer": document.layer,
+            "kind": document.kind,
             "sha256": fingerprint,
             "index_fingerprint": dict(backend_for_config(config).index_fingerprint()),
         }
         _save_state(config, state)
 
 
-def _owned_record_uri(uri: str, layer: str, path: Path, roots: Sequence[Path]) -> bool:
+def _owned_record_uri(uri: str, layer: str, path: Path, roots: Sequence[Path], *, kind: str) -> bool:
     """Require the recorded URI to be derivable from a current source root."""
 
     for root in roots:
         if not _under_roots(path, (root,)):
             continue
         relative = relative_posix(path, root)
-        canonical = uri_for(layer, relative)
+        canonical = uri_for(layer, relative, kind=kind)
         if uri == canonical:
             return True
         # Migrate the old local shared namespace only with its recorded local
         # source path. Never sweep the shared parent or a release subtree.
-        if layer == "shared" and uri == f"{URI_ROOT}/shared/{relative}":
+        legacy_root = f"{URI_ROOT}/shared/bootstrap" if layer == "shared" else f"{URI_ROOT}/{layer}"
+        if kind == "knowledge" and uri == f"{legacy_root}/{relative}":
+            return True
+        if kind == "knowledge" and layer == "shared" and uri == f"{URI_ROOT}/shared/{relative}":
             return True
     return False
 
@@ -237,7 +241,10 @@ def reconcile_markdown(
         return report
 
     with _state_lock(config):
-        return _reconcile(config, wanted, backend, report, verify=verify)
+        for kind in KINDS:
+            view = config.for_kind(kind)
+            _reconcile(view, wanted, backend, report, verify=verify)
+        return report
 
 
 def _reconcile(
@@ -290,6 +297,7 @@ def _reconcile(
         recorded[uri] = {
             "path": resolved,
             "layer": document.layer,
+            "kind": document.kind,
             "sha256": fingerprint,
             "index_fingerprint": fingerprint_contract,
         }
@@ -304,18 +312,20 @@ def _reconcile(
             recorded.pop(uri, None)
             continue
         layer = str(record.get("layer") or "")
+        if str(record.get("kind") or "knowledge") != config.kind:
+            continue
         if layer not in wanted:
             continue
         if uri in current:
             continue
         path = Path(str(record.get("path") or ""))
         layer_roots = [root for root in readable_roots if root in config.mount(layer).roots]
-        if not path.is_absolute() or not _owned_record_uri(uri, layer, path, layer_roots):
+        if not path.is_absolute() or not _owned_record_uri(uri, layer, path, layer_roots, kind=config.kind):
             continue
         try:
             if path.exists():
                 replacement = current_by_path.get(str(path.resolve()))
-                if not (layer == "shared" and replacement and replacement.uri in completed):
+                if not (replacement and replacement.uri in completed):
                     continue
         except OSError:
             continue
@@ -328,7 +338,7 @@ def _reconcile(
         recorded.pop(uri, None)
         report.deleted += 1
 
-    state["schema"] = 2
+    state["schema"] = 3
     if not _save_state(config, state):
         report.ok = False
         report.errors.append("could not save the local Markdown index ledger; a later cycle will retry")

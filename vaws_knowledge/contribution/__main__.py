@@ -21,6 +21,8 @@ def _cmd_prepare(args: argparse.Namespace) -> int:
         Path(args.candidate),
         state_root=Path(args.state_root),
         public_root=Path(args.public_root),
+        kind=args.kind,
+        public_relpath=args.public_relpath,
     )
     return _print(record.to_dict())
 
@@ -28,7 +30,8 @@ def _cmd_submit(args: argparse.Namespace) -> int:
     from vaws_knowledge.contribution.pending import iter_pending
 
     records = [record for record in iter_pending(Path(args.state_root))
-               if record.status in {"pending", "awaiting_transport"}]
+               if record.status in {"pending", "awaiting_transport"}
+               and (args.kind is None or record.kind == args.kind)]
     if not records:
         return _print({"status": "unchanged", "pending": []})
     if not args.git_repo:
@@ -60,6 +63,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare.add_argument("--candidate", required=True)
     prepare.add_argument("--state-root", required=True)
     prepare.add_argument("--public-root", required=True)
+    prepare.add_argument("--kind", choices=("knowledge", "experience"), default="knowledge")
+    prepare.add_argument("--public-relpath", help="fixed knowledge/entry.md or existing experience/case.md corpus path")
     prepare.set_defaults(func=_cmd_prepare)
 
     submit = sub.add_parser("submit", help="submit pending public copies (needs transport)")
@@ -68,6 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     submit.add_argument("--git-repo")
     submit.add_argument("--upstream", default="owner/vaws-knowledge-corpus")
     submit.add_argument("--fork")
+    submit.add_argument("--kind", choices=("knowledge", "experience"))
     submit.set_defaults(func=_cmd_submit)
 
     args = parser.parse_args(list(argv) if argv is not None else None)

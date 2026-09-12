@@ -9,14 +9,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from vaws_knowledge.contribution.documents import require_git_sha
+from vaws_knowledge.contribution.documents import require_git_sha, require_relative_path, safe_file_path
 from vaws_knowledge.contribution.errors import TransportError
 
 
 def run_git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), *args],
+            ["git", "--literal-pathspecs", "-C", str(repo), *args],
             check=False,
             capture_output=True,
             text=True,
@@ -44,18 +44,22 @@ def commit_public_file(
     content: str,
     message: str,
     start_ref: str = "HEAD",
+    require_existing: bool = False,
 ) -> str:
     """Create or reuse ``branch`` with ``relpath`` set to ``content``. Idempotent."""
 
-    posix = relpath.replace("\\", "/").lstrip("/")
-    if not posix or ".." in posix.split("/"):
-        raise TransportError("invalid contribution path")
+    posix = require_relative_path(relpath)
+    run_git(repo, ["check-ref-format", "--branch", branch])
+    if require_existing:
+        entry = run_git(repo, ["ls-tree", start_ref, "--", posix]).stdout.strip()
+        if not entry or entry.split()[0] not in {"100644", "100755"}:
+            raise TransportError("explicit public revision target does not exist as a regular file in the base")
     exists = run_git(repo, ["rev-parse", "--verify", branch], check=False)
     if exists.returncode == 0:
         run_git(repo, ["checkout", branch])
     else:
         run_git(repo, ["checkout", "-B", branch, start_ref])
-    dest = Path(repo) / posix
+    dest = safe_file_path(repo, posix)
     dest.parent.mkdir(parents=True, exist_ok=True)
     encoded = content if content.endswith("\n") else content + "\n"
     if dest.is_file() and dest.read_text(encoding="utf-8") == encoded:

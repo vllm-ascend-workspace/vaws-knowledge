@@ -14,7 +14,7 @@ from typing import Any, Sequence
 from vaws_knowledge import package_version
 from vaws_knowledge.local.backend import Hit, backend_for_config
 from vaws_knowledge.local.instance import instance_for_config
-from vaws_knowledge.local.shared import current_shared
+from vaws_knowledge.local.shared import active_shared_uris, current_shared, matches_targets
 from vaws_knowledge.markdown import Document, iter_markdown_files, layer_from_uri, load_document, parse_markdown
 from vaws_knowledge.server.layers import LAYERS, ServiceConfig, shared_source
 
@@ -23,11 +23,20 @@ NO_RESULT_MEANING = (
     "Treat a missing fact as unexamined. If the index is degraded, this is not a complete search."
 )
 REFERENCE_NOTE = (
-    "All knowledge is reference, not an axiom. Local experience and public "
-    "documents are returned together by relevance. "
+    "Knowledge records maintained conclusions, with their evidence and scope. "
+    "It remains reference: capture alone does not verify currency or applicability. "
     "Public review status is not an admission or ranking filter and does not "
     "prove hardware facts."
 )
+EXPERIENCE_NOTE = (
+    "Experiences record what happened under the conditions described. "
+    "Historical commands, implementations and causal interpretations are not current instructions; "
+    "check present code and evidence before reuse."
+)
+
+
+def reference_note(kind: str) -> str:
+    return EXPERIENCE_NOTE if kind == "experience" else REFERENCE_NOTE
 
 def load_layer_documents(config: ServiceConfig, layers: Sequence[str]) -> list[Document]:
     documents: list[Document] = []
@@ -37,9 +46,11 @@ def load_layer_documents(config: ServiceConfig, layers: Sequence[str]) -> list[D
             continue
         for root in mount.roots:
             base = Path(root)
-            for path in iter_markdown_files(base):
+            for path in iter_markdown_files(base, kind=config.kind):
                 try:
-                    documents.append(load_document(path, layer=layer, root=base))
+                    if not path.resolve().is_relative_to(base.resolve()):
+                        continue
+                    documents.append(load_document(path, layer=layer, root=base, kind=config.kind))
                 except (OSError, UnicodeDecodeError):
                     continue
     return documents
@@ -60,10 +71,12 @@ class QueryResponse:
     layers_available: list[str] = field(default_factory=list)
     layers_absent: dict[str, str] = field(default_factory=dict)
     inspected: int = 0
+    kind: str = "knowledge"
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "version": package_version(),
+            "kind": self.kind,
             "request": self.request,
             "layers_available": list(self.layers_available),
             "layers_absent": dict(self.layers_absent),
@@ -82,7 +95,7 @@ class QueryResponse:
         return payload
 
 
-def _hit_payload(hit: Hit, document: Document | None) -> dict[str, Any]:
+def _hit_payload(hit: Hit, document: Document | None, *, kind: str) -> dict[str, Any]:
     title = (document.title if document else None) or hit.title
     excerpt = (document.excerpt() if document else None) or hit.excerpt
     layer = (document.layer if document else None) or hit.layer or layer_from_uri(hit.uri) or ""
@@ -92,6 +105,7 @@ def _hit_payload(hit: Hit, document: Document | None) -> dict[str, Any]:
         "title": title,
         "excerpt": excerpt,
         "layer": layer,
+        "kind": kind,
         "role": "reference",
         "score": round(hit.score, 4),
     }
@@ -123,18 +137,20 @@ def query(
     wanted_layers = [name for name in (layers or LAYERS) if name in LAYERS]
     consulted = config.consulted(wanted_layers)
     request = {
+        "kind": config.kind,
         "text": text or "",
         "layers": wanted_layers,
         "limit": int(limit or 8),
     }
     backend = backend_for_config(config)
     ok, detail = backend.ready()
-    notes: list[str] = [REFERENCE_NOTE]
+    notes: list[str] = [reference_note(config.kind)]
     if not ok:
         notes.append(
             "knowledge index is unavailable; this is not evidence that no document exists"
         )
         return QueryResponse(
+            kind=config.kind,
             results=[],
             degraded=True,
             unavailable=True,
@@ -155,25 +171,26 @@ def query(
     fetch = max(int(limit or 8) * 4, 16)
     searched_layers = consulted["layers_available"]
     try:
-        hits = backend.search(text, layers=searched_layers, limit=fetch) if searched_layers else []
+        hits = backend.search(text, layers=searched_layers, limit=fetch, kind=config.kind) if searched_layers else []
     except Exception as exc:
-        return QueryResponse(degraded=True, unavailable=True,
+        return QueryResponse(kind=config.kind, degraded=True, unavailable=True,
                              index_detail=f"{type(exc).__name__}: {exc}", notes=notes, request=request,
                              layers_available=consulted["layers_available"], layers_absent=consulted["layers_absent"])
     catalog = documents_by_uri(config, wanted_layers)
     active = current_shared(instance_for_config(config).state_root) if "shared" in searched_layers else None
-    active_prefix = str(active["root_uri"]).rstrip("/") + "/" if active else ""
+    active_targets = active_shared_uris(active, kind=config.kind)
     kept: list[dict[str, Any]] = []
     for hit in hits:
         document = catalog.get(hit.uri)
         # A lost ledger must not make deleted local files reappear as references.
         # Only the current imported pack has its authoritative source off disk.
-        if document is None and not (active_prefix and hit.uri.startswith(active_prefix)):
+        if document is None and not matches_targets(hit.uri, active_targets):
             continue
-        kept.append(_hit_payload(hit, document))
+        kept.append(_hit_payload(hit, document, kind=config.kind))
     cap = max(int(limit or 8), 1)
     kept.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("uri") or "")))
     return QueryResponse(
+        kind=config.kind,
         results=kept[:cap],
         degraded=consulted["degraded"] or pending,
         unavailable=False,
@@ -199,6 +216,7 @@ def explain(
     consulted = config.consulted(wanted_layers)
     base: dict[str, Any] = {
         "version": package_version(),
+        "kind": config.kind,
         "ref": ident,
         "layers_consulted": consulted["layers_available"],
         "layers_absent": consulted["layers_absent"],
@@ -223,8 +241,8 @@ def explain(
             break
     if match is None and "shared" in consulted["layers_available"] and layer_from_uri(ident) == "shared":
         active = current_shared(instance_for_config(config).state_root)
-        prefix = str(active["root_uri"]).rstrip("/") + "/" if active else ""
-        if prefix and ident.startswith(prefix) and ".." not in ident.split("/"):
+        targets = active_shared_uris(active, kind=config.kind)
+        if matches_targets(ident, targets):
             backend = backend_for_config(config)
             try:
                 ok, detail = backend.ready()
@@ -238,7 +256,7 @@ def explain(
                 title, content = parse_markdown(raw)
                 return {**base, "found": True, "title": title, "content": content,
                         "uri": ident, "layer": "shared", "role": "reference",
-                        "source_git_sha": active.get("source_git_sha"), "notes": [REFERENCE_NOTE]}
+                        "source_git_sha": active.get("source_git_sha"), "notes": [reference_note(config.kind), *base.get("notes", [])]}
     if match is None:
         base.update(
             found=False,
@@ -250,18 +268,18 @@ def explain(
         return base
     payload = match.to_dict()
     payload.update(found=True, role="reference")
-    payload.setdefault("notes", []).append(REFERENCE_NOTE)
+    payload.setdefault("notes", []).append(reference_note(config.kind))
     payload.update(base)
     payload["found"] = True
     return payload
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, kind: str = "knowledge") -> int:
     import argparse
     import json
     import sys
 
-    parser = argparse.ArgumentParser(description="Query local Markdown knowledge")
+    parser = argparse.ArgumentParser(description=f"Query local Markdown {kind}")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--text", default="")
     selection.add_argument("--ref", default="")
@@ -274,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     from vaws_knowledge.server.layers import load_config
 
     mapping = {"backend": args.backend} if args.backend else None
-    config = load_config(mapping, path=args.config or None)
+    config = load_config(mapping, path=args.config or None).for_kind(kind)
     if args.ref:
         payload = explain(config, args.ref)
     else:

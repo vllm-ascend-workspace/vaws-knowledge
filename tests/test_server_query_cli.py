@@ -18,6 +18,7 @@ from vaws_knowledge.local.backend import MemoryBackend
 from vaws_knowledge.server.capture import capture
 from vaws_knowledge.server.capture_cli import main as capture_main
 from vaws_knowledge.server.query import main
+from vaws_knowledge.cli import main as package_main
 
 
 def _run_cli(*argv: str) -> tuple[int, dict, str]:
@@ -30,6 +31,29 @@ def _run_cli(*argv: str) -> tuple[int, dict, str]:
 
 
 class QueryCli(unittest.TestCase):
+    def test_experience_cli_aliases_select_a_separate_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = support.build_config(candidate=pathlib.Path(tmp) / "candidate", shared=False, project=False)
+
+            def invoke(*argv):
+                out = io.StringIO()
+                with mock.patch("vaws_knowledge.server.capture_cli.load_config", return_value=config), \
+                     mock.patch("vaws_knowledge.server.layers.load_config", return_value=config), redirect_stdout(out):
+                    code = package_main(list(argv))
+                self.assertEqual(code, 0, out.getvalue())
+                return json.loads(out.getvalue())
+
+            current = invoke("capture", "--title", "Atlas", "--content", "Current source behavior.")
+            historical = invoke("experience-capture", "--title", "Atlas", "--content", "Historical attempted repair.")
+            self.assertNotEqual(current["path"], historical["path"])
+            self.assertEqual(historical["kind"], "experience")
+            self.assertTrue(invoke("experience-query", "--ref", historical["ref"])["found"])
+            self.assertFalse(invoke("query", "--ref", historical["ref"])["found"])
+            self.assertFalse(invoke("experience-query", "--ref", current["ref"])["found"])
+            invoke("experience-capture", "--delete", historical["ref"])
+            self.assertTrue(pathlib.Path(current["path"]).is_file())
+            self.assertFalse(pathlib.Path(historical["path"]).exists())
+
     def test_capture_saves_without_starting_the_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = support.build_config(candidate=tmp, shared=False, project=False)

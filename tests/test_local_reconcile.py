@@ -192,3 +192,67 @@ def test_deleted_source_only_prunes_uris_derived_from_that_source(library):
     report = reconcile_markdown(config, verify=True)
     assert report.ok and report.deleted == 1
     assert backend.read(foreign) == "Another owner"
+
+
+def test_reconciliation_rebuilds_both_kinds_and_only_deletes_owned_missing_note(library):
+    config, backend, roots, note, uri = library
+    experience = config.for_kind("experience")
+    root = experience.mount("candidate").roots[0]
+    root.mkdir(parents=True)
+    observed = root / "observation.md"
+    observed.write_text("# Graph observation\n\nA historical graphcanary incident.\n", encoding="utf-8")
+    observed_uri = uri_for("candidate", observed.name, kind="experience")
+    report = reconcile_markdown(experience, verify=True)
+    assert report.ok and report.upserted == 2
+    records = json.loads((config.state_root / "markdown-index.json").read_text())["documents"]
+    assert records[uri]["kind"] == "knowledge"
+    assert records[observed_uri]["kind"] == "experience"
+    replacement = TrackingBackend(config)
+    config.retrieval = replacement
+    repaired = reconcile_markdown(config, verify=True)
+    assert repaired.ok and repaired.upserted == repaired.repaired == 2
+    note.unlink()
+    removed = reconcile_markdown(config, verify=True)
+    assert removed.ok and removed.deleted == 1
+    assert uri not in replacement.documents
+    assert replacement.check_document(observed_uri, observed.read_text())
+
+
+def test_legacy_candidate_identity_moves_only_after_new_record_is_ready(library, monkeypatch):
+    config, backend, roots, note, uri = library
+    legacy_uri = "viking://resources/project/observation.md"
+    backend.upsert(legacy_uri, note.read_text(), layer="project")
+    config.state_root.mkdir(parents=True)
+    state = {"documents": {legacy_uri: {"layer": "project", "path": str(note.resolve())}}}
+    (config.state_root / "markdown-index.json").write_text(json.dumps(state))
+    upsert = backend.upsert
+
+    def unavailable(uri, content, **kwargs):
+        raise RuntimeError("temporary write failure")
+
+    monkeypatch.setattr(backend, "upsert", unavailable)
+    failed = reconcile_markdown(config, verify=True)
+    assert failed.degraded and failed.deleted == 0
+    assert legacy_uri in backend.documents
+    monkeypatch.setattr(backend, "upsert", upsert)
+    migrated = reconcile_markdown(config, verify=True)
+    assert migrated.ok and migrated.deleted == 1
+    assert legacy_uri not in backend.documents
+    assert backend.check_document(uri, note.read_text())
+
+
+def test_shared_legacy_root_does_not_index_experience_as_knowledge(library):
+    config, backend, roots, note, uri = library
+    experience_root = roots["shared"] / "experience"
+    experience_root.mkdir()
+    observed = experience_root / "case.md"
+    observed.write_text("# Historical case\n\nObserved only on the recorded revision.\n")
+    refreshed = load_config({
+        "state_root": str(config.state_root),
+        "layers": {layer: str(root) for layer, root in roots.items()},
+    }, env={})
+    refreshed.retrieval = backend
+    report = reconcile_markdown(refreshed, verify=True)
+    assert report.ok and report.upserted == 2
+    assert uri_for("shared", "case.md", kind="experience") in backend.documents
+    assert uri_for("shared", "experience/case.md") not in backend.documents

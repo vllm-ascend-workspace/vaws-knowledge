@@ -154,8 +154,8 @@ def test_searches_only_bootstrap_active_and_requested_local_roots(native, monkey
     active = "viking://resources/shared/v0123456789ab"
     monkeypatch.setattr("vaws_knowledge.local.shared.current_shared", lambda root: {"root_uri": active})
     assert backend.ready()[0]
-    bootstrap_uri = SHARED_BOOTSTRAP_URI + "/bundled.md"
-    active_uri = active + "/corpus/new.md"
+    bootstrap_uri = SHARED_BOOTSTRAP_URI + "/knowledge/bundled.md"
+    active_uri = active + "/knowledge/corpus/new.md"
     stale_uri = "viking://resources/shared/vffffffffffff/corpus/old.md"
     clients[0].results = [
         {"uri": bootstrap_uri, "score": 0.5, "content": "# Bootstrap\n\nKnown context"},
@@ -168,5 +168,22 @@ def test_searches_only_bootstrap_active_and_requested_local_roots(native, monkey
     assert [hit.uri for hit in hits] == [bootstrap_uri, active_uri]
     assert hits[0].score == 0.7
     call = next(call for call in clients[0].calls if call[0] == "find")
-    assert call[2]["target_uri"] == [SHARED_BOOTSTRAP_URI, active, "viking://resources/project"]
+    assert call[2]["target_uri"] == [SHARED_BOOTSTRAP_URI + "/knowledge", active + "/knowledge", "viking://resources/project/knowledge"]
     assert instance.starts == 0
+
+
+@pytest.mark.parametrize("kind", ["knowledge", "experience"])
+def test_native_query_scopes_kind_before_top_k(native, kind):
+    backend, instance, records, vectors, clients = native
+    instance.live = True
+    assert backend.ready()[0]
+    other = "experience" if kind == "knowledge" else "knowledge"
+    wanted = f"viking://resources/candidate/{kind}/wanted.md"
+    clients[0].results = [
+        {"uri": f"viking://resources/candidate/{other}/wrong.md", "score": 1, "content": "# Wrong\n\ncanary"},
+        {"uri": wanted, "score": 0.1, "content": "# Right\n\ncanary"},
+    ]
+    hits = backend.search("canary", layers=["candidate"], kind=kind, limit=1)
+    call = next(call for call in clients[0].calls if call[0] == "find")
+    assert call[2]["target_uri"] == [f"viking://resources/candidate/{kind}"]
+    assert [(hit.uri, hit.kind) for hit in hits] == [(wanted, kind)]

@@ -20,9 +20,40 @@ With public sharing enabled, a new capture saves a private Markdown candidate an
 prepares a redacted public copy in local state. The MCP service retries pending
 submissions in the background, pushes the content branch to the fork, then opens
 or reuses a PR. Offline or authentication failure keeps the pending record.
-Re-delivery of the same content reuses the record. Closed/merged PRs are recorded
-and are not reopened automatically. Existing private candidates are not bulk
+Re-delivery of an unchanged revision reuses the record. Document paths are stable:
+knowledge has semantic entry paths and experience has persistent case IDs.
+Content corrections update the same file and open PR. After a closed or merged
+PR, a new revision starts a fresh branch and PR against current upstream at the
+same path; unchanged content does not reopen it. Existing private candidates are not bulk
 submitted when configuration is enabled.
+
+Shared source files live in separate `knowledge/` and `experience/` directories
+under the configured corpus prefix: `corpus/knowledge/` and `corpus/experience/`
+in the default repository. This preserves the existing release build's
+`--corpus-subdir corpus` input.
+Knowledge records current conclusions that may need updating; experience records
+what happened under its observed conditions, including unsuccessful attempts and
+corrections. Both remain references. A historical command in an experience does
+not become a current recommendation through publication.
+
+Capture preserves the kind through redaction, the local public copy, pending
+record, branch and repository path. Identical Markdown in the two kinds remains
+two independent contributions. Manual preparation accepts
+`vaws-knowledge contribution prepare --kind experience --candidate PATH
+--state-root STATE --public-root PUBLIC`; omitting `--kind` keeps the existing
+knowledge entry. `contribution submit --kind experience` selects that pending
+kind; without the option it can resume either kind. Preparation never rewrites
+the private source.
+
+Capture accepts optional `ref` to correct an existing local candidate, including
+its title, or `public_relpath` to select a corpus entry. For knowledge,
+`knowledge/CATEGORY/ENTRY.md` creates or updates that fixed entry. For experience,
+`experience/CASE.md` must already exist on the submission base. These options are
+mutually exclusive; the equivalent CLI options are `--ref` and `--public-relpath`.
+Contribution preparation also accepts `--public-relpath`. Capture and publishing
+status return the assigned public path, without the outer `corpus/` prefix.
+Different knowledge paths are independent even when their content matches.
+Existing names stay unchanged; content hashes do not dictate filenames.
 
 PR checks validate Markdown and redaction. **Human reviewers merge knowledge
 PRs.** This path needs no automatic reviewer or model credential. PR preparation,
@@ -32,6 +63,20 @@ workflow; ordinary tasks do not need a fork, publication commands or review wait
 After a corpus merge, CI builds the exact Git commit into a dense OVPack and
 manifest, uploads both to a draft Release, then publishes it. The release tag
 identifies the source commit. A published release is never overwritten.
+
+New packs preserve the two directories inside their version root, for example
+`viking://resources/shared/VERSION/experience/CASE.md`. The release manifest
+records `content.layout: kinds/v1` and hashes the actual paths inside the pack.
+Only release schema `vaws-knowledge-release/2` with `content.layout: kinds/v1`
+is accepted. Schema 1 and releases without the two-store layout must be rebuilt;
+there is no flat-pack query fallback. Shared queries search only the selected
+kind directory under the active release and local bootstrap roots, never their
+parents or individual paths selected from an old manifest.
+Source Markdown outside either directory is placed under `knowledge/` when a new
+pack is built, with its bytes unchanged; a colliding legacy and typed path must
+be resolved explicitly. This build-time mapping does not certify that old
+content still matches current code. Integrity repair preserves the same kind
+directories.
 
 While MCP is alive, its maintenance worker checks releases on startup and every 30 minutes;
 failed checks retry after one minute. Submission polling is every 30 seconds.
@@ -54,9 +99,44 @@ tenant contract. Status output carries no keys.
 `vaws-knowledge publishing once --config PATH` performs one explicit recovery
 or verification pass; normal capture does not need this command.
 
+## Experience feedback
+
+`experience_feedback(ref, vote)` is an optional lightweight signal: `+1` if a
+published case helped, `-1` if it misled the work. It requires no explanation,
+new summary or candidate capture. Not using a case does not require feedback.
+The CLI equivalent is `vaws-knowledge experience-feedback --ref experience/CASE.md
+--vote=+1` (or `--vote=-1`). Shared experience result references are also accepted;
+local candidates, knowledge and project references are not public feedback targets.
+
+With configured sharing authorization, the tool reuses GitHub authentication,
+checks the case exists in the canonical corpus, then creates or reuses its feedback
+Issue and adds a minimal [GitHub comment](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment)
+for each usage event. The comment contains only the vote and an opaque random
+event marker, with no session content or reason. The response contains the Issue
+link, feedback receipt link and separate positive/negative event counts. Issues remain separate
+from source Markdown and release packs; feedback does not rewrite the case,
+change retrieval ranking or promote it into maintained knowledge.
+
+Every new call records another usage event. The same account can contribute
+multiple `+1` and multiple `-1` events; the two totals accumulate independently
+and never erase earlier events. Counts reflect reported usefulness, not proof
+of correctness or applicability. GitHub remains the feedback authority; there
+is no separate feedback database.
+
+After a failed call, reuse its returned `request_id` with the same ref and vote
+to retry that event (`--request-id` in the CLI). Omit it for a new usage event.
+The package first looks for an existing matching comment, including after a
+lost POST response. Totals count each author/event ID once, even if concurrent
+retries created duplicate comments. A retry ID cannot change the recorded vote.
+If the entire tool response is lost and the caller did not retain an ID before
+sending, another call without an ID is a new event. No automatic cross-session
+identity or reasoning is inferred. Concurrent first submissions
+from different clients can create duplicate Issues because GitHub provides no
+unique creation key; maintainers can consolidate those rare duplicates.
+
 ## Native-client summaries
 
-All five workspace clients use the same knowledge MCP tools. Automatic capture
+All five workspace clients use the same knowledge and experience MCP tools. Automatic capture
 uses only a native event that supplies final response text. The observed support
 as of 2026-09-12 is:
 
@@ -79,6 +159,8 @@ delivery of the same text reuses its local note. Grok's native marker prevents
 its imported hooks from capturing the same event again. Empty or absent summaries
 are a no-op, and optional capture errors do not interrupt the client. Lookup and
 capture remain optional for every client.
+Hook capture writes experience, reusing the supplied final response as the record
+of that work. It does not automatically promote it to current knowledge.
 Hook capture saves locally even when public publishing is disabled. Public
 queuing follows the publishing setting; local persistence does not enable sharing.
 Native hook trust remains managed by the client; configuration does not bypass it.

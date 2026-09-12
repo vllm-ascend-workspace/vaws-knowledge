@@ -11,12 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from vaws_knowledge.contribution.documents import require_public_relpath, safe_file_path
+from vaws_knowledge.contribution.errors import IdentityError
 from vaws_knowledge.local.backend import backend_for_config
 from vaws_knowledge.local.reconcile import remember_document
 from vaws_knowledge.markdown import (
     delete_document,
     document_slug,
-    find_by_title,
     iter_markdown_files,
     load_document,
     relative_posix,
@@ -50,24 +51,61 @@ def candidate_root(config: ServiceConfig, *, create: bool = True) -> Path:
     if mount.read_only:
         raise CaptureRefused("candidate layer is read-only", layer="candidate")
     root = Path(mount.roots[0])
+    other = config.for_kind("experience" if config.kind == "knowledge" else "knowledge")
+    resolved = root.resolve()
+    for other_mount in other.mounts.values():
+        if any(resolved.is_relative_to(path.resolve()) or path.resolve().is_relative_to(resolved)
+               for path in other_mount.roots):
+            raise CaptureRefused("candidate directory overlaps another content store", layer="candidate")
     if create:
         root.mkdir(parents=True, exist_ok=True)
     return root
 
 
-def _proposed_identity(root: Path, heading: str) -> tuple[str, str, Path, bool]:
-    existing = find_by_title(root, heading, layer="candidate")
-    if existing is not None:
+def _proposed_identity(
+    root: Path, heading: str, *, kind: str, ref: str | None = None,
+    public_relpath: str | None = None,
+) -> tuple[str, str, Path, bool]:
+    if ref is not None and public_relpath is not None:
+        raise CaptureRejected(["use either a candidate ref or a public_relpath"])
+    if ref is not None:
+        matches = []
+        for candidate in iter_markdown_files(root, kind=kind):
+            document = load_document(candidate, layer="candidate", root=root, kind=kind)
+            if ref in {document.uri, str(document.path), document.path.name, document.slug}:
+                matches.append(document)
+        if len(matches) != 1:
+            raise CaptureRejected(["candidate ref must identify exactly one document in this store"])
+        document = matches[0]
+        return document.slug, document.uri, document.path, True
+    if public_relpath is not None:
+        try:
+            relative = require_public_relpath(public_relpath, kind).split("/", 1)[1]
+            path = safe_file_path(root, relative)
+        except IdentityError as exc:
+            raise CaptureRejected([str(exc)]) from exc
+        return path.stem, uri_for("candidate", relative, kind=kind), path, path.is_file()
+    matches = []
+    for candidate in iter_markdown_files(root, kind=kind):
+        existing = load_document(candidate, layer="candidate", root=root, kind=kind)
+        if existing.title.strip() == heading:
+            matches.append(existing)
+    if len(matches) > 1:
+        raise CaptureRejected(["multiple candidates share this title; specify ref or public_relpath"])
+    if matches:
+        existing = matches[0]
         return existing.slug, existing.uri, existing.path, True
     ident = document_slug(heading)
     path = root / f"{ident}.md"
-    return ident, uri_for("candidate", relative_posix(path, root)), path, False
+    return ident, uri_for("candidate", relative_posix(path, root), kind=kind), path, False
 
 
 def capture(
     *,
     title: str | None = None,
     content: str | None = None,
+    ref: str | None = None,
+    public_relpath: str | None = None,
     layer: str = "candidate",
     config: ServiceConfig | None = None,
     source: Mapping[str, Any] | None = None,
@@ -99,7 +137,9 @@ def capture(
 
     config = config or load_config()
     root = candidate_root(config, create=not dry_run)
-    ident, uri, path, updating = _proposed_identity(root, heading)
+    ident, uri, path, updating = _proposed_identity(
+        root, heading, kind=config.kind, ref=ref, public_relpath=public_relpath,
+    )
     if dry_run:
         return {
             "ok": True,
@@ -109,6 +149,7 @@ def capture(
             "uri": uri,
             "path": str(path),
             "layer": "candidate",
+            "kind": config.kind,
             "index": "skipped",
             "would_update": updating,
         }
@@ -116,9 +157,10 @@ def capture(
     document = save_document(
         root,
         layer="candidate",
+        kind=config.kind,
         title=heading,
         content=body,
-        path=path if updating else None,
+        path=path if updating or public_relpath is not None else None,
         slug=None if updating else ident,
         source=source,
         conditions=conditions,
@@ -147,6 +189,7 @@ def capture(
         "ref": document.uri,
         "path": str(document.path),
         "layer": "candidate",
+        "kind": document.kind,
         "index": "ready" if indexed else "pending",
         "document": document.to_dict(),
     }
@@ -159,7 +202,7 @@ def capture(
         payload["degraded"] = bool(index)
     from vaws_knowledge.publishing import queue_capture
 
-    payload["contribution"] = queue_capture(config, document.path)
+    payload["contribution"] = queue_capture(config, document.path, public_relpath=public_relpath)
     return payload
 
 
@@ -173,8 +216,8 @@ def delete(
     config = config or load_config()
     root = candidate_root(config)
     target = None
-    for path in iter_markdown_files(root):
-        document = load_document(path, layer="candidate", root=root)
+    for path in iter_markdown_files(root, kind=config.kind):
+        document = load_document(path, layer="candidate", root=root, kind=config.kind)
         if ref in {document.uri, document.slug, str(document.path), document.path.name}:
             target = document
             break
@@ -188,4 +231,4 @@ def delete(
         except Exception:  # noqa: BLE001 - still delete the file
             pass
     delete_document(target.path)
-    return {"ok": True, "deleted": target.uri, "path": str(target.path)}
+    return {"ok": True, "deleted": target.uri, "path": str(target.path), "kind": target.kind}

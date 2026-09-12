@@ -61,6 +61,13 @@ class LiveOpenViking(unittest.TestCase):
         instance_for_config(self.config).stop()
 
     def test_capture_query_update_delete_and_restart(self) -> None:
+        experience = self.config.for_kind("experience")
+        historical = capture(
+            title="graph replay mismatch",
+            content="Historical graph replay padding case: the original cause remained uncertain.",
+            config=experience,
+        )
+        self.assertEqual("ready", historical["index"], historical)
         first = capture(
             title="graph replay mismatch",
             content="Eager passed but ACL graph replay diverged on padding metadata.",
@@ -71,6 +78,10 @@ class LiveOpenViking(unittest.TestCase):
         found = query(self.config, text="graph replay padding").to_dict()
         self.assertGreaterEqual(found["count"], 1, found)
         self.assertFalse(found.get("unavailable"))
+        self.assertEqual([first["uri"]], [item["uri"] for item in found["results"]])
+        historical_found = query(experience, text="graph replay padding").to_dict()
+        self.assertEqual([historical["uri"]], [item["uri"] for item in historical_found["results"]])
+        self.assertFalse(explain(self.config, historical["uri"])["found"])
         body = explain(self.config, first["uri"])
         self.assertTrue(body["found"])
         self.assertIn("padding metadata", body["content"])
@@ -92,10 +103,12 @@ class LiveOpenViking(unittest.TestCase):
         self.assertTrue(prepared["ready"], prepared)
         restarted = query(self.config, text="slot mapping").to_dict()
         self.assertGreaterEqual(restarted["count"], 1, restarted)
+        self.assertEqual([historical["uri"]], [item["uri"] for item in query(experience, text="graph replay padding").results])
 
         delete(updated["uri"], config=self.config)
         missing = query(self.config, text="slot mapping").to_dict()
         self.assertEqual([], missing["results"])
+        self.assertTrue(explain(experience, historical["uri"])["found"])
 
     def test_project_add_edit_delete_and_pending_recovery(self) -> None:
         note = self.project / "project-note.md"

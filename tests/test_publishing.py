@@ -52,6 +52,8 @@ def test_summary_event_has_no_transcript_dependency_and_is_idempotent(tmp_path):
     second = capture_summary(payload, config=config, client="codex")
     assert first["ref"] == second["ref"]
     assert len(iter_pending(config.state_root)) == 1
+    assert iter_pending(config.state_root)[0].kind == "experience"
+    assert iter_pending(config.state_root)[0].public_relpath.startswith("experience/")
     payload["hook_event_name"] = "PreToolUse"
     assert capture_summary(payload, config=config, client="codex")["status"] == "no_summary"
 
@@ -62,7 +64,7 @@ def test_private_candidate_stays_unchanged_and_public_copy_is_redacted(tmp_path)
     raw = "# Runtime observation\n\nThe source was /Users/example/code/private-file.py. The local repair succeeded.\n"
     candidate.write_text(raw)
     queue_capture(config, candidate)
-    public = next((config.state_root / "contribution/public").glob("*.md")).read_text()
+    public = next((config.state_root / "contribution/public/knowledge").glob("*.md")).read_text()
     assert "/Users/example" not in public
     assert candidate.read_text() == raw
 
@@ -171,7 +173,8 @@ def test_summary_capture_is_local_without_public_publishing(tmp_path):
     assert result["status"] == "saved"
     assert result["contribution"]["status"] == "local_only"
     assert iter_pending(config.state_root) == []
-    assert text in next((tmp_path / "candidate").glob("*.md")).read_text(encoding="utf-8")
+    root = config.for_kind("experience").mount("candidate").roots[0]
+    assert text in next(root.glob("*.md")).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(("client", "payload"), [
@@ -187,7 +190,8 @@ def test_native_summary_shapes_save_only_supplied_final_text(tmp_path, client, p
     saved = capture_summary(payload, config=config, client=client)
     assert saved["status"] == "saved"
     assert capture_summary(payload, config=config, client=client)["ref"] == saved["ref"]
-    notes = list((tmp_path / "candidate").glob("*.md"))
+    root = config.for_kind("experience").mount("candidate").roots[0]
+    notes = list(root.glob("*.md"))
     assert len(notes) == 1
     assert "cause still uncertain" in notes[0].read_text(encoding="utf-8")
 
@@ -203,7 +207,8 @@ def test_unsupported_or_non_response_events_do_not_create_notes(tmp_path, client
     config = configured(tmp_path)
     payload["transcript_path"] = str(tmp_path / "must-not-read.jsonl")
     assert capture_summary(payload, config=config, client=client)["status"] == "no_summary"
-    assert not list((tmp_path / "candidate").glob("*.md"))
+    for kind in ("knowledge", "experience"):
+        assert not list(config.for_kind(kind).mount("candidate").roots[0].glob("*.md"))
 
 
 def test_plain_text_notes_need_no_heading_or_metadata(tmp_path):

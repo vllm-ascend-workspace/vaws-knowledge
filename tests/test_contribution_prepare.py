@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import json
 import sys
 import tempfile
 import unittest
@@ -19,9 +20,11 @@ from vaws_knowledge.contribution.documents import (  # noqa: E402
     MarkdownDocument,
     content_digest,
     require_git_sha,
+    public_filename,
+    require_public_relpath,
 )
 from vaws_knowledge.contribution.errors import IdentityError  # noqa: E402
-from vaws_knowledge.contribution.pending import STATUS_AWAITING, STATUS_BLOCKED, load_pending  # noqa: E402
+from vaws_knowledge.contribution.pending import STATUS_AWAITING, STATUS_BLOCKED, load_pending, iter_pending, pending_path, save_pending  # noqa: E402
 from vaws_knowledge.contribution.public import prepare_public_copy  # noqa: E402
 from vaws_knowledge.contribution.submit import after_capture, prepare_candidate  # noqa: E402
 
@@ -40,6 +43,14 @@ class Documents(unittest.TestCase):
         self.assertEqual(doc.title, "一次图模式启动失败的排查经验")
         self.assertIn("当时遇到了", doc.body)
         self.assertTrue(doc.digest.startswith(DIGEST_PREFIX))
+
+    def test_generated_knowledge_names_and_explicit_paths_are_portable(self):
+        self.assertEqual(public_filename("图模式 条件", "knowledge"), "图模式-条件.md")
+        self.assertEqual(public_filename("CON", "knowledge"), "con-entry.md")
+        self.assertLessEqual(len(public_filename("长" * 200, "knowledge").encode("utf-8")), 255)
+        for value in ("knowledge/CON.md", "knowledge/a?.md", "knowledge/.GIT/entry.md", "knowledge/trailing /entry.md"):
+            with self.subTest(value=value), self.assertRaises(IdentityError):
+                require_public_relpath(value, "knowledge")
 
     def test_digest_cannot_stand_in_for_git_identity(self):
         digest = content_digest("t", "body text")
@@ -85,10 +96,33 @@ class PendingAndCapture(unittest.TestCase):
         second = prepare_candidate(self.candidate, state_root=self.state, public_root=self.public)
         self.assertEqual(first.content_digest, second.content_digest)
         self.assertEqual(
-            load_pending(self.state, first.content_digest).content_digest,
+            load_pending(self.state, first.public_relpath).content_digest,
             first.content_digest,
         )
         self.assertEqual(self.candidate.read_text(encoding="utf-8"), ORDINARY)
+
+    def test_identical_knowledge_and_experience_have_independent_pending_and_public_paths(self):
+        records = [prepare_candidate(self.candidate, state_root=self.state, public_root=self.public, kind=kind)
+                   for kind in ("knowledge", "experience")]
+        self.assertEqual(records[0].content_digest, records[1].content_digest)
+        self.assertNotEqual(records[0].branch, records[1].branch)
+        self.assertNotEqual(records[0].public_relpath, records[1].public_relpath)
+        for record in records:
+            self.assertTrue(record.public_relpath.startswith(record.kind + "/"))
+            self.assertEqual((self.public / record.public_relpath).read_text(encoding="utf-8"), ORDINARY)
+            self.assertEqual(load_pending(self.state, record.public_relpath, record.kind).kind, record.kind)
+        self.assertEqual(len(iter_pending(self.state)), 2)
+        self.assertEqual(self.candidate.read_text(encoding="utf-8"), ORDINARY)
+
+    def test_old_pending_schema_is_not_read_as_a_current_record(self):
+        record = prepare_candidate(self.candidate, state_root=self.state, public_root=self.public)
+        path = pending_path(self.state, record.public_relpath)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["schema"] = "vaws-knowledge-contribution-pending/v1"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaises(IdentityError):
+            load_pending(self.state, record.public_relpath)
+        self.assertEqual(iter_pending(self.state), [])
 
     def test_after_capture_never_blocks_and_leaves_pending_without_transport(self):
         result = after_capture(

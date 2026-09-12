@@ -250,7 +250,7 @@ def test_modified_and_deleted_content_follow_the_new_version(tmp_path):
     old_root = current_shared(state)["root_uri"]
     assert DOC_A in client.trees[old_root].values()
 
-    files = {"alpha.md": "# Alpha note\n\nUpdated body.\n"}  # beta.md deleted upstream
+    files = {"knowledge/alpha.md": "# Alpha note\n\nUpdated body.\n"}  # beta.md deleted upstream
     release2 = make_release_dir(tmp_path / "rel2", sha=GIT_SHA_2, files=files)
     assert _sync(state, release2, client).status == "switched"
     new_root = current_shared(state)["root_uri"]
@@ -437,9 +437,9 @@ def test_active_damage_is_repaired_into_an_independent_root(tmp_path, damage):
     assert _sync(state, release, client).status == "switched"
     old_root = current_shared(state)["root_uri"]
     if damage == "content":
-        client.trees[old_root]["alpha.md"] = "# Damaged\n\nDifferent content.\n"
+        client.trees[old_root]["knowledge/alpha.md"] = "# Damaged\n\nDifferent content.\n"
     elif damage == "missing_file":
-        del client.trees[old_root]["alpha.md"]
+        del client.trees[old_root]["knowledge/alpha.md"]
     elif damage == "vector":
         client.corrupt_vectors.add(old_root)
     else:
@@ -451,7 +451,7 @@ def test_active_damage_is_repaired_into_an_independent_root(tmp_path, damage):
     assert result.details["repaired"] and result.details["verified"]
     new_root = current_shared(state)["root_uri"]
     assert new_root != old_root and "/repairs/" in new_root
-    assert client.trees[new_root]["alpha.md"] == DOC_A
+    assert client.trees[new_root]["knowledge/alpha.md"] == DOC_A
     assert ("rm", old_root) not in client.calls
     again = _sync(state, release, client, verify=True)
     assert again.status == "unchanged" and again.details["verified"]
@@ -469,7 +469,7 @@ def test_failed_active_repair_keeps_pointer_and_original_content(tmp_path):
     result = _sync(state, release, client, verify=True)
     assert result.status == "error"
     assert current_shared(state) == old
-    assert client.trees[old["root_uri"]]["alpha.md"] == DOC_A
+    assert client.trees[old["root_uri"]]["knowledge/alpha.md"] == DOC_A
     assert ("rm", old["root_uri"]) not in client.calls
 
 
@@ -498,7 +498,7 @@ def test_offline_audit_repairs_from_retained_verified_pack(tmp_path):
     assert result.status == "switched", result.reason
     assert result.details["source_unavailable"]
     assert result.details["repaired"] and result.details["verified"]
-    assert client.trees[current_shared(state)["root_uri"]]["alpha.md"] == DOC_A
+    assert client.trees[current_shared(state)["root_uri"]]["knowledge/alpha.md"] == DOC_A
 
 
 @pytest.mark.parametrize("missing_root", [False, True])
@@ -513,7 +513,7 @@ def test_corrupt_pointer_recovers_activated_release_while_offline(tmp_path, miss
     assert result.ok, result.reason
     assert result.details["current_recovered"] and result.details["verified"]
     assert current_shared(state)["source_git_sha"] == GIT_SHA
-    assert client.trees[current_shared(state)["root_uri"]]["alpha.md"] == DOC_A
+    assert client.trees[current_shared(state)["root_uri"]]["knowledge/alpha.md"] == DOC_A
 
 
 def test_offline_pointer_recovery_skips_a_corrupted_newest_pack(tmp_path):

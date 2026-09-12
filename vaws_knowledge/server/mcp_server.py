@@ -1,10 +1,12 @@
 """stdio JSON-RPC MCP server exposing the knowledge service.
 
-Three tools:
+Two separate stores with matching tools:
 
     knowledge_query     search local reference material
     knowledge_capture   write one entry to the candidate layer (only)
     knowledge_explain   read one Markdown document by ref
+    experience_query / experience_capture / experience_explain
+                        search, save and read historical cases
 
 Framing is newline-delimited JSON-RPC on stdio, matching the MCP stdio
 transport. Messages MUST NOT contain embedded newlines. The official MCP SDK
@@ -112,8 +114,8 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "knowledge_query",
         "description": (
-            "Search reference notes by free text. Results retain known conditions "
-            "and uncertainty; assess them against current evidence. Lookup is optional."
+            "Search current knowledge by free text. Results retain known conditions "
+            "and uncertainty; check applicability against current code and evidence. Lookup is optional."
         ),
         "inputSchema": {
             "type": "object",
@@ -128,21 +130,26 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "knowledge_capture",
         "description": (
-            "Save a local Markdown note; the same title updates its body. Reuse an existing "
-            "summary when useful; no template or separate report is required. "
+            "Save a current knowledge note; use ref to revise a candidate even when renaming it, "
+            "or public_relpath to create or revise a fixed knowledge entry. Without either, an unambiguous matching title updates its body. "
+            "Writing does not certify correctness or freshness. No template or separate report is required. "
             "Keep known conditions, sources and uncertainty in the prose. "
             "Sharing follows the user's existing publishing configuration."
         ),
         "inputSchema": {
             "type": "object",
             "required": ["title", "content"],
-            "properties": {"title": {"type": "string"}, "content": {"type": "string"}},
+            "properties": {
+                "title": {"type": "string"}, "content": {"type": "string"},
+                "ref": {"type": "string", "description": "Existing candidate reference returned by capture/query; exclusive with public_relpath."},
+                "public_relpath": {"type": "string", "description": "Corpus path including kind: knowledge/graph/buffers.md creates or updates a fixed entry; experience/case.md revises an existing case. Writes a local candidate; public transport follows configured authorization."},
+            },
             "additionalProperties": False,
         },
     },
     {
         "name": "knowledge_explain",
-        "description": "Read the original Markdown and recorded context for a search result.",
+        "description": "Read the original Markdown and recorded context for a knowledge result.",
         "inputSchema": {
             "type": "object",
             "required": ["ref"],
@@ -151,6 +158,49 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+EXPERIENCE_DESCRIPTIONS = {
+    "query": (
+        "Search historical experiences: what was attempted, observed and resolved. "
+        "Use cases as clues; their commands, implementations and causal explanations may "
+        "be outdated or unconfirmed. They are not current operating guidance. Lookup is optional."
+    ),
+    "capture": (
+        "Save a historical experience in a separate local Markdown store. Keep what happened, "
+        "conditions, evidence and uncertainty in ordinary prose; the same title updates this "
+        "experience. Use ref to revise a candidate including its title, or public_relpath with "
+        "experience/relative-file.md to revise a shared experience. Reuse useful existing text. "
+        "Sharing follows configured authorization."
+    ),
+    "explain": (
+        "Read a historical experience and its recorded context. Distinguish observed results "
+        "from hypotheses; recheck applicability before reusing historical steps."
+    ),
+}
+TOOLS += [
+    {**tool, "name": tool["name"].replace("knowledge_", "experience_", 1),
+     "description": EXPERIENCE_DESCRIPTIONS[tool["name"].removeprefix("knowledge_")]}
+    for tool in TOOLS
+]
+TOOLS.append({
+    "name": "experience_feedback",
+    "description": (
+        "Optionally record +1 when a published experience helped, or -1 when it misled the work. "
+        "Each usage feedback counts, including repeated positive or negative feedback from the same account. "
+        "No explanation or extra summary is required. Uses configured GitHub sharing. "
+        "Omit request_id for new feedback; reuse a failed call's request_id only to retry that event. "
+        "Feedback is usefulness, not proof of correctness."
+    ),
+    "inputSchema": {
+        "type": "object", "required": ["ref", "vote"],
+        "properties": {
+            "ref": {"type": "string", "description": "Published shared experience reference, or experience/relative-file.md."},
+            "vote": {"type": "string", "enum": ["+1", "-1"]},
+            "request_id": {"type": "string", "description": "Optional retry ID returned by a failed call. Omit for a new usage event."},
+        },
+        "additionalProperties": False,
+    },
+})
 
 
 def _sdk_available() -> bool:
@@ -194,9 +244,11 @@ class KnowledgeService:
 
     # -- envelope ---------------------------------------------------------
 
-    def envelope(self) -> dict[str, Any]:
-        consulted = self.config.consulted()
+    def envelope(self, config: ServiceConfig | None = None) -> dict[str, Any]:
+        selected = config or self.config
+        consulted = selected.consulted()
         env: dict[str, Any] = {
+            "kind": selected.kind,
             "version": package_version(),
             "layers_available": consulted["layers_available"],
             "layers_absent": consulted["layers_absent"],
@@ -209,8 +261,8 @@ class KnowledgeService:
             env["configuration_error"] = self.config_error
         return env
 
-    def with_environment(self, payload: dict[str, Any]) -> dict[str, Any]:
-        environment = self.envelope()
+    def with_environment(self, payload: dict[str, Any], config: ServiceConfig | None = None) -> dict[str, Any]:
+        environment = self.envelope(config)
         degraded = bool(environment["degraded"] or payload.get("degraded"))
         return {**environment, **payload, "degraded": degraded}
 
@@ -225,6 +277,8 @@ class KnowledgeService:
                 "framing": "newline-delimited JSON-RPC (MCP stdio; SDK not required)",
                 "writable_layers": ["candidate"],
                 "capture_required": ["title", "content"],
+                "stores": {kind: self.config.for_kind(kind).describe()
+                           for kind in ("knowledge", "experience")},
             }
         )
         return info
@@ -232,16 +286,23 @@ class KnowledgeService:
     # -- tools ------------------------------------------------------------
 
     def knowledge_query(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        return self._query(args, kind="knowledge")
+
+    def experience_query(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        return self._query(args, kind="experience")
+
+    def _query(self, args: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
+        config = self.config.for_kind(kind)
         text = str(args.get("text") or "").strip()
         if not text:
             raise ValueError("text is required")
         response = query(
-            self.config,
+            config,
             text=text,
             limit=int(args.get("limit", 8)),
         )
         payload = response.to_dict()
-        payload = self.with_environment(payload)
+        payload = self.with_environment(payload, config)
         if payload.get("unavailable"):
             payload["answer"] = "unknown"
             payload["answer_detail"] = payload["no_result_meaning"]
@@ -251,26 +312,47 @@ class KnowledgeService:
         return payload
 
     def knowledge_explain(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        return self._explain(args, kind="knowledge")
+
+    def experience_explain(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        return self._explain(args, kind="experience")
+
+    def _explain(self, args: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
+        config = self.config.for_kind(kind)
         ident = str(args.get("ref") or "").strip()
         if not ident:
             raise ValueError("ref is required")
         payload = explain(
-            self.config,
+            config,
             ident,
         )
-        payload = self.with_environment(payload)
+        payload = self.with_environment(payload, config)
         if not payload.get("found"):
             payload["answer"] = "unknown"
         return payload
 
     def knowledge_capture(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        return self._capture(args, kind="knowledge")
+
+    def experience_capture(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        return self._capture(args, kind="experience")
+
+    def experience_feedback(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        from vaws_knowledge.feedback import experience_feedback
+
+        return experience_feedback(self.config, args.get("ref"), args.get("vote"), request_id=args.get("request_id"))
+
+    def _capture(self, args: Mapping[str, Any], *, kind: str) -> dict[str, Any]:
+        config = self.config.for_kind(kind)
         payload = capture(
             title=str(args.get("title") or ""),
             content=str(args.get("content") or ""),
-            config=self.config,
+            ref=args.get("ref"),
+            public_relpath=args.get("public_relpath"),
+            config=config,
             index=False,
         )
-        payload = self.with_environment(payload)
+        payload = self.with_environment(payload, config)
         if self.maintenance is not None:
             self.maintenance.request()
         return payload
@@ -282,6 +364,10 @@ class KnowledgeService:
             "knowledge_query": self.knowledge_query,
             "knowledge_capture": self.knowledge_capture,
             "knowledge_explain": self.knowledge_explain,
+            "experience_query": self.experience_query,
+            "experience_capture": self.experience_capture,
+            "experience_explain": self.experience_explain,
+            "experience_feedback": self.experience_feedback,
         }
         handler = handlers.get(name)
         if handler is None:
@@ -295,6 +381,7 @@ class KnowledgeService:
                 },
                 True,
             )
+        config = self.config.for_kind("experience" if name.startswith("experience_") else "knowledge")
         try:
             schema = next(tool["inputSchema"] for tool in TOOLS if tool["name"] == name)
             unknown = set(args) - set(schema["properties"])
@@ -308,7 +395,7 @@ class KnowledgeService:
                     "error": "capture_refused",
                     "refused_layer": exc.layer,
                     "detail": str(exc),
-                    **self.envelope(),
+                    **self.envelope(config),
                 },
                 True,
             )
@@ -319,13 +406,13 @@ class KnowledgeService:
                     "error": "capture_rejected",
                     "problems": exc.problems,
                     "detail": str(exc),
-                    **self.envelope(),
+                    **self.envelope(config),
                 },
                 True,
             )
         except ValueError as exc:
             return (
-                {"ok": False, "error": "invalid_arguments", "detail": str(exc), **self.envelope()},
+                {"ok": False, "error": "invalid_arguments", "detail": str(exc), **self.envelope(config)},
                 True,
             )
         except Exception as exc:  # noqa: BLE001 - a tool fault is not a dead server
@@ -335,7 +422,7 @@ class KnowledgeService:
                     "error": "internal_error",
                     "detail": f"{type(exc).__name__}: {exc}",
                     "answer": "unknown",
-                    **self.envelope(),
+                    **self.envelope(config),
                 },
                 True,
             )

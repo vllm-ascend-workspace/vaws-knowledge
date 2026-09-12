@@ -14,6 +14,7 @@ from distribution.helpers import GIT_SHA, make_corpus, make_manifest, make_pack
 from vaws_knowledge.distribution.errors import CorruptPack, IncompatiblePack
 from vaws_knowledge.distribution.manifest import (
     EMBEDDING_MODEL,
+    RELEASE_SCHEMA,
     ExpectedContract,
     atomic_write_json,
     content_digest,
@@ -44,6 +45,34 @@ def test_valid_manifest_passes(tmp_path):
     assert manifest.source_git_sha == GIT_SHA
     assert manifest.embedding["model"] == EMBEDDING_MODEL
     assert len(manifest.content_files) == 2
+    assert manifest.content_layout == "kinds/v1"
+
+
+def test_typed_manifest_requires_typed_paths_and_matching_digest(tmp_path):
+    data = _valid_manifest(tmp_path)
+    data["content"]["files"][0]["path"] = "untyped.md"
+    with pytest.raises(CorruptPack, match="typed content path"):
+        validate_release_manifest(data, expected=ExpectedContract())
+    data["content"]["files"][0]["path"] = "experience/renamed.md"
+    with pytest.raises(CorruptPack, match="differs from content.files"):
+        validate_release_manifest(data, expected=ExpectedContract())
+    data["content"]["content_sha256"] = content_digest(data["content"]["files"])
+    assert validate_release_manifest(data, expected=ExpectedContract()).content_layout == "kinds/v1"
+
+
+def test_old_release_schema_and_untyped_layout_are_rejected(tmp_path):
+    data = _valid_manifest(tmp_path)
+    data["schema"] = "vaws-knowledge-release/1"
+    with pytest.raises(CorruptPack, match="unsupported release manifest schema"):
+        validate_release_manifest(data, expected=ExpectedContract())
+    data["schema"] = RELEASE_SCHEMA
+    for layout in (None, "legacy", "kinds/v0"):
+        if layout is None:
+            data["content"].pop("layout")
+        else:
+            data["content"]["layout"] = layout
+        with pytest.raises(CorruptPack, match="content.layout must be"):
+            validate_release_manifest(data, expected=ExpectedContract())
 
 
 @pytest.mark.parametrize("asset", ["../escape.ovpack", "C:\\escape.ovpack", "subdir/pack.ovpack"])

@@ -1,4 +1,4 @@
-"""Save the final text provided by a native hook. Never read full transcripts."""
+"""Save native final text as an experience. Never read full transcripts."""
 
 from __future__ import annotations
 
@@ -43,8 +43,10 @@ def capture_summary(payload: dict[str, Any], *, config: ServiceConfig, client: s
     for key in ("session_id", "turn_id", "conversation_id", "generation_id", "sessionId", "promptId"):
         if isinstance(payload.get(key), str):
             source[key] = payload[key]
-    saved = capture(title=title, content=text, source=source, config=config, index=False)
-    return {"status": "saved", "ref": saved["ref"], "contribution": saved["contribution"]}
+    saved = capture(title=title, content=text, source=source,
+                    config=config.for_kind("experience"), index=False)
+    return {"status": "saved", "kind": "experience", "ref": saved["ref"],
+            "contribution": saved["contribution"]}
 
 
 def main(argv: list[str] | None = None) -> int:

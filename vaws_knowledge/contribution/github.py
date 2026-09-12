@@ -139,3 +139,13 @@ def create_pull(
     if not isinstance(created, Mapping) or not isinstance(created.get("number"), int):
         raise TransportError("malformed create-pull response")
     return dict(created)
+
+
+def get_pull(api: GitHubTransport, *, upstream: str, number: int) -> dict[str, Any]:
+    try:
+        pull = api.get(f"/repos/{upstream}/pulls/{number}")
+    except GitHubError as exc:
+        raise_transport(exc)
+    if not isinstance(pull, Mapping) or pull.get("state") not in {"open", "closed"}:
+        raise TransportError("malformed pull response")
+    return dict(pull)

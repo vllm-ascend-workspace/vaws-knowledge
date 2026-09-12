@@ -23,6 +23,7 @@ def init_git_repo(path: Path) -> str:
     subprocess.run(["git", "init", "-b", DEFAULT_BRANCH], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "contrib-test@example.com"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Contribution Test"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "core.quotepath", "false"], cwd=path, check=True, capture_output=True)
     (path / "README.md").write_text("# fixture corpus\n", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)

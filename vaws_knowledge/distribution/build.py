@@ -32,6 +32,7 @@ from vaws_knowledge.distribution.manifest import (
     OPENVIKING_VERSION,
     PACK_VECTOR_MODE,
     RELEASE_SCHEMA,
+    CONTENT_LAYOUT,
     atomic_write_json,
     content_digest,
     hash_model_tree,
@@ -100,13 +101,16 @@ def resolve_git_sha(repo: Path, expected_sha: str | None = None) -> str:
 def _materialize(repo: Path, sha: str, subdir: str, target: Path) -> list[dict[str, Any]]:
     """Extract ``*.md`` files of ``subdir`` at ``sha`` via git archive; hash each."""
 
+    # git archive applies checkout line-ending policy unless explicitly pinned.
     proc = subprocess.Popen(
-        ["git", "-C", str(repo), "archive", "--format=tar", sha, "--", subdir if subdir != "." else "."],
+        ["git", "-c", "core.autocrlf=false", "-C", str(repo), "archive", "--format=tar", sha,
+         "--", subdir if subdir != "." else "."],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     assert proc.stdout is not None
     files: list[dict[str, Any]] = []
+    materialized_paths: set[str] = set()
     base = PurePosixPath(subdir) if subdir not in ("", ".") else None
     try:
         with tarfile.open(fileobj=proc.stdout, mode="r|") as archive:
@@ -123,6 +127,15 @@ def _materialize(repo: Path, sha: str, subdir: str, target: Path) -> list[dict[s
                         continue
                 if name.suffix.lower() != ".md":
                     continue
+                source_path = name.as_posix()
+                if name.parts[0] not in {"knowledge", "experience"}:
+                    # Legacy corpora keep their bytes and relative structure,
+                    # but new exports always place them in the knowledge tree.
+                    kind = base.name if base is not None and base.name in {"knowledge", "experience"} else "knowledge"
+                    name = PurePosixPath(kind) / name
+                if name.as_posix() in materialized_paths:
+                    raise BuildError(f"multiple source files map to {name.as_posix()!r}; resolve the legacy/typed path collision")
+                materialized_paths.add(name.as_posix())
                 raw = archive.extractfile(member).read()  # type: ignore[union-attr]
                 destination = target / Path(*name.parts)
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -130,13 +143,19 @@ def _materialize(repo: Path, sha: str, subdir: str, target: Path) -> list[dict[s
                 files.append(
                     {
                         "path": name.as_posix(),
+                        "source_path": source_path,
                         "sha256": hashlib.sha256(raw).hexdigest(),
                         "size": len(raw),
                     }
                 )
     except tarfile.TarError as exc:
         proc.kill()
+        proc.communicate(timeout=120)
         raise BuildError(f"cannot read git archive of {sha}: {exc}") from None
+    except BuildError:
+        proc.kill()
+        proc.communicate(timeout=120)
+        raise
     _, stderr = proc.communicate(timeout=120)
     if proc.returncode != 0:
         raise BuildError(f"git archive failed: {stderr.decode('utf-8', 'replace').strip()}")
@@ -242,12 +261,12 @@ def build_pack(
             except Exception:  # noqa: BLE001 - absent build root is fine
                 pass
             _ensure_dir(client, build_root)
+            for kind in ("knowledge", "experience"):
+                _ensure_dir(client, f"{build_root}/{kind}")
             for entry in files:
                 client.write(
                     f"{build_root}/{entry['path']}",
-                    (materialized / Path(*PurePosixPath(entry['path']).parts)).read_text(
-                        encoding="utf-8"
-                    ),
+                    (materialized / Path(*PurePosixPath(entry['path']).parts)).read_bytes().decode("utf-8"),
                     wait=False,
                     options={"processing_mode": "vectors_only"},
                 )
@@ -301,6 +320,7 @@ def build_pack(
             "index": info.index,
         },
         "content": {
+            "layout": CONTENT_LAYOUT,
             "files": files,
             "count": len(files),
             "content_sha256": content_digest(files),

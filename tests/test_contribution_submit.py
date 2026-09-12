@@ -20,6 +20,7 @@ from contribution.support import (  # noqa: E402
     ordinary_md,
 )
 from vaws_knowledge.contribution.pending import STATUS_AWAITING, STATUS_PR_OPEN  # noqa: E402
+from vaws_knowledge.contribution.gitops import run_git
 from vaws_knowledge.contribution.submit import (  # noqa: E402
     SubmitConfig,
     after_capture,
@@ -68,6 +69,21 @@ class Submit(unittest.TestCase):
         self.assertEqual(second.pr_number, 1)
         creates = [item for item in github.calls if item[0] == "POST" and str(item[1]).endswith("/pulls")]
         self.assertEqual(len(creates), 1)
+
+    def test_content_kinds_use_separate_repository_paths_and_pull_requests(self):
+        github = FakeContributionGitHub()
+        saved = []
+        for kind in ("knowledge", "experience"):
+            record = prepare_candidate(self.candidate, state_root=self.state, public_root=self.public, kind=kind)
+            result = submit_pending(record, state_root=self.state, public_root=self.public,
+                                    git_repo=self.repo, github=github, config=self.config)
+            self.assertEqual(result.status, STATUS_PR_OPEN)
+            files = run_git(self.repo, ["diff-tree", "--no-commit-id", "--name-only", "-r", result.head_sha]).stdout.splitlines()
+            self.assertEqual(files, ["corpus/" + result.public_relpath])
+            self.assertTrue(files[0].startswith("corpus/" + kind + "/"))
+            saved.append(result)
+        self.assertNotEqual(saved[0].pr_number, saved[1].pr_number)
+        self.assertNotEqual(saved[0].branch, saved[1].branch)
 
     def test_offline_leaves_recoverable_pending_then_retry_opens_pr(self):
         record = prepare_candidate(self.candidate, state_root=self.state, public_root=self.public)

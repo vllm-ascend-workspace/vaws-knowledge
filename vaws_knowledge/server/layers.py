@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from vaws_knowledge.markdown import validate_kind
 
 try:  # Only YAML configuration files need this optional import.
     import yaml  # type: ignore
@@ -29,6 +31,11 @@ ENV_LAYER_ROOTS = {
     "shared": "VAWS_KNOWLEDGE_SHARED_ROOTS",
     "project": "VAWS_KNOWLEDGE_PROJECT_ROOTS",
     "candidate": "VAWS_KNOWLEDGE_CANDIDATE_ROOT",
+}
+ENV_EXPERIENCE_ROOTS = {
+    "shared": "VAWS_EXPERIENCE_SHARED_ROOTS",
+    "project": "VAWS_EXPERIENCE_PROJECT_ROOTS",
+    "candidate": "VAWS_EXPERIENCE_CANDIDATE_ROOT",
 }
 ENV_ENABLED_LAYERS = "VAWS_KNOWLEDGE_LAYERS"
 ENV_IDENTITY = {
@@ -132,6 +139,22 @@ class ServiceConfig:
     retrieval: Any = None
     publishing: dict[str, Any] = field(default_factory=dict)
     shared_sync: dict[str, Any] = field(default_factory=dict)
+    kind: str = "knowledge"
+    _kind_mounts: dict[str, dict[str, Mount]] = field(default_factory=dict, repr=False)
+    _shared_runtime: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def for_kind(self, kind: str) -> ServiceConfig:
+        """Select independent source directories while sharing the local engine."""
+
+        validate_kind(kind)
+        if kind == self.kind:
+            return self
+        if not self._kind_mounts:
+            self._kind_mounts[self.kind] = self.mounts
+        if kind not in self._kind_mounts:
+            knowledge = self._kind_mounts.get("knowledge", {})
+            self._kind_mounts[kind] = _experience_mounts(knowledge, {}, {}, Path.cwd())
+        return replace(self, kind=kind, mounts=self._kind_mounts[kind])
 
     def mount(self, layer: str) -> Mount:
         return self.mounts.get(layer, Mount(layer=layer, absent_reason="unknown layer"))
@@ -185,6 +208,7 @@ class ServiceConfig:
 
         out = {
             "version": package_version(),
+            "kind": self.kind,
             "config_path": str(self.config_path) if self.config_path else None,
             "layers": {name: self.mount(name).describe() for name in LAYERS},
             "layers_available": self.available_layers(),
@@ -314,6 +338,70 @@ def _layer_spec(raw: Any) -> dict[str, Any]:
     raise ConfigError(f"layer configuration must be a string, list or mapping, got {type(raw).__name__}")
 
 
+def _experience_roots(mount: Mount) -> tuple[Path, ...]:
+    if mount.layer == "shared":
+        return tuple(
+            root.parent / "experience" if root.name == "knowledge" else root / "experience"
+            for root in mount.roots
+        )
+    return tuple(root.parent / "experience" / root.name for root in mount.roots)
+
+
+def _experience_mounts(
+    knowledge: Mapping[str, Mount], raw: Mapping[str, Any], env: Mapping[str, str], base: Path,
+) -> dict[str, Mount]:
+    layers = raw.get("layers") or {}
+    if not isinstance(layers, Mapping):
+        raise ConfigError("'experience.layers' must be a mapping")
+    mounts: dict[str, Mount] = {}
+    for layer in LAYERS:
+        original = knowledge.get(layer, Mount(layer=layer))
+        spec = _layer_spec(layers.get(layer))
+        roots = tuple(_resolve(str(item), base) for item in spec.get("roots", []))
+        configured = layer in layers
+        env_var = ENV_EXPERIENCE_ROOTS[layer]
+        if env_var in env:
+            configured = True
+            roots = tuple(_resolve(item, base) for item in _split_paths(env[env_var]))
+            if not roots:
+                mounts[layer] = Mount(layer=layer, configured=True,
+                                      absent_reason=f"disabled by {env_var} (empty value)")
+                continue
+        if spec.get("enabled") is False or (not original.roots and not roots):
+            mounts[layer] = Mount(layer=layer, configured=configured or original.configured,
+                                  absent_reason="disabled in configuration" if configured else original.absent_reason)
+            continue
+        roots = roots or _experience_roots(original)
+        for root in roots:
+            resolved = root.resolve()
+            for knowledge_layer, knowledge_mount in knowledge.items():
+                for known in knowledge_mount.roots:
+                    known_resolved = known.resolve()
+                    # A legacy corpus may contain an explicitly reserved
+                    # experience subtree, excluded by kind-aware scanning.
+                    legacy_shared = (
+                        layer == knowledge_layer == "shared"
+                        and resolved == known_resolved / "experience"
+                    )
+                    overlaps = (
+                        resolved.is_relative_to(known_resolved)
+                        or known_resolved.is_relative_to(resolved)
+                    )
+                    if overlaps and not legacy_shared:
+                        raise ConfigError(
+                            f"experience.{layer} must use a separate directory from knowledge.{knowledge_layer}"
+                        )
+        read_only = True if layer != "candidate" else bool(spec.get("read_only", original.read_only))
+        if layer == "candidate":
+            mounts[layer] = _candidate_mount(roots, read_only=read_only, configured=configured)
+        else:
+            present = any(root.is_dir() for root in roots)
+            mounts[layer] = Mount(layer=layer, roots=roots, read_only=read_only,
+                                  configured=configured or original.configured, present=present,
+                                  absent_reason=None if present else "path does not exist: " + ", ".join(map(str, roots)))
+    return mounts
+
+
 def load_config(
     mapping: Mapping[str, Any] | None = None,
     *,
@@ -365,6 +453,15 @@ def load_config(
                 merged = dict(data["layers"])
                 merged.update(value)
                 data["layers"] = merged
+            elif key == "experience" and isinstance(value, Mapping) and isinstance(data.get(key), Mapping):
+                merged = dict(data[key])
+                for experience_key, experience_value in value.items():
+                    if (experience_key == "layers" and isinstance(experience_value, Mapping)
+                            and isinstance(merged.get("layers"), Mapping)):
+                        merged["layers"] = {**merged["layers"], **experience_value}
+                    else:
+                        merged[experience_key] = experience_value
+                data[key] = merged
             else:
                 data[key] = value
 
@@ -454,6 +551,9 @@ def load_config(
         else:
             roots = tuple(_resolve(item, base) for item in roots_raw)
 
+        if layer == "shared":
+            roots = tuple(root / "knowledge" if (root / "knowledge").is_dir() else root for root in roots)
+
         existing = tuple(p for p in roots if p.is_dir())
         # Capture writes only to candidate; shared and project are read-only
         # through the service.
@@ -500,6 +600,10 @@ def load_config(
         else:
             state_root = default_candidate_root().parent / "instance"
 
+    experience = data.get("experience") or {}
+    if not isinstance(experience, Mapping):
+        raise ConfigError("'experience' must be a mapping")
+    kind_mounts = {"knowledge": mounts, "experience": _experience_mounts(mounts, experience, env, base)}
     return ServiceConfig(
         mounts=mounts,
         identity=identity,
@@ -509,4 +613,5 @@ def load_config(
         state_root=state_root,
         publishing=dict(data["publishing"]) if isinstance(data.get("publishing"), Mapping) else {},
         shared_sync=dict(data["shared_sync"]) if isinstance(data.get("shared_sync"), Mapping) else {},
+        _kind_mounts=kind_mounts,
     )

@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from vaws_knowledge.markdown import SHARED_BOOTSTRAP_URI, URI_ROOT
+from vaws_knowledge.markdown import SHARED_BOOTSTRAP_URI, URI_ROOT, validate_kind
 
 DEFAULT_SHARED_URI = f"{URI_ROOT}/shared"
 
@@ -57,17 +57,24 @@ def current_shared(state_root: Path | None) -> dict[str, Any] | None:
     }
 
 
-def shared_search_uri(state_root: Path | None) -> str:
+def shared_search_uri(state_root: Path | None, *, kind: str = "knowledge") -> str:
     """The active release root, or bootstrap when no safe release is active."""
 
-    return shared_search_uris(state_root)[-1]
+    return shared_search_uris(state_root, kind=kind)[-1]
 
 
-def shared_search_uris(state_root: Path | None) -> tuple[str, ...]:
-    """Return non-overlapping bootstrap and active-release search roots."""
+def matches_targets(uri: str, targets: tuple[str, ...] | list[str]) -> bool:
+    """Match a selected kind directory or its descendants."""
 
-    roots = [SHARED_BOOTSTRAP_URI]
-    current = current_shared(state_root)
+    if any(part in {".", ".."} for part in uri.split("/")):
+        return False
+    return any(uri == root or uri.startswith(root + "/") for root in targets)
+
+
+def active_shared_uris(current: dict[str, Any] | None, *, kind: str = "knowledge") -> tuple[str, ...]:
+    """Select the kind directory before ranking, never the version parent."""
+
+    validate_kind(kind)
     active = str(current.get("root_uri") or "").rstrip("/") if current else ""
     # Releases are direct children, or one exact repair generation. Reject
     # broad parents rather than retrieving inactive versions or bootstrap a
@@ -76,6 +83,13 @@ def shared_search_uris(state_root: Path | None) -> tuple[str, ...]:
     version = active[len(prefix):] if active.startswith(prefix) else ""
     direct = version and version not in {".", "..", "bootstrap", "repairs"} and "/" not in version
     repair = re.fullmatch(r"repairs/[0-9a-f]{16}/v[0-9a-f]{12}", version)
-    if direct or repair:
-        roots.append(active)
-    return tuple(roots)
+    if not (direct or repair):
+        return ()
+    return (f"{active}/{kind}",)
+
+
+def shared_search_uris(state_root: Path | None, *, kind: str = "knowledge") -> tuple[str, ...]:
+    """Return disjoint bootstrap and active-release targets for one kind."""
+
+    validate_kind(kind)
+    return (f"{SHARED_BOOTSTRAP_URI}/{kind}", *active_shared_uris(current_shared(state_root), kind=kind))

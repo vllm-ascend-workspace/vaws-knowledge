@@ -15,6 +15,7 @@ from distribution.helpers import FakeClient, make_pack
 
 from vaws_knowledge.distribution.build import build_pack, check_markdown_contract
 from vaws_knowledge.distribution.errors import BuildError
+from vaws_knowledge.distribution.pack import verify_pack
 from vaws_knowledge.distribution.manifest import (
     EMBEDDING_MODEL,
     ExpectedContract,
@@ -59,19 +60,53 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
+def _git_blob(repo: Path, sha: str, path: str) -> bytes:
+    return subprocess.check_output(["git", "-C", str(repo), "show", f"{sha}:{path}"])
+
+
 def _repo(tmp_path: Path, files: dict[str, str]) -> tuple[Path, str]:
     repo = tmp_path / "corpus-repo"
     repo.mkdir()
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "test@example.invalid")
     _git(repo, "config", "user.name", "test")
+    # Fixture bytes must not depend on a developer/runner's global Git policy.
+    _git(repo, "config", "core.autocrlf", "false")
     for relpath, text in files.items():
         path = repo / relpath
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(text.encode("utf-8"))
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "corpus")
     return repo, _git(repo, "rev-parse", "HEAD")
+
+
+def test_build_preserves_committed_crlf_bytes(tmp_path):
+    text = "# Historical experience\r\n\r\nThe committed line endings remain intact.\r\n"
+    repo, sha = _repo(tmp_path, {"experience/crlf.md": text})
+    expected = _git_blob(repo, sha, "experience/crlf.md")
+    assert expected == text.encode("utf-8")
+    result = build_pack(repo=repo, out_dir=tmp_path / "out", client=BuildFakeClient(), expected_sha=sha)
+    manifest = validate_release_manifest(result.manifest, expected=ExpectedContract())
+    verify_pack(result.pack_path, manifest, expected=ExpectedContract())
+    with zipfile.ZipFile(result.pack_path) as archive:
+        assert archive.read(f"{version_id_from_sha(sha)}/files/experience/crlf.md") == expected
+
+
+def test_build_content_does_not_depend_on_checkout_autocrlf(tmp_path):
+    repo, sha = _repo(tmp_path, {"knowledge/lf.md": "# Current knowledge\n\nCommitted LF body.\n"})
+    expected = _git_blob(repo, sha, "knowledge/lf.md")
+    assert b"\r" not in expected
+    content_manifests = []
+    for setting in ("false", "true"):
+        _git(repo, "config", "core.autocrlf", setting)
+        result = build_pack(repo=repo, out_dir=tmp_path / setting, client=BuildFakeClient(), expected_sha=sha)
+        manifest = validate_release_manifest(result.manifest, expected=ExpectedContract())
+        verify_pack(result.pack_path, manifest, expected=ExpectedContract())
+        with zipfile.ZipFile(result.pack_path) as archive:
+            assert archive.read(f"{version_id_from_sha(sha)}/files/knowledge/lf.md") == expected
+        content_manifests.append(result.manifest["content"])
+    assert content_manifests[0] == content_manifests[1]
 
 
 def test_build_from_fixed_commit(tmp_path):
@@ -90,8 +125,47 @@ def test_build_from_fixed_commit(tmp_path):
     # The pack content is exactly the committed Git content (0.4.19 layout: files/ prefix).
     with zipfile.ZipFile(result.pack_path) as archive:
         root = version_id_from_sha(sha)
-        assert archive.read(f"{root}/files/alpha.md").decode() == "# Alpha\n\nBody alpha.\n"
-        assert archive.read(f"{root}/files/notes/beta.md").decode() == "# Beta\n\nBody beta.\n"
+        assert archive.read(f"{root}/files/knowledge/alpha.md") == _git_blob(repo, sha, "alpha.md")
+        assert archive.read(f"{root}/files/knowledge/notes/beta.md") == _git_blob(repo, sha, "notes/beta.md")
+    assert manifest.content_layout == "kinds/v1"
+    verify_pack(result.pack_path, manifest, expected=ExpectedContract())
+
+
+def test_typed_content_paths_survive_build_verify_import_and_integrity_repair(tmp_path):
+    from vaws_knowledge.distribution.release import source_from_location
+    from vaws_knowledge.distribution.sync import check_and_sync
+
+    docs = {"knowledge/same.md": "# Same\n\nCurrent conclusion.\n",
+            "experience/same.md": "# Same\n\nHistorical observation.\n",
+            "legacy/note.md": "# Legacy\n\nPreserved without certifying current validity.\n"}
+    repo, sha = _repo(tmp_path, {"corpus/" + path: text for path, text in docs.items()})
+    expected = {path: _git_blob(repo, sha, "corpus/" + path).decode("utf-8") for path in docs}
+    built = build_pack(repo=repo, corpus_subdir="corpus", out_dir=tmp_path / "release", client=BuildFakeClient())
+    (tmp_path / "release/release.json").write_bytes(built.manifest_path.read_bytes())
+    manifest = validate_release_manifest(built.manifest, expected=ExpectedContract())
+    assert {entry["path"] for entry in manifest.content_files} == {
+        "knowledge/same.md", "experience/same.md", "knowledge/legacy/note.md"}
+    verify_pack(built.pack_path, manifest, expected=ExpectedContract())
+    client = FakeClient()
+    kwargs = dict(embedding_info={"model": EMBEDDING_MODEL, "dimension": 384}, client=client)
+    source = source_from_location(tmp_path / "release")
+    first = check_and_sync(tmp_path / "state", source, **kwargs)
+    assert first.status == "switched", first.reason
+    for path, text in expected.items():
+        typed = path if path.startswith(("knowledge/", "experience/")) else "knowledge/" + path
+        assert client.trees[first.root_uri][typed] == text
+    client.trees[first.root_uri]["experience/same.md"] = "damaged"
+    repaired = check_and_sync(tmp_path / "state", source, verify=True, **kwargs)
+    assert repaired.status == "switched", repaired.reason
+    assert "/repairs/" in repaired.root_uri
+    assert client.trees[repaired.root_uri]["experience/same.md"] == expected["experience/same.md"]
+    assert client.trees[repaired.root_uri]["knowledge/same.md"] == expected["knowledge/same.md"]
+
+
+def test_legacy_and_typed_source_collision_is_rejected(tmp_path):
+    repo, _sha = _repo(tmp_path, {"a.md": "# Legacy\n\nOld.\n", "knowledge/a.md": "# Current\n\nNew.\n"})
+    with pytest.raises(BuildError, match="path collision"):
+        build_pack(repo=repo, out_dir=tmp_path / "out", client=BuildFakeClient())
 
 
 def test_build_requires_exact_commit(tmp_path):

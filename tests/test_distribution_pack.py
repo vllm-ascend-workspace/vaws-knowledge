@@ -157,8 +157,8 @@ def test_corrupt_dense_part_rejected(tmp_path):
 
 
 def test_missing_content_file_rejected(tmp_path):
-    pack_path, manifest = _verified_inputs(tmp_path, omit_entry="notes/beta.md")
-    with pytest.raises(CorruptPack, match="notes/beta.md"):
+    pack_path, manifest = _verified_inputs(tmp_path, omit_entry="experience/notes/beta.md")
+    with pytest.raises(CorruptPack, match="experience/notes/beta.md"):
         verify_pack(pack_path, manifest, expected=ExpectedContract())
 
 
