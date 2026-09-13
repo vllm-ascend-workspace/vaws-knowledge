@@ -111,6 +111,22 @@ class Maintenance(unittest.TestCase):
             tick.assert_called()
             self.assertEqual({"force": False}, tick.call_args.kwargs)
 
+    def test_new_connection_reuses_fresh_preparation_and_event_still_forces_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            self.assertTrue(maintain(config, verify=True)["ready"])
+            worker = MaintenanceWorker(config)
+            with patch.object(worker.wakeup, "wait", side_effect=lambda _: worker.closed.set()), \
+                    patch("vaws_knowledge.maintenance.reconcile_markdown") as reconcile:
+                worker._run()
+                reconcile.assert_not_called()
+            worker.closed.clear()
+            worker.request()
+            with patch.object(worker.wakeup, "wait", side_effect=lambda _: worker.closed.set()), \
+                    patch("vaws_knowledge.maintenance.maintain", wraps=maintain) as tick:
+                worker._run()
+            tick.assert_called_once_with(config, force=True)
+
     def test_query_without_readiness_record_is_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
@@ -121,7 +137,8 @@ class Maintenance(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = self.config(Path(tmp))
             with patch("vaws_knowledge.publishing.run_once", return_value={"status": "disabled"}):
-                self.assertTrue(maintain(config, verify=True)["ready"])
+                ready = maintain(config, verify=True)
+                self.assertTrue(ready["ready"])
                 config.retrieval.documents.clear()
                 worker = MaintenanceWorker(config)
                 completed = threading.Event()
@@ -140,6 +157,19 @@ class Maintenance(unittest.TestCase):
                 receipt = json.loads((config.state_root / "maintenance.json").read_text())
                 with patch("vaws_knowledge.maintenance.time.time", return_value=receipt["next_verify"] + 1):
                     self.assertTrue(maintain(config)["ready"])
+                self.assertEqual(1, len(query(config, text="maintenancecanary").results))
+
+    def test_new_connection_rechecks_index_loss_when_shared_verification_is_due(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self.config(Path(tmp))
+            with patch("vaws_knowledge.publishing.run_once", return_value={"status": "disabled"}):
+                ready = maintain(config, verify=True)
+                self.assertTrue(ready["ready"])
+                config.retrieval.documents.clear()
+                worker = MaintenanceWorker(config)
+                with patch.object(worker.wakeup, "wait", side_effect=lambda _: worker.closed.set()), \
+                        patch("vaws_knowledge.maintenance.time.time", return_value=ready["next_verify"] + 1):
+                    worker._run()
                 self.assertEqual(1, len(query(config, text="maintenancecanary").results))
 
     def test_fresh_deadlines_skip_backend_work_and_expired_audit_overrides_next_check(self):
