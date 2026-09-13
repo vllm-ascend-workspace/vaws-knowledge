@@ -25,7 +25,12 @@ Responses identify unavailable storage or indexes separately from an empty
 result. Neither is evidence that a claim is absent, supported or safe to ignore.
 The Agent can continue independent work. MCP capture saves the Markdown without
 waiting for an index or retrieval startup; the MCP worker reconciles changes later.
-Queries only read the ready index and report pending maintenance when necessary.
+Queries read the ready index and report pending maintenance when necessary.
+The first valid MCP query or successful MCP capture activates background
+maintenance. Initialize, tools-list, ping, invalid calls, explain and unused EOF
+do not create a worker or prepare an index. Native summary capture remains local
+and does not activate maintenance. The saved check/audit deadlines survive
+reconnection; expired audits and explicit prepare still repair lost vectors.
 Configured public sharing uses a separate redacted copy and follows the existing
 authorization. Summary hooks can save locally while public sharing is disabled.
 

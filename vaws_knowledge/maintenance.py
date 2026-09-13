@@ -1,4 +1,4 @@
-"""Prepare retrieval once, then quietly maintain it while MCP is running.
+"""Prepare retrieval explicitly or maintain it after knowledge is used.
 
 This is package work, independent of public contribution permission. Markdown
 and verified release packs are the recoverable sources; the index is derived.
@@ -42,7 +42,8 @@ def maintain(config: ServiceConfig, *, verify: bool = False, force: bool = False
     try:
         previous = maintenance_status(config)
         now = time.time()
-        if not force and not verify and now < previous.get("next_check", 0):
+        if (not force and not verify and now < previous.get("next_check", 0)
+                and now < previous.get("next_verify", 0)):
             return previous
         audit = verify or now >= previous.get("next_verify", 0)
         result: dict[str, Any] = {
@@ -89,7 +90,7 @@ def maintain(config: ServiceConfig, *, verify: bool = False, force: bool = False
 
 
 class MaintenanceWorker:
-    """One quiet thread per MCP connection, sharing the process lock above."""
+    """One quiet thread per active knowledge connection, sharing the owner lock."""
 
     def __init__(self, config: ServiceConfig):
         self.config = config
@@ -109,8 +110,8 @@ class MaintenanceWorker:
             changed = self.wakeup.is_set()
             self.wakeup.clear()
             try:
-                # Connections share readiness and the verification schedule.
-                # A new client alone does not invalidate a prepared model.
+                # Reconnection is not evidence of index loss. Durable check
+                # and audit deadlines decide whether existing work is reusable.
                 maintain(self.config, force=changed)
             except Exception:
                 pass  # Retry later; maintenance cannot terminate the MCP stream.

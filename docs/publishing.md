@@ -33,13 +33,15 @@ After a corpus merge, CI builds the exact Git commit into a dense OVPack and
 manifest, uploads both to a draft Release, then publishes it. The release tag
 identifies the source commit. A published release is never overwritten.
 
-While MCP is alive, its maintenance worker checks releases on startup and every 30 minutes;
+After a valid query or successful MCP capture activates maintenance, its worker
+checks releases when the saved deadline is due and every 30 minutes;
 failed checks retry after one minute. Submission polling is every 30 seconds.
 Multiple clients share the same OS lock and state. Closing MCP ends its worker;
-the next startup resumes from durable state. No OS timer or additional daemon is
+the next actual knowledge use resumes from durable state. An unused MCP
+connection does not create the worker or start release checks. No OS timer or additional daemon is
 installed. New packs are verified and imported before the shared pointer moves.
 Failure preserves the previous shared version and all project/candidate content.
-Hourly integrity checks export and compare the active content and vectors against
+While maintenance is active and the backend is available, hourly integrity checks export and compare the active content and vectors against
 the retained verified pack. A missing or damaged import is restored into a new
 staging namespace and activated after verification, including when the release
 version is unchanged. Public contribution errors do not make local retrieval

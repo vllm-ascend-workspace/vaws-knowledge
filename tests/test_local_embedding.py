@@ -194,6 +194,11 @@ def test_successful_start_marks_pid_running(tmp_path, monkeypatch):
     instance.ensure()
     assert instance._read_pid()["status"] == "running"
     validate_key.assert_called_once()
+    assert len(module.subprocess.Popen.call_args_list) == 2
+    for launch in module.subprocess.Popen.call_args_list:
+        assert launch.kwargs["stdin"] == module.subprocess.DEVNULL
+        if module.os.name == "nt":
+            assert launch.kwargs["creationflags"] & module.subprocess.CREATE_NO_WINDOW
 
 
 def test_partial_download_reuses_one_stage(tmp_path, monkeypatch):

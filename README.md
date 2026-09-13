@@ -26,8 +26,10 @@ vaws-knowledge server --config /path/to/project/.vaws-local/knowledge/service.js
 ```
 
 Workspace installation calls `prepare` automatically. It prepares the CPU model,
-bundled notes and indexes before reporting readiness. The MCP service maintains
-them in the background. A standalone installation can use the same command;
+bundled notes and indexes before reporting readiness. After a valid query or
+successful MCP capture, the service maintains them in the background. Connecting,
+listing tools, pinging and closing an unused provider do not start maintenance,
+create a retrieval backend, or contact the network. A standalone installation can use the same command;
 it creates local configuration without enabling public contribution.
 
 ```sh
@@ -45,7 +47,13 @@ block independent development.
 Markdown files retain the original content. MCP capture saves locally without
 waiting for retrieval startup or indexing. Background maintenance reconciles
 added, edited and deleted files and periodically checks actual content and vectors.
-Queries use the ready index without downloads or repairs. Shared updates preserve project and candidate
+Queries use the ready index without waiting for downloads or repairs. Explain
+and native summary capture do not activate maintenance. A reconnect reuses the
+saved check and audit deadlines instead of revalidating all vectors. While a
+knowledge connection is active and the backend is available, the hourly audit
+detects losses that ordinary incremental reconciliation cannot see. Without an
+active connection, overdue work resumes at the next query/capture or explicit
+`prepare`; there is no unattended hourly guarantee. Shared updates preserve project and candidate
 files. Configured summary hooks save locally even when public sharing is off;
 sharing itself follows the publishing configuration. Reuse an existing useful
 summary for capture instead of writing another one.
@@ -59,7 +67,9 @@ and active shared versions internally.
 `VAWS_KNOWLEDGE_CONFIG` selects storage and backend configuration;
 `VAWS_KNOWLEDGE_STATE` selects local runtime state. The local OpenViking instance
 uses CPU embedding on loopback. `VAWS_KNOWLEDGE_EMBEDDING_CACHE` can supply an
-existing model cache; preparation downloads an uncached model.
+existing model cache; preparation downloads an uncached model. Background
+embedding and OpenViking children use an independent empty stdin, so a Windows
+MCP reader cannot block their interpreter startup. Windows children stay hidden.
 See [the service reference](vaws_knowledge/server/README.md) for setup details.
 
 ## Optional maintenance

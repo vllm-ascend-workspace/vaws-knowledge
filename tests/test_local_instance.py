@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,46 @@ from vaws_knowledge.local.shared import current_shared, shared_search_uri
 
 
 class ProcessOwnership(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "native Windows inherited-pipe startup")
+    def test_daemon_python_starts_while_mcp_parent_is_reading_stdin(self) -> None:
+        # Exercise Python's real startup, not only a mocked Popen flag. Without
+        # DEVNULL the child blocks until the parent's private stdin reaches EOF.
+        parent_code = r'''
+import json, subprocess, sys, threading, time
+from vaws_knowledge.local.instance import _popen_kwargs
+reader = threading.Thread(target=lambda: sys.stdin.buffer.read(1))
+reader.start()
+time.sleep(.1)
+kwargs = _popen_kwargs()
+child = subprocess.Popen([sys.executable, '-B', '-c', 'print("started")'],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+try:
+    out, err = child.communicate(timeout=3)
+    early = True
+except subprocess.TimeoutExpired:
+    early = False
+print(json.dumps({'early': early, 'hidden': bool(kwargs['creationflags'] & subprocess.CREATE_NO_WINDOW)}), flush=True)
+if not early:
+    out, err = child.communicate(timeout=5)
+reader.join()
+print(json.dumps({'out': out.decode().strip(), 'err': err.decode(), 'exit': child.returncode}), flush=True)
+'''
+        proc = subprocess.Popen([sys.executable, "-B", "-c", parent_code],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        try:
+            first = json.loads(proc.stdout.readline())
+        finally:
+            proc.stdin.close()
+        rest = proc.stdout.read()
+        errors = proc.stderr.read()
+        self.assertEqual(proc.wait(timeout=8), 0, errors)
+        second = json.loads(rest)
+        self.assertTrue(first["early"], "child startup waited for MCP stdin EOF")
+        self.assertTrue(first["hidden"])
+        self.assertEqual(second, {"out": "started", "err": "", "exit": 0})
+        self.assertEqual(errors, "")
+
     @unittest.skipIf(os.name == "nt", "POSIX process command width")
     def test_marker_after_long_arguments_survives_narrow_terminal(self) -> None:
         marker = "vaws-knowledge-long-command-marker"
