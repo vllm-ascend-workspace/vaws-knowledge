@@ -20,8 +20,8 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install package and test dependencies
-        run: python -m pip install -e '.[test]'
+        run: python -m pip install -e '.[test]' -e tools/knowledge-intake
       - name: Test package and installed wheel
         run: python -m pytest -q tests
       - name: Check public Markdown for accidental private data
-        run: python -m vaws_knowledge.corpus_check --repo .
+        run: python -m mindie_knowledge.corpus_check --repo .
